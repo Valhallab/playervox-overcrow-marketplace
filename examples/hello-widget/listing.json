@@ -1,0 +1,18 @@
+{
+  "author": "PlayerVox",
+  "spdxLicense": "AGPL-3.0-only",
+  "sourceUrl": "https://github.com/PlayerVox/playervox-overcrow-marketplace",
+  "localizations": [
+    {
+      "locale": "en",
+      "name": "Hello Widget",
+      "description": "A minimal semantic-interaction example for the OverCrow Rust SDK."
+    },
+    {
+      "locale": "fr",
+      "name": "Widget Bonjour",
+      "description": "Un exemple minimal d’interactions sémantiques pour le SDK Rust OverCrow."
+    }
+  ],
+  "previewFile": "preview.png"
+}
