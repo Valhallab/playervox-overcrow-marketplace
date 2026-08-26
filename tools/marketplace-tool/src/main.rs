@@ -230,10 +230,10 @@ fn build(options: BuildOptions) -> Result<(), AppError> {
         &seed,
     )
     .map_err(|_| AppError::Catalog)?;
-    let output = PublisherOutput::open(&options.repository).map_err(|_| AppError::Output)?;
     state
         .accept(sequence, sha256(&catalog.payload))
         .map_err(|_| AppError::State)?;
+    let output = PublisherOutput::open(&options.repository).map_err(|_| AppError::Output)?;
     output
         .publish_objects(&packages)
         .map_err(|_| AppError::Output)?;

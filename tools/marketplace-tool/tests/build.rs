@@ -39,6 +39,34 @@ fn cli_build_is_reproducible_and_verifies_its_complete_source() {
     );
 
     let component = fixture.path().join("examples/hello-widget/component.wasm");
+
+    let conflict_fixture = tempfile::tempdir().expect("fresh conflict repository");
+    prepare_fixture(conflict_fixture.path(), &component);
+    fs::write(
+        conflict_fixture
+            .path()
+            .join("marketplace/development-catalog-state.json"),
+        b"{\"schemaVersion\":1,\"sequence\":1,\"payloadSha256\":\"0000000000000000000000000000000000000000000000000000000000000000\"}\n",
+    )
+    .expect("conflicting state fixture");
+    assert!(!development_build(conflict_fixture.path()).success());
+    assert!(
+        !conflict_fixture.path().join("public").exists(),
+        "sequence conflict must precede every public mutation"
+    );
+
+    for relative in [
+        "marketplace/targets.json",
+        "examples/hello-widget/manifest.json",
+        "examples/hello-widget/listing.json",
+        "examples/hello-widget/component.wasm",
+    ] {
+        let path = fixture.path().join(relative);
+        fs::set_permissions(&path, Permissions::from_mode(0o666)).expect("unsafe source mode");
+        assert!(!policy(fixture.path()), "group-writable source {relative}");
+        fs::set_permissions(path, Permissions::from_mode(0o644)).expect("restore source mode");
+    }
+
     assert!(inspect(&component));
     let component_link = fixture.path().join("component-link.wasm");
     symlink(&component, &component_link).expect("component symlink");
@@ -65,21 +93,7 @@ fn cli_build_is_reproducible_and_verifies_its_complete_source() {
     );
     fs::write(&manifest_path, &manifest_bytes).expect("restore manifest fixture");
 
-    let build = || {
-        Command::new(env!("CARGO_BIN_EXE_marketplace-tool"))
-            .args([
-                "build",
-                "--repository",
-                fixture.path().to_str().expect("UTF-8 fixture path"),
-                "--generated-at",
-                FIXED_GENERATED,
-                "--expires-at",
-                FIXED_EXPIRES,
-                "--development-key",
-            ])
-            .status()
-            .expect("run marketplace build")
-    };
+    let build = || development_build(fixture.path());
     assert!(build().success(), "first build");
     assert_eq!(
         fs::read(
@@ -207,6 +221,22 @@ fn policy(repository: &Path) -> bool {
         .status()
         .expect("run package policy")
         .success()
+}
+
+fn development_build(repository: &Path) -> std::process::ExitStatus {
+    tool()
+        .args([
+            "build",
+            "--repository",
+            repository.to_str().expect("UTF-8 fixture path"),
+            "--generated-at",
+            FIXED_GENERATED,
+            "--expires-at",
+            FIXED_EXPIRES,
+            "--development-key",
+        ])
+        .status()
+        .expect("run marketplace build")
 }
 
 fn add_large_png_assets(repository: &Path, original: &[u8]) {

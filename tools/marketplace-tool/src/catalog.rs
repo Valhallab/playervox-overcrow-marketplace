@@ -381,10 +381,12 @@ impl PublisherState {
 
 fn validate_state_file(file: &File, private: bool) -> Result<(), CatalogCode> {
     let metadata = file.metadata().map_err(|_| CatalogCode::State)?;
+    let mode = metadata.permissions().mode() & 0o7777;
     if !metadata.is_file()
         || metadata.uid() != rustix::process::geteuid().as_raw()
         || metadata.nlink() != 1
-        || (private && metadata.permissions().mode() & 0o7777 != 0o600)
+        || mode & 0o022 != 0
+        || (private && mode != 0o600)
     {
         return Err(CatalogCode::State);
     }
@@ -793,6 +795,11 @@ mod tests {
             initial,
             b"{\"schemaVersion\":1,\"sequence\":3,\"payloadSha256\":\"0707070707070707070707070707070707070707070707070707070707070707\"}\n"
         );
+        std::fs::set_permissions(&state_path, Permissions::from_mode(0o666))
+            .expect("unsafe development state mode");
+        assert!(PublisherState::development(&state_path).is_err());
+        std::fs::set_permissions(&state_path, Permissions::from_mode(0o644))
+            .expect("restore development state mode");
         {
             let mut state = PublisherState::development(&state_path).expect("state lock");
             state.accept(3, digest).expect("deterministic retry");

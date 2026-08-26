@@ -4,7 +4,6 @@ use std::{
     io::{Read, Write as _},
     os::unix::{ffi::OsStrExt as _, fs::MetadataExt as _, fs::PermissionsExt as _},
     path::Path,
-    sync::atomic::{AtomicU64, Ordering},
 };
 
 use image::{ImageDecoder as _, ImageFormat, ImageReader, Limits};
@@ -24,7 +23,6 @@ const UTF8_FLAG: u16 = 1 << 11;
 const DOS_DATE_1980_01_01: u16 = 33;
 const REGULAR_MODE: u32 = 0o100644;
 const MAX_DECODED_ASSET_BYTES: usize = 32 * 1024 * 1024;
-static TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PackageCode {
@@ -191,6 +189,7 @@ fn read_descriptor(descriptor: OwnedFd, maximum: usize) -> Result<Vec<u8>, Packa
     if !metadata.is_file()
         || metadata.uid() != rustix::process::geteuid().as_raw()
         || metadata.nlink() != 1
+        || metadata.permissions().mode() & 0o022 != 0
     {
         return Err(PackageCode::UnsafeSource);
     }
@@ -247,7 +246,8 @@ fn write_object(directory: &File, name: &str, bytes: &[u8]) -> Result<(), Packag
     if !valid_segment(name) {
         return Err(PackageCode::UnsafePath);
     }
-    let temporary_name = stage_object(directory, bytes)?;
+    let temporary_name = format!(".{name}.tmp");
+    stage_object(directory, &temporary_name, bytes)?;
     let result = match renameat_with(
         directory,
         &temporary_name,
@@ -264,26 +264,29 @@ fn write_object(directory: &File, name: &str, bytes: &[u8]) -> Result<(), Packag
     result
 }
 
-fn stage_object(directory: &File, bytes: &[u8]) -> Result<String, PackageCode> {
-    let mut selected = None;
-    for _ in 0..16 {
-        let sequence = TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let name = format!(".object.{}.{sequence}.tmp", std::process::id());
-        match openat(
-            directory,
-            &name,
-            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-            Mode::RUSR | Mode::WUSR,
-        ) {
-            Ok(descriptor) => {
-                selected = Some((name, descriptor));
-                break;
-            }
-            Err(error) if error == rustix::io::Errno::EXIST => {}
-            Err(_) => return Err(PackageCode::UnsafeSource),
+fn stage_object(directory: &File, temporary_name: &str, bytes: &[u8]) -> Result<(), PackageCode> {
+    match openat(
+        directory,
+        temporary_name,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        Mode::empty(),
+    ) {
+        Ok(descriptor) => {
+            validate_staging_file(&File::from(descriptor))?;
+            unlinkat(directory, temporary_name, AtFlags::empty())
+                .map_err(|_| PackageCode::UnsafeSource)?;
         }
+        Err(error) if error == rustix::io::Errno::NOENT => {}
+        Err(_) => return Err(PackageCode::UnsafeSource),
     }
-    let (temporary_name, descriptor) = selected.ok_or(PackageCode::UnsafeSource)?;
+
+    let descriptor = openat(
+        directory,
+        temporary_name,
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::RUSR | Mode::WUSR,
+    )
+    .map_err(|_| PackageCode::UnsafeSource)?;
     let mut file = File::from(descriptor);
     let result = (|| {
         validate_file_mode(&file, 0o600)?;
@@ -296,10 +299,10 @@ fn stage_object(directory: &File, bytes: &[u8]) -> Result<String, PackageCode> {
         validate_public_file(&file)
     })();
     if result.is_err() {
-        let _ = unlinkat(directory, &temporary_name, AtFlags::empty());
+        let _ = unlinkat(directory, temporary_name, AtFlags::empty());
         return Err(PackageCode::UnsafeSource);
     }
-    Ok(temporary_name)
+    Ok(())
 }
 
 fn compare_existing(directory: &File, name: &str, expected: &[u8]) -> Result<(), PackageCode> {
@@ -358,6 +361,20 @@ fn write_atomic(directory: &File, final_name: &str, bytes: &[u8]) -> Result<(), 
 
 fn validate_public_file(file: &File) -> Result<(), PackageCode> {
     validate_file_mode(file, 0o644)
+}
+
+fn validate_staging_file(file: &File) -> Result<(), PackageCode> {
+    let metadata = file.metadata().map_err(|_| PackageCode::UnsafeSource)?;
+    let mode = metadata.permissions().mode() & 0o7777;
+    if metadata.is_file()
+        && metadata.uid() == rustix::process::geteuid().as_raw()
+        && metadata.nlink() == 1
+        && matches!(mode, 0o600 | 0o644)
+    {
+        Ok(())
+    } else {
+        Err(PackageCode::UnsafeSource)
+    }
 }
 
 fn validate_file_mode(file: &File, mode: u32) -> Result<(), PackageCode> {
@@ -686,7 +703,7 @@ mod tests {
 
     use super::{
         PackageArtifact, PackageCode, PublisherOutput, build_stored_archive, read_source_file,
-        stage_object,
+        write_object,
     };
     use crate::metadata::validate_metadata;
 
@@ -762,17 +779,48 @@ mod tests {
     }
 
     #[test]
-    fn staged_object_never_exposes_partial_final_bytes() {
+    fn deterministic_object_stage_recovers_safe_stale_bytes_only() {
         let temporary = tempfile::tempdir().expect("object directory");
         let directory = File::open(temporary.path()).expect("object directory descriptor");
-        let staged = stage_object(&directory, b"complete bytes").expect("staged object");
-        let temporary_path = temporary.path().join(&staged);
-        assert!(!temporary.path().join("object.ocpkg").exists());
+        let staged = temporary.path().join(".object.ocpkg.tmp");
+        std::fs::write(&staged, b"partial").expect("stale staging bytes");
+        std::fs::set_permissions(&staged, Permissions::from_mode(0o600))
+            .expect("stale staging mode");
+        write_object(&directory, "object.ocpkg", b"complete").expect("recover stale staging");
         assert_eq!(
-            std::fs::read(&temporary_path).expect("complete staged bytes"),
-            b"complete bytes"
+            std::fs::read(temporary.path().join("object.ocpkg")).expect("published object"),
+            b"complete"
         );
-        std::fs::remove_file(&temporary_path).expect("remove staging fixture");
+        assert!(!staged.exists(), "staging file must not leak");
+    }
+
+    #[test]
+    fn deterministic_object_stage_refuses_untrusted_existing_entries() {
+        for fixture in ["writable", "linked", "hard-linked"] {
+            let temporary = tempfile::tempdir().expect("object directory");
+            let directory = File::open(temporary.path()).expect("object directory descriptor");
+            let staged = temporary.path().join(".object.ocpkg.tmp");
+            let source = temporary.path().join("source");
+            match fixture {
+                "writable" => {
+                    std::fs::write(&staged, b"hostile").expect("writable staging entry");
+                    std::fs::set_permissions(&staged, Permissions::from_mode(0o666))
+                        .expect("writable staging mode");
+                }
+                "linked" => symlink("source", &staged).expect("staging symlink"),
+                "hard-linked" => {
+                    std::fs::write(&source, b"hostile").expect("hard-link source");
+                    std::fs::hard_link(&source, &staged).expect("staging hard link");
+                }
+                _ => unreachable!("closed fixture table"),
+            }
+            assert_eq!(
+                write_object(&directory, "object.ocpkg", b"complete"),
+                Err(PackageCode::UnsafeSource),
+                "fixture {fixture}"
+            );
+            assert!(!temporary.path().join("object.ocpkg").exists());
+        }
     }
 
     #[test]
