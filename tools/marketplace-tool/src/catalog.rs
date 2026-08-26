@@ -289,8 +289,7 @@ impl PublisherState {
             )
             .map_err(|_| CatalogCode::State)?,
         );
-        let metadata = directory.metadata().map_err(|_| CatalogCode::State)?;
-        if !metadata.is_dir() || metadata.uid() != rustix::process::geteuid().as_raw() {
+        if !crate::owned_directory_is_safe(&directory, private) {
             return Err(CatalogCode::State);
         }
         flock(&directory, FlockOperation::NonBlockingLockExclusive)
@@ -431,16 +430,21 @@ pub(crate) fn read_private_input(
     }
     let parent = path.parent().ok_or(CatalogCode::State)?;
     let name = path.file_name().ok_or(CatalogCode::State)?;
-    let directory = openat2(
-        CWD,
-        parent,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
-        Mode::empty(),
-        ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS,
-    )
-    .map_err(|_| CatalogCode::State)?;
+    let directory = File::from(
+        openat2(
+            CWD,
+            parent,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS,
+        )
+        .map_err(|_| CatalogCode::State)?,
+    );
+    if !crate::owned_directory_is_safe(&directory, true) {
+        return Err(CatalogCode::State);
+    }
     let descriptor = openat(
-        directory,
+        &directory,
         name,
         OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
         Mode::empty(),
@@ -615,17 +619,28 @@ pub(crate) fn verify_catalog(
     expected_key_id: &str,
     public_key: &[u8; 32],
     origin: CatalogOrigin,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), CatalogCode> {
+    if matches!(origin, CatalogOrigin::Production)
+        && (expected_key_id == DEVELOPMENT_KEY_ID || public_key == &development_public_key()?)
+    {
+        return Err(CatalogCode::Signature);
+    }
     let payload = verify_envelope(bytes, expected_key_id, public_key)?;
     let payload: VerifiedPayload =
         serde_json::from_slice(&payload).map_err(|_| CatalogCode::Payload)?;
     let generated = parse_time(&payload.generated_at)?;
     let expires = parse_time(&payload.expires_at)?;
-    if payload.schema_version != 1
-        || payload.sequence == 0
-        || expires <= generated
-        || payload.targets.len() > 500
+    if expires <= generated
+        || expires <= now
+        || generated
+            > now
+                .checked_add_signed(chrono::TimeDelta::minutes(5))
+                .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC)
     {
+        return Err(CatalogCode::Time);
+    }
+    if payload.schema_version != 1 || payload.sequence == 0 || payload.targets.len() > 500 {
         return Err(CatalogCode::Payload);
     }
     let mut previous = None;
@@ -683,6 +698,14 @@ pub(crate) fn verify_catalog(
     Ok(())
 }
 
+fn development_public_key() -> Result<[u8; 32], CatalogCode> {
+    let pair =
+        Ed25519KeyPair::from_seed_unchecked(&DEV_SEED).map_err(|_| CatalogCode::Signature)?;
+    let mut public = [0; 32];
+    public.copy_from_slice(ring::signature::KeyPair::public_key(&pair).as_ref());
+    Ok(public)
+}
+
 fn decode_canonical(value: &str, maximum: usize) -> Result<Vec<u8>, CatalogCode> {
     if value.len() > maximum.saturating_mul(4).saturating_add(2) / 3 {
         return Err(CatalogCode::Envelope);
@@ -720,7 +743,8 @@ mod tests {
 
     use super::{
         CatalogCode, CatalogOrigin, DEV_SEED, DEVELOPMENT_KEY_ID, PreparedTarget, PublisherState,
-        SequenceState, build_catalog, parse_counter, sign_payload, verify_catalog, verify_envelope,
+        SequenceState, build_catalog, parse_counter, read_private_input, sign_payload,
+        verify_catalog, verify_envelope,
     };
     use crate::{
         metadata::{CatalogStatus, validate_metadata},
@@ -735,6 +759,7 @@ mod tests {
         "localizations":[{"locale":"en","name":"Hello","description":"Safe"}],
         "previewFile":"preview.png"
     }"#;
+    const NOW: &str = "2026-08-26T00:00:00Z";
 
     fn development_public_key() -> [u8; 32] {
         let pair = ring::signature::Ed25519KeyPair::from_seed_unchecked(&DEV_SEED)
@@ -742,6 +767,16 @@ mod tests {
         let mut public = [0; 32];
         public.copy_from_slice(ring::signature::KeyPair::public_key(&pair).as_ref());
         public
+    }
+
+    fn verify_at(envelope: &[u8], key_id: &str, origin: CatalogOrigin) -> Result<(), CatalogCode> {
+        verify_catalog(
+            envelope,
+            key_id,
+            &development_public_key(),
+            origin,
+            NOW.parse().expect("test time"),
+        )
     }
 
     #[test]
@@ -776,7 +811,10 @@ mod tests {
     fn production_state_requires_private_files_outside_repository() {
         let repository = tempfile::tempdir().expect("repository");
         let secrets = tempfile::tempdir().expect("secrets");
+        std::fs::set_permissions(secrets.path(), Permissions::from_mode(0o700))
+            .expect("private secrets directory");
         let state_path = secrets.path().join("state.json");
+        let input_path = secrets.path().join("counter.txt");
         std::fs::write(
             &state_path,
             b"{\"schemaVersion\":1,\"sequence\":1,\"payloadSha256\":\"0000000000000000000000000000000000000000000000000000000000000000\"}\n",
@@ -784,7 +822,21 @@ mod tests {
         .expect("state fixture");
         std::fs::set_permissions(&state_path, Permissions::from_mode(0o600))
             .expect("private state");
+        std::fs::write(&input_path, b"1\n").expect("private input fixture");
+        std::fs::set_permissions(&input_path, Permissions::from_mode(0o600))
+            .expect("private input");
         PublisherState::production(repository.path(), &state_path).expect("private state");
+        assert_eq!(
+            read_private_input(repository.path(), &input_path, 32).expect("private input"),
+            b"1\n"
+        );
+
+        std::fs::set_permissions(secrets.path(), Permissions::from_mode(0o770))
+            .expect("unsafe secrets directory");
+        assert!(PublisherState::production(repository.path(), &state_path).is_err());
+        assert!(read_private_input(repository.path(), &input_path, 32).is_err());
+        std::fs::set_permissions(secrets.path(), Permissions::from_mode(0o700))
+            .expect("restore secrets directory");
 
         std::fs::set_permissions(&state_path, Permissions::from_mode(0o644)).expect("public state");
         assert!(PublisherState::production(repository.path(), &state_path).is_err());
@@ -838,6 +890,7 @@ mod tests {
                 DEVELOPMENT_KEY_ID,
                 &development_public_key(),
                 CatalogOrigin::Development,
+                NOW.parse().expect("test time"),
             ),
             Err(CatalogCode::Payload)
         );
@@ -929,12 +982,48 @@ mod tests {
             built.envelope,
             sign_payload(DEVELOPMENT_KEY_ID, &built.payload, &DEV_SEED).expect("signature")
         );
-        verify_catalog(
+        verify_at(
             &built.envelope,
             DEVELOPMENT_KEY_ID,
-            &development_public_key(),
             CatalogOrigin::Development,
         )
         .expect("strict catalog verification");
+
+        let payload: Value = serde_json::from_slice(&built.payload).expect("catalog payload");
+        for (generated, expires) in [
+            ("2021-08-25T00:00:00Z", "2022-08-25T00:00:00Z"),
+            ("2026-08-26T00:05:01Z", "2036-08-25T00:00:00Z"),
+        ] {
+            let mut invalid = payload.clone();
+            invalid["generatedAt"] = generated.into();
+            invalid["expiresAt"] = expires.into();
+            let payload = serde_json::to_vec(&invalid).expect("invalid time payload");
+            let envelope = sign_payload(DEVELOPMENT_KEY_ID, &payload, &DEV_SEED).expect("resign");
+            assert_eq!(
+                verify_at(&envelope, DEVELOPMENT_KEY_ID, CatalogOrigin::Development),
+                Err(CatalogCode::Time)
+            );
+        }
+
+        let development_key_in_production = build_catalog(
+            &targets,
+            10,
+            "2026-08-25T00:00:00Z",
+            "2036-08-25T00:00:00Z",
+            CatalogOrigin::Production,
+            "production-alias",
+            &DEV_SEED,
+        )
+        .expect("production URL fixture signed by development key");
+        for key_id in ["production-alias", DEVELOPMENT_KEY_ID] {
+            assert_eq!(
+                verify_at(
+                    &development_key_in_production.envelope,
+                    key_id,
+                    CatalogOrigin::Production,
+                ),
+                Err(CatalogCode::Signature)
+            );
+        }
     }
 }

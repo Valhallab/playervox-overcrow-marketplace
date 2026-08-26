@@ -1,11 +1,13 @@
 use std::{
     fs::{self, Permissions},
-    os::unix::fs::PermissionsExt as _,
+    os::unix::fs::{PermissionsExt as _, symlink},
     path::Path,
     process::Command,
 };
 
+use image::{ExtendedColorType, ImageEncoder as _, codecs::png::PngEncoder};
 use ring::signature::{Ed25519KeyPair, KeyPair as _};
+use serde_json::Value;
 
 const FIXED_GENERATED: &str = "2026-08-25T00:00:00Z";
 const FIXED_EXPIRES: &str = "2036-08-25T00:00:00Z";
@@ -36,6 +38,33 @@ fn cli_build_is_reproducible_and_verifies_its_complete_source() {
             .join("wasm32-wasip2/release/hello_widget.wasm"),
     );
 
+    let component = fixture.path().join("examples/hello-widget/component.wasm");
+    assert!(inspect(&component));
+    let component_link = fixture.path().join("component-link.wasm");
+    symlink(&component, &component_link).expect("component symlink");
+    assert!(
+        !inspect(&component_link),
+        "component inspection must use a bounded no-follow read"
+    );
+    assert!(policy(fixture.path()));
+    assert!(!fixture.path().join("public").exists());
+    assert!(
+        !fixture
+            .path()
+            .join("marketplace/development-catalog-state.json")
+            .exists(),
+        "policy must not advance publisher authority"
+    );
+
+    let manifest_path = fixture.path().join("examples/hello-widget/manifest.json");
+    let manifest_bytes = fs::read(&manifest_path).expect("manifest fixture");
+    add_large_png_assets(fixture.path(), &manifest_bytes);
+    assert!(
+        !policy(fixture.path()),
+        "three compressible 2048-square RGBA assets exceed the 32 MiB decoded budget"
+    );
+    fs::write(&manifest_path, &manifest_bytes).expect("restore manifest fixture");
+
     let build = || {
         Command::new(env!("CARGO_BIN_EXE_marketplace-tool"))
             .args([
@@ -63,6 +92,22 @@ fn cli_build_is_reproducible_and_verifies_its_complete_source() {
     );
     let catalog_path = fixture.path().join("public/marketplace/v1/catalog.json");
     let first = fs::read(&catalog_path).expect("first catalog");
+
+    let packages_before = published_package_count(fixture.path());
+    let mut changed: Value = serde_json::from_slice(&manifest_bytes).expect("manifest JSON");
+    changed["display"]["width"] = 321.into();
+    let mut changed = serde_json::to_vec_pretty(&changed).expect("changed manifest");
+    changed.push(b'\n');
+    fs::write(&manifest_path, changed).expect("changed manifest fixture");
+    let conflict = build();
+    let packages_after = published_package_count(fixture.path());
+    fs::write(&manifest_path, &manifest_bytes).expect("restore manifest fixture");
+    assert!(!conflict.success(), "same sequence with changed payload");
+    assert_eq!(
+        packages_after, packages_before,
+        "sequence rejection must happen before content objects are published"
+    );
+
     fs::remove_file(&catalog_path).expect("simulate interruption after durable state");
     assert!(build().success(), "retry after state commit");
     assert_eq!(
@@ -82,6 +127,8 @@ fn cli_build_is_reproducible_and_verifies_its_complete_source() {
     assert!(verified.success(), "catalog signature and payload");
 
     let secrets = tempfile::tempdir().expect("production secrets");
+    fs::set_permissions(secrets.path(), Permissions::from_mode(0o700))
+        .expect("private secrets directory");
     let counter = secrets.path().join("sequence.txt");
     let state = secrets.path().join("state.json");
     let signing_key = secrets.path().join("signing.key");
@@ -135,6 +182,64 @@ fn cli_build_is_reproducible_and_verifies_its_complete_source() {
         .status()
         .expect("verify production catalog");
     assert!(verified.success(), "production catalog verification");
+}
+
+fn tool() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_marketplace-tool"))
+}
+
+fn inspect(component: &Path) -> bool {
+    tool()
+        .arg("inspect-component")
+        .arg(component)
+        .status()
+        .expect("inspect component")
+        .success()
+}
+
+fn policy(repository: &Path) -> bool {
+    tool()
+        .args([
+            "policy",
+            "--repository",
+            repository.to_str().expect("UTF-8 fixture path"),
+        ])
+        .status()
+        .expect("run package policy")
+        .success()
+}
+
+fn add_large_png_assets(repository: &Path, original: &[u8]) {
+    let mut png = Vec::new();
+    let pixels = vec![0; 2_048 * 2_048 * 4];
+    PngEncoder::new(&mut png)
+        .write_image(&pixels, 2_048, 2_048, ExtendedColorType::Rgba8)
+        .expect("compressible PNG fixture");
+    assert!(png.len() < 2 * 1024 * 1024, "compressed asset bound");
+    let digest = lower_hex(ring::digest::digest(&ring::digest::SHA256, &png).as_ref());
+    let source = repository.join("examples/hello-widget");
+    fs::create_dir(source.join("assets")).expect("asset fixture directory");
+    let mut manifest: Value = serde_json::from_slice(original).expect("manifest JSON");
+    for index in 0..3 {
+        let relative = format!("assets/large-{index}.png");
+        fs::write(source.join(&relative), &png).expect("large asset fixture");
+        manifest["files"]["assets"][format!("large-{index}")] = serde_json::json!({
+            "path": relative,
+            "sha256": digest,
+        });
+    }
+    let mut encoded = serde_json::to_vec_pretty(&manifest).expect("large manifest");
+    encoded.push(b'\n');
+    fs::write(source.join("manifest.json"), encoded).expect("large manifest fixture");
+}
+
+fn published_package_count(repository: &Path) -> usize {
+    fs::read_dir(
+        repository
+            .join("public/marketplace/v1/packages/com.playervox.overcrow.example.hello/0.1.0"),
+    )
+    .expect("published package directory")
+    .count()
 }
 
 fn write_private(path: &Path, bytes: &[u8]) {

@@ -4,14 +4,15 @@ use std::{
     io::{Read, Write as _},
     os::unix::{ffi::OsStrExt as _, fs::MetadataExt as _, fs::PermissionsExt as _},
     path::Path,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use image::{ImageDecoder as _, ImageFormat, ImageReader, Limits};
 use rustix::{
     fd::OwnedFd,
     fs::{
-        AtFlags, CWD, FlockOperation, Mode, OFlags, ResolveFlags, flock, fsync, mkdirat, openat,
-        openat2, renameat, unlinkat,
+        AtFlags, CWD, FlockOperation, Mode, OFlags, RenameFlags, ResolveFlags, fchmod, flock,
+        fsync, mkdirat, openat, openat2, renameat, renameat_with, unlinkat,
     },
 };
 
@@ -22,6 +23,8 @@ const MAX_ENTRIES: usize = 64;
 const UTF8_FLAG: u16 = 1 << 11;
 const DOS_DATE_1980_01_01: u16 = 33;
 const REGULAR_MODE: u32 = 0o100644;
+const MAX_DECODED_ASSET_BYTES: usize = 32 * 1024 * 1024;
+static TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PackageCode {
@@ -152,10 +155,7 @@ impl SourceDirectory {
 
     fn from_descriptor(descriptor: OwnedFd) -> Result<Self, PackageCode> {
         let directory = File::from(descriptor);
-        let metadata = directory
-            .metadata()
-            .map_err(|_| PackageCode::UnsafeSource)?;
-        if !metadata.is_dir() || metadata.uid() != rustix::process::geteuid().as_raw() {
+        if !crate::owned_directory_is_safe(&directory, false) {
             return Err(PackageCode::UnsafeSource);
         }
         Ok(Self(directory.into()))
@@ -237,10 +237,7 @@ fn ensure_directory(parent: &impl std::os::fd::AsFd, name: &str) -> Result<File,
         Err(_) => return Err(PackageCode::UnsafeSource),
     };
     let directory = File::from(descriptor);
-    let metadata = directory
-        .metadata()
-        .map_err(|_| PackageCode::UnsafeSource)?;
-    if !metadata.is_dir() || metadata.uid() != rustix::process::geteuid().as_raw() {
+    if !crate::owned_directory_is_safe(&directory, false) {
         return Err(PackageCode::UnsafeSource);
     }
     Ok(directory)
@@ -250,24 +247,59 @@ fn write_object(directory: &File, name: &str, bytes: &[u8]) -> Result<(), Packag
     if !valid_segment(name) {
         return Err(PackageCode::UnsafePath);
     }
-    let descriptor = match openat(
+    let temporary_name = stage_object(directory, bytes)?;
+    let result = match renameat_with(
+        directory,
+        &temporary_name,
         directory,
         name,
-        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-        Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::ROTH,
+        RenameFlags::NOREPLACE,
     ) {
-        Ok(descriptor) => descriptor,
-        Err(error) if error == rustix::io::Errno::EXIST => {
-            return compare_existing(directory, name, bytes);
+        Ok(()) => Ok(()),
+        Err(error) if error == rustix::io::Errno::EXIST => compare_existing(directory, name, bytes),
+        Err(_) => Err(PackageCode::UnsafeSource),
+    }
+    .and_then(|()| fsync(directory).map_err(|_| PackageCode::UnsafeSource));
+    let _ = unlinkat(directory, &temporary_name, AtFlags::empty());
+    result
+}
+
+fn stage_object(directory: &File, bytes: &[u8]) -> Result<String, PackageCode> {
+    let mut selected = None;
+    for _ in 0..16 {
+        let sequence = TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let name = format!(".object.{}.{sequence}.tmp", std::process::id());
+        match openat(
+            directory,
+            &name,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::RUSR | Mode::WUSR,
+        ) {
+            Ok(descriptor) => {
+                selected = Some((name, descriptor));
+                break;
+            }
+            Err(error) if error == rustix::io::Errno::EXIST => {}
+            Err(_) => return Err(PackageCode::UnsafeSource),
         }
-        Err(_) => return Err(PackageCode::UnsafeSource),
-    };
+    }
+    let (temporary_name, descriptor) = selected.ok_or(PackageCode::UnsafeSource)?;
     let mut file = File::from(descriptor);
-    validate_public_file(&file)?;
-    file.write_all(bytes)
-        .and_then(|()| file.sync_all())
-        .map_err(|_| PackageCode::UnsafeSource)?;
-    fsync(directory).map_err(|_| PackageCode::UnsafeSource)
+    let result = (|| {
+        validate_file_mode(&file, 0o600)?;
+        file.write_all(bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|_| PackageCode::UnsafeSource)?;
+        fchmod(&file, Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::ROTH)
+            .map_err(|_| PackageCode::UnsafeSource)?;
+        file.sync_all().map_err(|_| PackageCode::UnsafeSource)?;
+        validate_public_file(&file)
+    })();
+    if result.is_err() {
+        let _ = unlinkat(directory, &temporary_name, AtFlags::empty());
+        return Err(PackageCode::UnsafeSource);
+    }
+    Ok(temporary_name)
 }
 
 fn compare_existing(directory: &File, name: &str, expected: &[u8]) -> Result<(), PackageCode> {
@@ -325,11 +357,15 @@ fn write_atomic(directory: &File, final_name: &str, bytes: &[u8]) -> Result<(), 
 }
 
 fn validate_public_file(file: &File) -> Result<(), PackageCode> {
+    validate_file_mode(file, 0o644)
+}
+
+fn validate_file_mode(file: &File, mode: u32) -> Result<(), PackageCode> {
     let metadata = file.metadata().map_err(|_| PackageCode::UnsafeSource)?;
     if metadata.is_file()
         && metadata.uid() == rustix::process::geteuid().as_raw()
         && metadata.nlink() == 1
-        && metadata.permissions().mode() & 0o7777 == 0o644
+        && metadata.permissions().mode() & 0o7777 == mode
     {
         Ok(())
     } else {
@@ -370,13 +406,18 @@ pub(crate) fn build_package(
         files.insert(file.path().to_owned(), bytes);
     }
     let mut asset_total = 0usize;
+    let mut decoded_asset_total = 0usize;
     for file in metadata.manifest().files().assets().values() {
         let bytes = read_declared(&source, file, 2 * 1024 * 1024)?;
         asset_total = asset_total
             .checked_add(bytes.len())
             .filter(|total| *total <= 8 * 1024 * 1024)
             .ok_or(PackageCode::EntrySize)?;
-        validate_png(&bytes, 2_048).map_err(|_| PackageCode::Asset)?;
+        let decoded = validate_png(&bytes, 2_048).map_err(|_| PackageCode::Asset)?;
+        decoded_asset_total = decoded_asset_total
+            .checked_add(decoded)
+            .filter(|total| *total <= MAX_DECODED_ASSET_BYTES)
+            .ok_or(PackageCode::Asset)?;
         files.insert(file.path().to_owned(), bytes);
     }
     let preview = metadata
@@ -535,7 +576,7 @@ fn normalized_absolute(path: &Path) -> bool {
             .any(|segment| segment.is_empty() || matches!(segment, b"." | b".."))
 }
 
-fn validate_png(encoded: &[u8], maximum_dimension: u32) -> Result<(), ()> {
+fn validate_png(encoded: &[u8], maximum_dimension: u32) -> Result<usize, ()> {
     if !encoded.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Err(());
     }
@@ -616,7 +657,8 @@ fn validate_png(encoded: &[u8], maximum_dimension: u32) -> Result<(), ()> {
     let mut decoded = Vec::new();
     decoded.try_reserve_exact(decoded_size).map_err(|_| ())?;
     decoded.resize(decoded_size, 0);
-    decoder.read_image(&mut decoded).map_err(|_| ())
+    decoder.read_image(&mut decoded).map_err(|_| ())?;
+    usize::try_from(rgba).map_err(|_| ())
 }
 
 fn read_be_u32(bytes: &[u8], offset: usize) -> Result<u32, ()> {
@@ -636,10 +678,15 @@ fn push_u32(output: &mut Vec<u8>, value: u32) {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, os::unix::fs::symlink};
+    use std::{
+        collections::BTreeMap,
+        fs::{File, Permissions},
+        os::unix::fs::{PermissionsExt as _, symlink},
+    };
 
     use super::{
         PackageArtifact, PackageCode, PublisherOutput, build_stored_archive, read_source_file,
+        stage_object,
     };
     use crate::metadata::validate_metadata;
 
@@ -689,6 +736,15 @@ mod tests {
             read_source_file(temporary.path(), "regular", 4).expect("bounded regular file"),
             b"1234"
         );
+
+        std::fs::set_permissions(temporary.path(), Permissions::from_mode(0o770))
+            .expect("unsafe source mode");
+        assert_eq!(
+            read_source_file(temporary.path(), "regular", 4),
+            Err(PackageCode::UnsafeSource)
+        );
+        std::fs::set_permissions(temporary.path(), Permissions::from_mode(0o700))
+            .expect("restore source mode");
     }
 
     #[test]
@@ -703,6 +759,20 @@ mod tests {
             build_stored_archive(&entries),
             Err(PackageCode::ArchiveSize)
         );
+    }
+
+    #[test]
+    fn staged_object_never_exposes_partial_final_bytes() {
+        let temporary = tempfile::tempdir().expect("object directory");
+        let directory = File::open(temporary.path()).expect("object directory descriptor");
+        let staged = stage_object(&directory, b"complete bytes").expect("staged object");
+        let temporary_path = temporary.path().join(&staged);
+        assert!(!temporary.path().join("object.ocpkg").exists());
+        assert_eq!(
+            std::fs::read(&temporary_path).expect("complete staged bytes"),
+            b"complete bytes"
+        );
+        std::fs::remove_file(&temporary_path).expect("remove staging fixture");
     }
 
     #[test]
@@ -745,5 +815,13 @@ mod tests {
                 .expect("old catalog"),
             b"catalog one"
         );
+
+        drop(output);
+        let public_root = repository.path().join("public/marketplace/v1");
+        std::fs::set_permissions(&public_root, Permissions::from_mode(0o777))
+            .expect("unsafe public mode");
+        assert!(PublisherOutput::open(repository.path()).is_err());
+        std::fs::set_permissions(public_root, Permissions::from_mode(0o755))
+            .expect("restore public mode");
     }
 }

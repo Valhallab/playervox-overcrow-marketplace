@@ -865,6 +865,40 @@ mod tests {
     }
 
     #[test]
+    fn listing_schema_documents_the_runtime_grammar() {
+        let schema: Value =
+            serde_json::from_str(include_str!("../../../marketplace/listing.schema.json"))
+                .expect("listing schema JSON");
+        let properties = &schema["properties"];
+        for (actual, expected) in [
+            (
+                &properties["spdxLicense"]["pattern"],
+                "^[A-Za-z0-9][A-Za-z0-9.+-]{0,63}$",
+            ),
+            (
+                &properties["sourceUrl"]["pattern"],
+                "^https://[A-Za-z0-9.-]+/(?:[^/\\\\%?#]+/)*[^/\\\\%?#]+$",
+            ),
+            (
+                &properties["localizations"]["items"]["properties"]["locale"]["pattern"],
+                "^[a-z]{2}(?:-[A-Z]{2})?$",
+            ),
+            (
+                &properties["previewFile"]["pattern"],
+                "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\\.png$",
+            ),
+        ] {
+            assert_eq!(actual, expected);
+        }
+        assert_eq!(properties["previewFile"]["maxLength"], 192);
+        assert!(
+            schema["$comment"]
+                .as_str()
+                .is_some_and(|value| value.contains("UTF-8 byte limits"))
+        );
+    }
+
+    #[test]
     fn targets_are_strict_unique_and_publisher_owned() {
         validate_targets(br#"[{"sourceDirectory":"examples/hello-widget","status":"verified"}]"#)
             .expect("valid target");

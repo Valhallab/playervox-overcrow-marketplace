@@ -4,6 +4,8 @@ mod package;
 
 use std::{
     ffi::OsString,
+    fs::File,
+    os::unix::fs::{MetadataExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
     process::ExitCode,
 };
@@ -15,7 +17,7 @@ use crate::{
         CatalogOrigin, DEV_SEED, DEVELOPMENT_KEY_ID, PreparedTarget, PublisherState, build_catalog,
         parse_counter, read_private_input, verify_catalog,
     },
-    metadata::validate_targets,
+    metadata::{inspect_component, validate_targets},
     package::{PublisherOutput, build_package, read_source_file},
 };
 
@@ -98,6 +100,8 @@ fn run(arguments: Vec<OsString>) -> Result<(), AppError> {
     match arguments.first().map(String::as_str) {
         Some("build") => build(parse_build(&arguments)?),
         Some("verify") => verify(&arguments),
+        Some("inspect-component") => inspect(&arguments),
+        Some("policy") => policy(&arguments),
         _ => Err(AppError::Arguments),
     }
 }
@@ -227,12 +231,12 @@ fn build(options: BuildOptions) -> Result<(), AppError> {
     )
     .map_err(|_| AppError::Catalog)?;
     let output = PublisherOutput::open(&options.repository).map_err(|_| AppError::Output)?;
-    output
-        .publish_objects(&packages)
-        .map_err(|_| AppError::Output)?;
     state
         .accept(sequence, sha256(&catalog.payload))
         .map_err(|_| AppError::State)?;
+    output
+        .publish_objects(&packages)
+        .map_err(|_| AppError::Output)?;
     output
         .publish_catalog(&catalog.envelope)
         .map_err(|_| AppError::Output)
@@ -257,7 +261,31 @@ fn verify(arguments: &[String]) -> Result<(), AppError> {
     } else {
         return Err(AppError::Arguments);
     };
-    verify_catalog(&bytes, key_id, &public_key, origin).map_err(|_| AppError::Verification)
+    verify_catalog(&bytes, key_id, &public_key, origin, chrono::Utc::now())
+        .map_err(|_| AppError::Verification)
+}
+
+fn inspect(arguments: &[String]) -> Result<(), AppError> {
+    if arguments.len() != 2 {
+        return Err(AppError::Arguments);
+    }
+    let bytes =
+        read_cli_file(Path::new(&arguments[1]), 4 * 1024 * 1024).map_err(|_| AppError::Input)?;
+    inspect_component(&bytes).map_err(|_| AppError::Policy)
+}
+
+fn policy(arguments: &[String]) -> Result<(), AppError> {
+    if arguments.len() != 3 || arguments[1] != "--repository" {
+        return Err(AppError::Arguments);
+    }
+    let repository = Path::new(&arguments[2]);
+    let targets = read_source_file(repository, "marketplace/targets.json", 128 * 1024)
+        .map_err(|_| AppError::Input)
+        .and_then(|bytes| validate_targets(&bytes).map_err(|_| AppError::Policy))?;
+    for target in &targets {
+        build_package(repository, target).map_err(|_| AppError::Package)?;
+    }
+    Ok(())
 }
 
 fn read_cli_file(path: &Path, maximum: usize) -> Result<Vec<u8>, ()> {
@@ -297,4 +325,16 @@ const fn hex_digit(byte: u8) -> Option<u8> {
         b'a'..=b'f' => Some(byte - b'a' + 10),
         _ => None,
     }
+}
+
+fn owned_directory_is_safe(directory: &File, private: bool) -> bool {
+    directory.metadata().is_ok_and(|metadata| {
+        metadata.is_dir()
+            && metadata.uid() == rustix::process::geteuid().as_raw()
+            && if private {
+                metadata.permissions().mode() & 0o7777 == 0o700
+            } else {
+                metadata.permissions().mode() & 0o022 == 0
+            }
+    })
 }
