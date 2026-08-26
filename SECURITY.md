@@ -22,5 +22,7 @@ complete.
 
 If a listed package is suspected of compromise, maintainers may publish a
 signed suspension or revocation in a newer monotonic catalog. Clients must
-reject that package for new installation or update. A catalog signature never
-bypasses package validation, user consent, or runtime sandboxing.
+reject that package for new installation or update, immediately disable an
+installed copy, and offer its removal. An absent or stale catalog never invents
+a revocation. A catalog signature never bypasses package validation, user
+consent, or runtime sandboxing.

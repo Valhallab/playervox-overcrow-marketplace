@@ -44,9 +44,13 @@ for required in \
     fi
 done
 
-if rg --hidden --no-ignore -n 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY' "$repo_root" \
+if (
+    cd "$repo_root"
+    rg --hidden --no-ignore --text --files-with-matches \
+        'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY' . \
         --glob '!.git/**' \
-        --glob '!fixtures/keys/development-ed25519.key'; then
+        --glob '!fixtures/keys/development-ed25519.key'
+); then
     printf '%s\n' 'error: private key material is not allowed' >&2
     exit 1
 else
