@@ -42,6 +42,13 @@ fi
 destination="$repo_root/wit"
 previous="$repo_root/.wit-previous"
 stage=''
+backup_created=false
+
+exec 9<"$repo_root"
+if ! /usr/bin/flock -n 9; then
+    printf '%s\n' 'error: WIT synchronization is already in progress' >&2
+    exit 1
+fi
 
 valid_pair() {
     test -d "$1" && test ! -L "$1" \
@@ -60,27 +67,19 @@ valid_pair() {
     test "${#pair_recorded}" -eq 64 && test "$pair_hash" = "$pair_recorded"
 }
 
-remove_path() {
-    if test -L "$1" || test ! -d "$1"; then
-        /usr/bin/rm -f -- "$1"
-    else
-        /usr/bin/rm -rf -- "$1"
-    fi
-}
-
 restore_previous() {
     exit_code=$?
     trap - EXIT HUP INT TERM
     if test -n "$stage" && { test -e "$stage" || test -L "$stage"; }; then
-        remove_path "$stage" || exit_code=1
+        if test -L "$stage" || test ! -d "$stage"; then
+            /usr/bin/rm -f -- "$stage" || exit_code=1
+        else
+            /usr/bin/rm -rf -- "$stage" || exit_code=1
+        fi
     fi
-    if valid_pair "$previous" && ! valid_pair "$destination"; then
-        if test -e "$destination" || test -L "$destination"; then
-            remove_path "$destination" || exit_code=1
-        fi
-        if test ! -e "$destination" && test ! -L "$destination"; then
-            /usr/bin/mv -- "$previous" "$destination" || exit_code=1
-        fi
+    if test "$backup_created" = true && valid_pair "$previous" \
+            && test ! -e "$destination" && test ! -L "$destination"; then
+        /usr/bin/mv -T -- "$previous" "$destination" || exit_code=1
     fi
     exit "$exit_code"
 }
@@ -92,14 +91,11 @@ if test -e "$previous" || test -L "$previous"; then
         printf '%s\n' 'error: interrupted WIT backup is unsafe or incomplete' >&2
         exit 1
     fi
-    if valid_pair "$destination"; then
-        /usr/bin/rm -rf -- "$previous"
-    else
-        if test -e "$destination" || test -L "$destination"; then
-            remove_path "$destination"
-        fi
-        /usr/bin/mv -- "$previous" "$destination"
+    if test -e "$destination" || test -L "$destination"; then
+        printf '%s\n' 'error: WIT output and interrupted backup both exist; preserving both' >&2
+        exit 1
     fi
+    /usr/bin/mv -T -- "$previous" "$destination"
 fi
 
 if { test -e "$destination" || test -L "$destination"; } && ! valid_pair "$destination"; then
@@ -146,9 +142,10 @@ fi
 printf '%s\n' "$source_hash" >"$stage/widget-v1.sha256"
 
 if test -e "$destination"; then
-    /usr/bin/mv -- "$destination" "$previous"
+    backup_created=true
+    /usr/bin/mv -T -- "$destination" "$previous"
 fi
-/usr/bin/mv -- "$stage" "$destination"
+/usr/bin/mv -T -- "$stage" "$destination"
 stage=''
 valid_pair "$destination" || {
     printf '%s\n' 'error: synchronized WIT failed post-publication validation' >&2
@@ -157,4 +154,5 @@ valid_pair "$destination" || {
 if test -e "$previous"; then
     /usr/bin/rm -rf -- "$previous"
 fi
+backup_created=false
 printf '%s\n' "$source_hash"
