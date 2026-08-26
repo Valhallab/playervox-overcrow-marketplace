@@ -1,10 +1,14 @@
-use alloc::borrow::ToOwned;
+use alloc::{borrow::ToOwned, vec::Vec};
 use core::{error::Error, fmt};
 
 use crate::{
-    GuestError, GuestOutput, HostEvent, Interaction, InteractionKind, Locale, OverlayModeCode,
-    ViewNode, Widget, WidgetContext,
+    GrantedCapabilities, GuestError, GuestOutput, HostEvent, InitInput, Interaction,
+    InteractionKind, Locale, OverlayModeCode, ViewNode, Widget, WidgetContext,
 };
+
+const MAX_VIEW_STRING_BYTES: usize = 4 * 1024;
+const MAX_SCROLL_DELTA_MILLI: u32 = 1_000_000;
+const MAX_ELEMENT_ID_BYTES: usize = 64;
 
 #[derive(Debug)]
 pub enum HarnessError {
@@ -42,8 +46,26 @@ pub struct WidgetHarness<'a, W> {
 
 impl<'a, W: Widget> WidgetHarness<'a, W> {
     pub fn new(widget: &'a mut W, locale: Locale) -> Result<Self, GuestError> {
-        let context = WidgetContext::for_testing(locale);
-        let output = widget.init(&context)?;
+        Self::from_init(
+            widget,
+            InitInput {
+                locale: locale.as_str().to_owned(),
+                granted_capabilities: GrantedCapabilities {
+                    http_hosts: Vec::new(),
+                    game_data: Vec::new(),
+                    storage: false,
+                    clipboard_write: false,
+                    provider: false,
+                },
+                settings: Vec::new(),
+                session_data: None,
+            },
+        )
+    }
+
+    pub fn from_init(widget: &'a mut W, input: InitInput) -> Result<Self, GuestError> {
+        let mut context = WidgetContext::from_init(input)?;
+        let output = widget.init(&mut context)?;
         Ok(Self {
             widget,
             context,
@@ -56,24 +78,17 @@ impl<'a, W: Widget> WidgetHarness<'a, W> {
         self.mode = mode;
     }
 
-    pub fn click(&mut self, element_id: &str) -> Result<(), HarnessError> {
-        self.require_element(element_id, |node| matches!(node, ViewNode::Button(_)))?;
-        self.interact(element_id, InteractionKind::Clicked)
-    }
-
-    pub fn value_changed(&mut self, element_id: &str, value: &str) -> Result<(), HarnessError> {
-        self.require_element(element_id, |node| matches!(node, ViewNode::TextInput(_)))?;
-        self.interact(element_id, InteractionKind::ValueChanged(value.to_owned()))
-    }
-
-    pub fn locale_changed(&mut self, locale: &str) -> Result<(), HarnessError> {
-        self.send(HostEvent::LocaleChanged(locale.to_owned()))
-    }
-
     pub fn send(&mut self, event: HostEvent) -> Result<(), HarnessError> {
+        if let HostEvent::Interaction(interaction) = &event {
+            self.validate_interaction(interaction)?;
+        }
         self.context.apply_event(&event)?;
-        self.output = self.widget.handle(event, &self.context)?;
+        self.output = self.widget.handle(event, &mut self.context)?;
         Ok(())
+    }
+
+    pub fn output(&self) -> &GuestOutput {
+        &self.output
     }
 
     pub fn text_at(&self, index: usize) -> Option<&str> {
@@ -99,31 +114,59 @@ impl<'a, W: Widget> WidgetHarness<'a, W> {
         })
     }
 
-    fn interact(&mut self, element_id: &str, kind: InteractionKind) -> Result<(), HarnessError> {
+    fn validate_interaction(&self, interaction: &Interaction) -> Result<(), HarnessError> {
         if self.mode != OverlayModeCode::Interactive {
             return Err(HarnessError::Passive);
         }
-        self.send(HostEvent::Interaction(Interaction {
-            element_id: element_id.to_owned(),
-            kind,
-        }))
-    }
-
-    fn require_element(
-        &self,
-        element_id: &str,
-        expected: impl FnOnce(&ViewNode) -> bool,
-    ) -> Result<(), HarnessError> {
+        if interaction.element_id.is_empty() || interaction.element_id.len() > MAX_ELEMENT_ID_BYTES
+        {
+            return Err(HarnessError::UnknownElement);
+        }
         let node = self
             .nodes()
             .find(|node| match node {
-                ViewNode::Button((id, _)) | ViewNode::TextInput((id, _, _)) => id == element_id,
+                ViewNode::Button((id, _))
+                | ViewNode::Toggle((id, _, _))
+                | ViewNode::TextInput((id, _, _))
+                | ViewNode::Selection((id, _, _))
+                | ViewNode::Canvas((id, _)) => id == &interaction.element_id,
                 _ => false,
             })
             .ok_or(HarnessError::UnknownElement)?;
-        expected(node)
-            .then_some(())
-            .ok_or(HarnessError::ElementKind)
+        let valid = match (&interaction.kind, node) {
+            (InteractionKind::Clicked, ViewNode::Button(_))
+            | (InteractionKind::Toggled(_), ViewNode::Toggle(_))
+            | (
+                InteractionKind::Focused(_),
+                ViewNode::Button(_)
+                | ViewNode::Toggle(_)
+                | ViewNode::TextInput(_)
+                | ViewNode::Selection(_),
+            )
+            | (
+                InteractionKind::Hovered(_),
+                ViewNode::Button(_)
+                | ViewNode::Toggle(_)
+                | ViewNode::TextInput(_)
+                | ViewNode::Selection(_)
+                | ViewNode::Canvas(_),
+            ) => true,
+            (
+                InteractionKind::ValueChanged(value) | InteractionKind::Submitted(value),
+                ViewNode::TextInput(_),
+            ) => value.len() <= MAX_VIEW_STRING_BYTES,
+            (InteractionKind::SelectionChanged(index), ViewNode::Selection((_, options, _))) => {
+                usize::try_from(*index).is_ok_and(|index| index < options.len())
+            }
+            (InteractionKind::Scrolled(delta), ViewNode::Canvas(_)) => {
+                delta.unsigned_abs() <= MAX_SCROLL_DELTA_MILLI
+            }
+            (InteractionKind::Dragged((x, y, _)), ViewNode::Canvas(_)) => {
+                *x <= 1_000 && *y <= 1_000
+            }
+            _ => false,
+        };
+        valid.then_some(()).ok_or(HarnessError::ElementKind)
     }
 
     fn nodes(&self) -> impl Iterator<Item = &ViewNode> {

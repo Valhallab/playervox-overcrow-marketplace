@@ -77,9 +77,9 @@ pub mod bindings {
 }
 
 pub use bindings::{
-    CanvasPrimitive, DragPhase, GrantedCapabilities, GuestError, GuestOutput, HostCommand,
-    HostEvent, HttpHeader, HttpResponseMetadata, InitInput, Interaction, InteractionKind,
-    OverlayModeCode, SessionData, View, ViewNode,
+    CanvasLine, CanvasPrimitive, CanvasRect, CanvasText, DragPhase, GrantedCapabilities,
+    GuestError, GuestOutput, HostCommand, HostEvent, HttpHeader, HttpResponseMetadata, InitInput,
+    Interaction, InteractionKind, OverlayModeCode, SessionData, View, ViewNode,
 };
 pub use state::{Locale, LocaleError, LocalizedText, WidgetContext};
 pub use testing::{HarnessError, WidgetHarness};
@@ -87,12 +87,12 @@ pub use view::{BuildError, NodeId, OutputBuilder, ViewBuilder};
 
 /// Stateful behavior implemented by one widget component instance.
 pub trait Widget: Send {
-    fn init(&mut self, context: &WidgetContext) -> Result<GuestOutput, GuestError>;
+    fn init(&mut self, context: &mut WidgetContext) -> Result<GuestOutput, GuestError>;
 
     fn handle(
         &mut self,
         event: HostEvent,
-        context: &WidgetContext,
+        context: &mut WidgetContext,
     ) -> Result<GuestOutput, GuestError>;
 
     fn stop(&mut self) {}
@@ -134,9 +134,9 @@ macro_rules! export_widget {
                     if state.is_some() {
                         return Err($crate::GuestError::InvalidState);
                     }
-                    let context = $crate::__private::context(input)?;
+                    let mut context = $crate::__private::context(input)?;
                     let mut widget = <$widget>::default();
-                    let output = $crate::Widget::init(&mut widget, &context)?;
+                    let output = $crate::Widget::init(&mut widget, &mut context)?;
                     *state = Some((widget, context));
                     Ok(output)
                 }

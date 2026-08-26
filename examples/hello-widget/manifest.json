@@ -27,7 +27,7 @@
   "files": {
     "component": {
       "path": "component.wasm",
-      "sha256": "fb603fae58a80a903b03f1c64f2dff7632404b0c585a6591f51df87a773342c6"
+      "sha256": "4c7af12aa84714ee8309f2099d701f300d22ad5c3b2978320f486e06fcc3aa14"
     },
     "locales": {
       "en": {

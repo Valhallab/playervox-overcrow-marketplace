@@ -6,7 +6,8 @@ The reference SDK builds Rust 2024 components for the exact vendored
 
 Start from [`examples/hello-widget`](../examples/hello-widget). Implement
 `Widget` on a `Default` state type, build native view nodes with `ViewBuilder`,
-return commands through `OutputBuilder`, and call `export_widget!` once. The
+return commands through `OutputBuilder::new(context)`, and call
+`export_widget!` once. The
 macro owns one widget instance and exports only `init`, `handle`, and `stop`.
 Guest crates must preserve the example's wasm-only `no_std`/`alloc` setup;
 linking `std` reintroduces forbidden WASI imports. `Widget: Send` lets the SDK
@@ -18,6 +19,10 @@ your state; they are not keyboard shortcuts, DOM IDs, or access to raw input.
 Builders reject invalid trees, duplicate IDs, oversized strings, excessive
 commands, invalid request IDs, and output beyond host limits. The host repeats
 all validation and remains authoritative.
+
+Build each output from the callback's mutable context. This preserves monotonic
+request IDs, outstanding HTTP/storage slots, and provider revisions across
+callbacks; matching result events release their request slot.
 
 The `WidgetContext` contains only the locale, granted capabilities, bounded
 settings, and optional sanitized session data. Do not infer a grant from the

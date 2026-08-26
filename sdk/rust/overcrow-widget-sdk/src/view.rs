@@ -7,7 +7,10 @@ use alloc::{
 };
 use core::{error::Error, fmt};
 
-use crate::{GuestError, GuestOutput, HostCommand, Locale, LocalizedText, View, ViewNode};
+use crate::{
+    GuestError, GuestOutput, HostCommand, Locale, LocalizedText, View, ViewNode, WidgetContext,
+    state::{OutputState, RequestKind},
+};
 
 const MAX_VIEW_NODES: usize = 512;
 const MAX_VIEW_DEPTH: usize = 32;
@@ -15,9 +18,16 @@ const MAX_VIEW_TEXT_BYTES: usize = 64 * 1024;
 const MAX_VIEW_STRING_BYTES: usize = 4 * 1024;
 const MAX_VIEW_VARIABLE_BYTES: usize = 96 * 1024;
 const MAX_ELEMENT_ID_BYTES: usize = 64;
+const MAX_ASSET_ID_BYTES: usize = 64;
+const MAX_VIEW_IMAGE_HANDLES: usize = 64;
+const MAX_CANVAS_PRIMITIVES: usize = 256;
+const MAX_SELECTION_OPTIONS: usize = 128;
+const MAX_VIEW_SELECTION_OPTIONS: usize = 512;
 const MAX_GUEST_COMMANDS: usize = 32;
 const MAX_GUEST_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_HTTP_CONCURRENT_REQUESTS: usize = 2;
+const MAX_OUTSTANDING_REQUESTS: usize = 64;
+const MAX_PROVIDER_SCHEMAS: usize = 64;
 const MAX_STORAGE_KEY_BYTES: usize = 128;
 const MAX_STORAGE_VALUE_BYTES: usize = 64 * 1024;
 const MAX_PROVIDER_PAYLOAD_BYTES: usize = 256 * 1024;
@@ -37,16 +47,25 @@ pub enum BuildError {
     DepthLimit,
     ElementId,
     DuplicateElementId,
+    ImageHandleLimit,
+    ImageHandle,
+    CanvasPrimitiveLimit,
+    CanvasCoordinate,
+    SelectionOptionLimit,
+    Selection,
+    Progress,
     StringLimit,
     TextLimit,
     DataLimit,
     CommandLimit,
     OutputLimit,
-    HttpConcurrency,
+    OutstandingRequestLimit,
     RequestId,
     StorageKeyLimit,
     StorageValueLimit,
     ProviderPayloadLimit,
+    ProviderRevision,
+    ProviderLimit,
     SchemaLimit,
     TimerLimit,
     Locale,
@@ -63,16 +82,25 @@ impl fmt::Display for BuildError {
             Self::DepthLimit => "view depth limit exceeded",
             Self::ElementId => "element ID is invalid",
             Self::DuplicateElementId => "element ID is duplicated",
+            Self::ImageHandleLimit => "image handle limit exceeded",
+            Self::ImageHandle => "image handle is invalid",
+            Self::CanvasPrimitiveLimit => "canvas primitive limit exceeded",
+            Self::CanvasCoordinate => "canvas coordinate is invalid",
+            Self::SelectionOptionLimit => "selection option limit exceeded",
+            Self::Selection => "selection index is invalid",
+            Self::Progress => "progress value is invalid",
             Self::StringLimit => "string limit exceeded",
             Self::TextLimit => "view text limit exceeded",
             Self::DataLimit => "view data limit exceeded",
             Self::CommandLimit => "command limit exceeded",
             Self::OutputLimit => "guest output limit exceeded",
-            Self::HttpConcurrency => "HTTP concurrency limit exceeded",
+            Self::OutstandingRequestLimit => "outstanding request limit exceeded",
             Self::RequestId => "request IDs must be nonzero and increasing",
             Self::StorageKeyLimit => "storage key limit exceeded",
             Self::StorageValueLimit => "storage value limit exceeded",
             Self::ProviderPayloadLimit => "provider payload limit exceeded",
+            Self::ProviderRevision => "provider revision must increase",
+            Self::ProviderLimit => "provider schema limit exceeded",
             Self::SchemaLimit => "provider schema limit exceeded",
             Self::TimerLimit => "wake timer is outside host limits",
             Self::Locale => "locale is invalid",
@@ -96,6 +124,9 @@ pub struct ViewBuilder {
     ids: BTreeSet<String>,
     text_bytes: usize,
     variable_bytes: usize,
+    image_handles: usize,
+    canvas_primitives: usize,
+    selection_options: usize,
 }
 
 impl ViewBuilder {
@@ -106,20 +137,52 @@ impl ViewBuilder {
             ids: BTreeSet::new(),
             text_bytes: 0,
             variable_bytes: 0,
+            image_handles: 0,
+            canvas_primitives: 0,
+            selection_options: 0,
         }
     }
 
     pub fn text(&mut self, text: LocalizedText) -> Result<NodeId, BuildError> {
         let text = text.resolve(&self.locale).to_owned();
-        self.add_text(&text)?;
-        self.push(ViewNode::Text(text))
+        let budget = self.check_node(None, &[&text], 0)?;
+        Ok(self.push(ViewNode::Text(text), None, budget))
+    }
+
+    pub fn image(&mut self, asset_id: &str) -> Result<NodeId, BuildError> {
+        let image_handles = self
+            .image_handles
+            .checked_add(1)
+            .filter(|count| *count <= MAX_VIEW_IMAGE_HANDLES)
+            .ok_or(BuildError::ImageHandleLimit)?;
+        if !valid_asset_id(asset_id) {
+            return Err(BuildError::ImageHandle);
+        }
+        let budget = self.check_node(None, &[], asset_id.len())?;
+        let node = self.push(ViewNode::Image(asset_id.to_owned()), None, budget);
+        self.image_handles = image_handles;
+        Ok(node)
     }
 
     pub fn button(&mut self, id: &str, label: LocalizedText) -> Result<NodeId, BuildError> {
-        self.add_id(id)?;
         let label = label.resolve(&self.locale).to_owned();
-        self.add_text(&label)?;
-        self.push(ViewNode::Button((id.to_owned(), label)))
+        let budget = self.check_node(Some(id), &[&label], 0)?;
+        Ok(self.push(ViewNode::Button((id.to_owned(), label)), Some(id), budget))
+    }
+
+    pub fn toggle(
+        &mut self,
+        id: &str,
+        label: LocalizedText,
+        value: bool,
+    ) -> Result<NodeId, BuildError> {
+        let label = label.resolve(&self.locale).to_owned();
+        let budget = self.check_node(Some(id), &[&label], 0)?;
+        Ok(self.push(
+            ViewNode::Toggle((id.to_owned(), label, value)),
+            Some(id),
+            budget,
+        ))
     }
 
     pub fn text_input(
@@ -128,21 +191,95 @@ impl ViewBuilder {
         value: &str,
         placeholder: LocalizedText,
     ) -> Result<NodeId, BuildError> {
-        self.add_id(id)?;
-        self.add_text(value)?;
         let placeholder = placeholder.resolve(&self.locale).to_owned();
-        self.add_text(&placeholder)?;
-        self.push(ViewNode::TextInput((
-            id.to_owned(),
-            value.to_owned(),
-            placeholder,
-        )))
+        let budget = self.check_node(Some(id), &[value, &placeholder], 0)?;
+        Ok(self.push(
+            ViewNode::TextInput((id.to_owned(), value.to_owned(), placeholder)),
+            Some(id),
+            budget,
+        ))
+    }
+
+    pub fn selection(
+        &mut self,
+        id: &str,
+        options: Vec<LocalizedText>,
+        selected: u32,
+    ) -> Result<NodeId, BuildError> {
+        if options.is_empty() || options.len() > MAX_SELECTION_OPTIONS {
+            return Err(BuildError::SelectionOptionLimit);
+        }
+        let selected = usize::try_from(selected).map_err(|_| BuildError::Selection)?;
+        if selected >= options.len() {
+            return Err(BuildError::Selection);
+        }
+        let selection_options = self
+            .selection_options
+            .checked_add(options.len())
+            .filter(|count| *count <= MAX_VIEW_SELECTION_OPTIONS)
+            .ok_or(BuildError::SelectionOptionLimit)?;
+        let options: Vec<String> = options
+            .into_iter()
+            .map(|text| text.resolve(&self.locale).to_owned())
+            .collect();
+        let text: Vec<&str> = options.iter().map(String::as_str).collect();
+        let budget = self.check_node(Some(id), &text, 0)?;
+        let node = self.push(
+            ViewNode::Selection((id.to_owned(), options, selected as u32)),
+            Some(id),
+            budget,
+        );
+        self.selection_options = selection_options;
+        Ok(node)
+    }
+
+    pub fn progress(
+        &mut self,
+        label: LocalizedText,
+        value_milli: u16,
+    ) -> Result<NodeId, BuildError> {
+        if value_milli > 1_000 {
+            return Err(BuildError::Progress);
+        }
+        let label = label.resolve(&self.locale).to_owned();
+        let budget = self.check_node(None, &[&label], 0)?;
+        Ok(self.push(ViewNode::Progress((label, value_milli)), None, budget))
+    }
+
+    pub fn canvas(
+        &mut self,
+        id: &str,
+        primitives: Vec<crate::CanvasPrimitive>,
+    ) -> Result<NodeId, BuildError> {
+        let canvas_primitives = self
+            .canvas_primitives
+            .checked_add(primitives.len())
+            .filter(|count| *count <= MAX_CANVAS_PRIMITIVES)
+            .ok_or(BuildError::CanvasPrimitiveLimit)?;
+        let mut texts = Vec::new();
+        for primitive in &primitives {
+            validate_canvas_primitive(primitive)?;
+            if let crate::CanvasPrimitive::Text(text) = primitive {
+                texts.push(text.text.as_str());
+            }
+        }
+        let budget = self.check_node(Some(id), &texts, 0)?;
+        let node = self.push(
+            ViewNode::Canvas((id.to_owned(), primitives)),
+            Some(id),
+            budget,
+        );
+        self.canvas_primitives = canvas_primitives;
+        Ok(node)
     }
 
     pub fn container(&mut self, children: &[NodeId]) -> Result<NodeId, BuildError> {
-        self.add_variable(children.len().checked_mul(4).ok_or(BuildError::DataLimit)?)?;
-        self.push(ViewNode::Container(
-            children.iter().map(|child| child.0).collect(),
+        let child_bytes = children.len().checked_mul(4).ok_or(BuildError::DataLimit)?;
+        let budget = self.check_node(None, &[], child_bytes)?;
+        Ok(self.push(
+            ViewNode::Container(children.iter().map(|child| child.0).collect()),
+            None,
+            budget,
         ))
     }
 
@@ -163,45 +300,125 @@ impl ViewBuilder {
         })
     }
 
-    fn push(&mut self, node: ViewNode) -> Result<NodeId, BuildError> {
+    fn push(
+        &mut self,
+        node: ViewNode,
+        element_id: Option<&str>,
+        (text_bytes, variable_bytes): (usize, usize),
+    ) -> NodeId {
+        let id = self.nodes.len() as u32;
+        if let Some(element_id) = element_id {
+            let inserted = self.ids.insert(element_id.to_owned());
+            debug_assert!(inserted);
+        }
+        self.text_bytes = text_bytes;
+        self.variable_bytes = variable_bytes;
+        self.nodes.push(node);
+        NodeId(id)
+    }
+
+    fn check_node(
+        &self,
+        element_id: Option<&str>,
+        texts: &[&str],
+        extra_variable_bytes: usize,
+    ) -> Result<(usize, usize), BuildError> {
         if self.nodes.len() >= MAX_VIEW_NODES {
             return Err(BuildError::NodeLimit);
         }
-        let id = u32::try_from(self.nodes.len()).map_err(|_| BuildError::NodeLimit)?;
-        self.nodes.push(node);
-        Ok(NodeId(id))
-    }
-
-    fn add_id(&mut self, id: &str) -> Result<(), BuildError> {
-        if id.is_empty() || id.len() > MAX_ELEMENT_ID_BYTES {
-            return Err(BuildError::ElementId);
+        let mut variable_bytes = self.variable_bytes;
+        if let Some(element_id) = element_id {
+            if element_id.is_empty() || element_id.len() > MAX_ELEMENT_ID_BYTES {
+                return Err(BuildError::ElementId);
+            }
+            if self.ids.contains(element_id) {
+                return Err(BuildError::DuplicateElementId);
+            }
+            variable_bytes = add_bounded(
+                variable_bytes,
+                element_id.len(),
+                MAX_VIEW_VARIABLE_BYTES,
+                BuildError::DataLimit,
+            )?;
         }
-        if !self.ids.insert(id.to_owned()) {
-            return Err(BuildError::DuplicateElementId);
+        let mut text_bytes = self.text_bytes;
+        for text in texts {
+            if text.len() > MAX_VIEW_STRING_BYTES {
+                return Err(BuildError::StringLimit);
+            }
+            text_bytes = add_bounded(
+                text_bytes,
+                text.len(),
+                MAX_VIEW_TEXT_BYTES,
+                BuildError::TextLimit,
+            )?;
+            variable_bytes = add_bounded(
+                variable_bytes,
+                text.len(),
+                MAX_VIEW_VARIABLE_BYTES,
+                BuildError::DataLimit,
+            )?;
         }
-        self.add_variable(id.len())
+        variable_bytes = add_bounded(
+            variable_bytes,
+            extra_variable_bytes,
+            MAX_VIEW_VARIABLE_BYTES,
+            BuildError::DataLimit,
+        )?;
+        Ok((text_bytes, variable_bytes))
     }
+}
 
-    fn add_text(&mut self, text: &str) -> Result<(), BuildError> {
-        if text.len() > MAX_VIEW_STRING_BYTES {
-            return Err(BuildError::StringLimit);
+fn add_bounded(
+    current: usize,
+    added: usize,
+    maximum: usize,
+    error: BuildError,
+) -> Result<usize, BuildError> {
+    current
+        .checked_add(added)
+        .filter(|total| *total <= maximum)
+        .ok_or(error)
+}
+
+fn valid_asset_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_ASSET_ID_BYTES
+        && value.is_ascii()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn validate_canvas_primitive(primitive: &crate::CanvasPrimitive) -> Result<(), BuildError> {
+    match primitive {
+        crate::CanvasPrimitive::Line(line) => {
+            if [
+                line.start_x_milli,
+                line.start_y_milli,
+                line.end_x_milli,
+                line.end_y_milli,
+            ]
+            .into_iter()
+            .any(|value| value > 1_000)
+            {
+                return Err(BuildError::CanvasCoordinate);
+            }
         }
-        self.text_bytes = self
-            .text_bytes
-            .checked_add(text.len())
-            .filter(|bytes| *bytes <= MAX_VIEW_TEXT_BYTES)
-            .ok_or(BuildError::TextLimit)?;
-        self.add_variable(text.len())
+        crate::CanvasPrimitive::Rect(rect) => {
+            if u32::from(rect.x_milli) + u32::from(rect.width_milli) > 1_000
+                || u32::from(rect.y_milli) + u32::from(rect.height_milli) > 1_000
+            {
+                return Err(BuildError::CanvasCoordinate);
+            }
+        }
+        crate::CanvasPrimitive::Text(text) => {
+            if text.x_milli > 1_000 || text.y_milli > 1_000 {
+                return Err(BuildError::CanvasCoordinate);
+            }
+        }
     }
-
-    fn add_variable(&mut self, bytes: usize) -> Result<(), BuildError> {
-        self.variable_bytes = self
-            .variable_bytes
-            .checked_add(bytes)
-            .filter(|total| *total <= MAX_VIEW_VARIABLE_BYTES)
-            .ok_or(BuildError::DataLimit)?;
-        Ok(())
-    }
+    Ok(())
 }
 
 fn validate_tree(nodes: &[ViewNode], root: NodeId) -> Result<(), BuildError> {
@@ -265,24 +482,26 @@ fn visit(
     Ok(())
 }
 
-pub struct OutputBuilder {
+#[must_use = "finish the builder and return its output from the current callback"]
+pub struct OutputBuilder<'a> {
     view: Option<View>,
     commands: Vec<HostCommand>,
     next_wake_ms: Option<u32>,
-    last_request_id: Option<u32>,
     output_bytes: usize,
-    http_requests: usize,
+    session: &'a mut OutputState,
+    next_state: OutputState,
 }
 
-impl OutputBuilder {
-    pub const fn new() -> Self {
+impl<'a> OutputBuilder<'a> {
+    pub fn new(context: &'a mut WidgetContext) -> Self {
+        let next_state = context.output_state().clone();
         Self {
             view: None,
             commands: Vec::new(),
             next_wake_ms: None,
-            last_request_id: None,
             output_bytes: 64,
-            http_requests: 0,
+            session: context.output_state(),
+            next_state,
         }
     }
 
@@ -311,27 +530,23 @@ impl OutputBuilder {
         {
             return Err(BuildError::StringLimit);
         }
-        if self.http_requests >= MAX_HTTP_CONCURRENT_REQUESTS {
-            return Err(BuildError::HttpConcurrency);
-        }
-        self.validate_request(request_id)?;
+        self.validate_request(request_id, RequestKind::Http)?;
         self.push(
             HostCommand::HttpGet((request_id, host.to_owned(), path.to_owned())),
             64 + host.len() + path.len(),
         )?;
-        self.last_request_id = Some(request_id);
-        self.http_requests += 1;
+        self.add_request(request_id, RequestKind::Http);
         Ok(())
     }
 
     pub fn storage_get(&mut self, request_id: u32, key: &str) -> Result<(), BuildError> {
         validate_storage_key(key)?;
-        self.validate_request(request_id)?;
+        self.validate_request(request_id, RequestKind::Storage)?;
         self.push(
             HostCommand::StorageGet((request_id, key.to_owned())),
             64 + key.len(),
         )?;
-        self.last_request_id = Some(request_id);
+        self.add_request(request_id, RequestKind::Storage);
         Ok(())
     }
 
@@ -345,23 +560,23 @@ impl OutputBuilder {
         if value.len() > MAX_STORAGE_VALUE_BYTES {
             return Err(BuildError::StorageValueLimit);
         }
-        self.validate_request(request_id)?;
+        self.validate_request(request_id, RequestKind::Storage)?;
         self.push(
             HostCommand::StorageSet((request_id, key.to_owned(), value.to_vec())),
             64 + key.len() + value.len(),
         )?;
-        self.last_request_id = Some(request_id);
+        self.add_request(request_id, RequestKind::Storage);
         Ok(())
     }
 
     pub fn storage_delete(&mut self, request_id: u32, key: &str) -> Result<(), BuildError> {
         validate_storage_key(key)?;
-        self.validate_request(request_id)?;
+        self.validate_request(request_id, RequestKind::Storage)?;
         self.push(
             HostCommand::StorageDelete((request_id, key.to_owned())),
             64 + key.len(),
         )?;
-        self.last_request_id = Some(request_id);
+        self.add_request(request_id, RequestKind::Storage);
         Ok(())
     }
 
@@ -387,13 +602,32 @@ impl OutputBuilder {
         if payload.len() > MAX_PROVIDER_PAYLOAD_BYTES {
             return Err(BuildError::ProviderPayloadLimit);
         }
+        if self
+            .next_state
+            .published_revisions
+            .get(schema_id)
+            .is_some_and(|current| revision <= *current)
+        {
+            return Err(BuildError::ProviderRevision);
+        }
+        if !self.next_state.published_revisions.contains_key(schema_id)
+            && self.next_state.published_revisions.len() >= MAX_PROVIDER_SCHEMAS
+        {
+            return Err(BuildError::ProviderLimit);
+        }
         self.push(
             HostCommand::ProviderPublish((schema_id.to_owned(), revision, payload.to_vec())),
             64 + schema_id.len() + payload.len(),
-        )
+        )?;
+        self.next_state
+            .published_revisions
+            .insert(schema_id.to_owned(), revision);
+        Ok(())
     }
 
+    #[must_use = "return this output from the current widget callback"]
     pub fn finish(self) -> GuestOutput {
+        *self.session = self.next_state;
         GuestOutput {
             view: self.view,
             commands: self.commands,
@@ -401,11 +635,35 @@ impl OutputBuilder {
         }
     }
 
-    fn validate_request(&self, request_id: u32) -> Result<(), BuildError> {
-        if request_id == 0 || self.last_request_id.is_some_and(|last| request_id <= last) {
+    fn validate_request(&self, request_id: u32, kind: RequestKind) -> Result<(), BuildError> {
+        if request_id == 0
+            || self
+                .next_state
+                .last_request_id
+                .is_some_and(|last| request_id <= last)
+        {
             return Err(BuildError::RequestId);
         }
+        if self.next_state.outstanding.len() >= MAX_OUTSTANDING_REQUESTS {
+            return Err(BuildError::OutstandingRequestLimit);
+        }
+        if kind == RequestKind::Http
+            && self
+                .next_state
+                .outstanding
+                .values()
+                .filter(|outstanding| **outstanding == RequestKind::Http)
+                .count()
+                >= MAX_HTTP_CONCURRENT_REQUESTS
+        {
+            return Err(BuildError::OutstandingRequestLimit);
+        }
         Ok(())
+    }
+
+    fn add_request(&mut self, request_id: u32, kind: RequestKind) {
+        self.next_state.last_request_id = Some(request_id);
+        self.next_state.outstanding.insert(request_id, kind);
     }
 
     fn push(&mut self, command: HostCommand, bytes: usize) -> Result<(), BuildError> {
@@ -424,12 +682,6 @@ impl OutputBuilder {
             .filter(|total| *total <= MAX_GUEST_OUTPUT_BYTES)
             .ok_or(BuildError::OutputLimit)?;
         Ok(())
-    }
-}
-
-impl Default for OutputBuilder {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -531,4 +783,150 @@ fn view_wire_bytes(view: &View) -> Result<usize, BuildError> {
         bytes = bytes.checked_add(variable).ok_or(BuildError::OutputLimit)?;
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{GrantedCapabilities, HostEvent, HttpResponseMetadata, InitInput};
+
+    fn context() -> WidgetContext {
+        WidgetContext::from_init(InitInput {
+            locale: "en".into(),
+            granted_capabilities: GrantedCapabilities {
+                http_hosts: Vec::new(),
+                game_data: Vec::new(),
+                storage: true,
+                clipboard_write: false,
+                provider: true,
+            },
+            settings: Vec::new(),
+            session_data: None,
+        })
+        .expect("valid test context")
+    }
+
+    #[test]
+    fn session_state_enforces_host_aggregate_limits() {
+        let mut lifecycle = context();
+        let mut output = OutputBuilder::new(&mut lifecycle);
+        output
+            .http_get(1, "api.example.com", "/one")
+            .expect("first HTTP slot");
+        output
+            .http_get(2, "api.example.com", "/two")
+            .expect("second HTTP slot");
+        let _ = output.finish();
+        let mut output = OutputBuilder::new(&mut lifecycle);
+        assert_eq!(
+            output.http_get(3, "api.example.com", "/three"),
+            Err(BuildError::OutstandingRequestLimit)
+        );
+        output.storage_get(3, "state").expect("mixed request slot");
+        let _ = output.finish();
+        let response = HostEvent::HttpResult((
+            1,
+            Some(200),
+            Vec::new(),
+            HttpResponseMetadata {
+                content_type: None,
+                headers: Vec::new(),
+            },
+        ));
+        lifecycle
+            .apply_event(&response)
+            .expect("matching response releases HTTP slot");
+        assert_eq!(
+            lifecycle.apply_event(&response),
+            Err(GuestError::InvalidInput)
+        );
+        let mut output = OutputBuilder::new(&mut lifecycle);
+        output
+            .http_get(4, "api.example.com", "/four")
+            .expect("released HTTP slot");
+        assert_eq!(output.storage_get(4, "state"), Err(BuildError::RequestId));
+
+        let mut request_context = context();
+        for first in [1, 33] {
+            let mut output = OutputBuilder::new(&mut request_context);
+            for request_id in first..first + 32 {
+                output
+                    .storage_get(request_id, "state")
+                    .expect("request within aggregate limit");
+            }
+            let _ = output.finish();
+        }
+        let mut output = OutputBuilder::new(&mut request_context);
+        assert_eq!(
+            output.storage_get(65, "state"),
+            Err(BuildError::OutstandingRequestLimit)
+        );
+
+        let mut provider_context = context();
+        for first in [0, 32] {
+            let mut output = OutputBuilder::new(&mut provider_context);
+            for schema in first..first + 32 {
+                output
+                    .provider_publish(
+                        &alloc::format!("com.example.provider/value-{schema}.v1"),
+                        1,
+                        &[],
+                    )
+                    .expect("schema within aggregate limit");
+            }
+            let _ = output.finish();
+        }
+        let mut output = OutputBuilder::new(&mut provider_context);
+        assert_eq!(
+            output.provider_publish("com.example.provider/overflow.v1", 1, &[]),
+            Err(BuildError::ProviderLimit)
+        );
+
+        let mut revision_context = context();
+        let mut output = OutputBuilder::new(&mut revision_context);
+        output
+            .provider_publish("com.example.provider/value.v1", 7, b"first")
+            .expect("initial revision");
+        let _ = output.finish();
+        let mut output = OutputBuilder::new(&mut revision_context);
+        assert_eq!(
+            output.provider_publish("com.example.provider/value.v1", 7, b"replay"),
+            Err(BuildError::ProviderRevision)
+        );
+        output
+            .provider_publish("com.example.provider/value.v1", 8, b"next")
+            .expect("strictly newer revision");
+    }
+
+    #[test]
+    fn command_builders_keep_existing_host_boundaries() {
+        let mut context = context();
+        let mut output = OutputBuilder::new(&mut context);
+        assert_eq!(
+            output.http_get(1, "api.example.com", "relative"),
+            Err(BuildError::StringLimit)
+        );
+        assert_eq!(
+            output.storage_get(1, "bad\nkey"),
+            Err(BuildError::StorageKeyLimit)
+        );
+        assert_eq!(
+            output.provider_publish("not-a-schema", 1, b"value"),
+            Err(BuildError::SchemaLimit)
+        );
+        let payload = vec![0; MAX_PROVIDER_PAYLOAD_BYTES];
+        for version in 1..=7 {
+            output
+                .provider_publish(
+                    &alloc::format!("com.example.provider/value.v{version}"),
+                    1,
+                    &payload,
+                )
+                .expect("output within aggregate byte limit");
+        }
+        assert_eq!(
+            output.provider_publish("com.example.provider/value.v8", 1, &payload),
+            Err(BuildError::OutputLimit)
+        );
+    }
 }

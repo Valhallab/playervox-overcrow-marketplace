@@ -24,6 +24,89 @@ if test "$worktree" != "$canonical_worktree" || test ! -d "$worktree" || test -L
     exit 1
 fi
 
+logical_script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -L)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
+repo_root=$(dirname -- "$script_dir")
+canonical_repo=$(/usr/bin/readlink -f -- "$repo_root") || {
+    printf '%s\n' 'error: marketplace repository is unavailable' >&2
+    exit 1
+}
+script_file="$script_dir/$(basename -- "$0")"
+if test "$logical_script_dir" != "$script_dir" || test "$canonical_repo" != "$repo_root" \
+        || test ! -d "$repo_root" || test -L "$repo_root" \
+        || test ! -f "$script_file" || test -L "$script_file"; then
+    printf '%s\n' 'error: marketplace repository must be canonical and non-symlinked' >&2
+    exit 1
+fi
+
+destination="$repo_root/wit"
+previous="$repo_root/.wit-previous"
+stage=''
+
+valid_pair() {
+    test -d "$1" && test ! -L "$1" \
+        && test -f "$1/widget-v1.wit" && test ! -L "$1/widget-v1.wit" \
+        && test -f "$1/widget-v1.sha256" && test ! -L "$1/widget-v1.sha256" \
+        || return 1
+    pair_extra=$(/usr/bin/find "$1" -mindepth 1 -maxdepth 1 \
+        ! -name widget-v1.wit ! -name widget-v1.sha256 -print -quit) || return 1
+    test -z "$pair_extra" || return 1
+    pair_hash=$(/usr/bin/sha256sum "$1/widget-v1.wit") || return 1
+    pair_hash=${pair_hash%% *}
+    pair_recorded=$(/usr/bin/cat "$1/widget-v1.sha256") || return 1
+    case "$pair_recorded" in
+        *[!0-9a-f]* | '') return 1 ;;
+    esac
+    test "${#pair_recorded}" -eq 64 && test "$pair_hash" = "$pair_recorded"
+}
+
+remove_path() {
+    if test -L "$1" || test ! -d "$1"; then
+        /usr/bin/rm -f -- "$1"
+    else
+        /usr/bin/rm -rf -- "$1"
+    fi
+}
+
+restore_previous() {
+    exit_code=$?
+    trap - EXIT HUP INT TERM
+    if test -n "$stage" && { test -e "$stage" || test -L "$stage"; }; then
+        remove_path "$stage" || exit_code=1
+    fi
+    if valid_pair "$previous" && ! valid_pair "$destination"; then
+        if test -e "$destination" || test -L "$destination"; then
+            remove_path "$destination" || exit_code=1
+        fi
+        if test ! -e "$destination" && test ! -L "$destination"; then
+            /usr/bin/mv -- "$previous" "$destination" || exit_code=1
+        fi
+    fi
+    exit "$exit_code"
+}
+trap restore_previous EXIT
+trap 'exit 1' HUP INT TERM
+
+if test -e "$previous" || test -L "$previous"; then
+    if ! valid_pair "$previous"; then
+        printf '%s\n' 'error: interrupted WIT backup is unsafe or incomplete' >&2
+        exit 1
+    fi
+    if valid_pair "$destination"; then
+        /usr/bin/rm -rf -- "$previous"
+    else
+        if test -e "$destination" || test -L "$destination"; then
+            remove_path "$destination"
+        fi
+        /usr/bin/mv -- "$previous" "$destination"
+    fi
+fi
+
+if { test -e "$destination" || test -L "$destination"; } && ! valid_pair "$destination"; then
+    printf '%s\n' 'error: existing WIT output is unsafe, incomplete, or drifted' >&2
+    exit 1
+fi
+
 source_wit="$worktree/crates/overcrow-extension-api/wit/widget-v1.wit"
 source_spec="$worktree/docs/superpowers/specs/2026-08-25-widget-marketplace-design.md"
 for source_file in "$source_wit" "$source_spec"; do
@@ -37,36 +120,16 @@ for source_file in "$source_wit" "$source_spec"; do
     fi
 done
 
-script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
-repo_root=$(dirname -- "$script_dir")
-destination="$repo_root/wit"
-stage="$repo_root/.wit-sync.$$"
-previous="$repo_root/.wit-previous.$$"
-
-cleanup() {
-    /usr/bin/rm -rf -- "$stage" "$previous"
+stage=$(/usr/bin/mktemp -d "$repo_root/.wit-sync.XXXXXXXXXX") || {
+    printf '%s\n' 'error: could not create exclusive WIT staging directory' >&2
+    exit 1
 }
-trap cleanup EXIT HUP INT TERM
-
-if test -e "$destination"; then
-    if test ! -d "$destination" || test -L "$destination" \
-            || test ! -f "$destination/widget-v1.wit" \
-            || test -L "$destination/widget-v1.wit" \
-            || test ! -f "$destination/widget-v1.sha256" \
-            || test -L "$destination/widget-v1.sha256"; then
-        printf '%s\n' 'error: existing WIT output is unsafe or incomplete' >&2
-        exit 1
-    fi
-    current_hash=$(/usr/bin/sha256sum "$destination/widget-v1.wit")
-    current_hash=${current_hash%% *}
-    recorded_hash=$(/usr/bin/cat "$destination/widget-v1.sha256")
-    if test "$current_hash" != "$recorded_hash"; then
-        printf '%s\n' 'error: existing WIT output and checksum have drifted' >&2
-        exit 1
-    fi
+canonical_stage=$(/usr/bin/readlink -f -- "$stage") || exit 1
+if test "$canonical_stage" != "$stage" || test ! -d "$stage" || test -L "$stage"; then
+    printf '%s\n' 'error: WIT staging directory is unsafe' >&2
+    exit 1
 fi
-
-/usr/bin/install -d -m 0755 "$stage"
+/usr/bin/chmod 0700 "$stage"
 /usr/bin/install -m 0644 "$source_wit" "$stage/widget-v1.wit"
 source_hash=$(/usr/bin/sha256sum "$stage/widget-v1.wit")
 source_hash=${source_hash%% *}
@@ -85,12 +148,13 @@ printf '%s\n' "$source_hash" >"$stage/widget-v1.sha256"
 if test -e "$destination"; then
     /usr/bin/mv -- "$destination" "$previous"
 fi
-if ! /usr/bin/mv -- "$stage" "$destination"; then
-    if test -e "$previous"; then
-        /usr/bin/mv -- "$previous" "$destination"
-    fi
-    printf '%s\n' 'error: failed to publish synchronized WIT' >&2
+/usr/bin/mv -- "$stage" "$destination"
+stage=''
+valid_pair "$destination" || {
+    printf '%s\n' 'error: synchronized WIT failed post-publication validation' >&2
     exit 1
+}
+if test -e "$previous"; then
+    /usr/bin/rm -rf -- "$previous"
 fi
-/usr/bin/rm -rf -- "$previous"
 printf '%s\n' "$source_hash"

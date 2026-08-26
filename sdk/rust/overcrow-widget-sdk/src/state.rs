@@ -7,6 +7,29 @@ const MAX_LOCALE_BYTES: usize = 5;
 const MAX_LOCALIZED_STRINGS: usize = 32;
 const MAX_SETTINGS_BYTES: usize = 64 * 1024;
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum RequestKind {
+    Http,
+    Storage,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct OutputState {
+    pub(crate) last_request_id: Option<u32>,
+    pub(crate) outstanding: BTreeMap<u32, RequestKind>,
+    pub(crate) published_revisions: BTreeMap<String, u64>,
+}
+
+impl OutputState {
+    fn complete(&mut self, request_id: u32, kind: RequestKind) -> Result<(), GuestError> {
+        if request_id == 0 || self.outstanding.get(&request_id) != Some(&kind) {
+            return Err(GuestError::InvalidInput);
+        }
+        self.outstanding.remove(&request_id);
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Locale(String);
 
@@ -84,6 +107,7 @@ pub struct WidgetContext {
     granted_capabilities: GrantedCapabilities,
     settings: Vec<u8>,
     session_data: Option<SessionData>,
+    output_state: OutputState,
 }
 
 impl WidgetContext {
@@ -103,6 +127,10 @@ impl WidgetContext {
         self.session_data.as_ref()
     }
 
+    pub(crate) fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+
     pub(crate) fn from_init(input: InitInput) -> Result<Self, GuestError> {
         if input.settings.len() > MAX_SETTINGS_BYTES {
             return Err(GuestError::InvalidInput);
@@ -112,11 +140,19 @@ impl WidgetContext {
             granted_capabilities: input.granted_capabilities,
             settings: input.settings,
             session_data: input.session_data,
+            output_state: OutputState::default(),
         })
     }
 
     pub(crate) fn apply_event(&mut self, event: &HostEvent) -> Result<(), GuestError> {
         match event {
+            HostEvent::HttpResult((request_id, _, _, _)) => {
+                self.output_state.complete(*request_id, RequestKind::Http)?;
+            }
+            HostEvent::StorageResult((request_id, _)) => {
+                self.output_state
+                    .complete(*request_id, RequestKind::Storage)?;
+            }
             HostEvent::LocaleChanged(locale) => {
                 self.locale =
                     Locale::parse(locale.clone()).map_err(|_| GuestError::InvalidInput)?;
@@ -131,20 +167,5 @@ impl WidgetContext {
             _ => {}
         }
         Ok(())
-    }
-
-    pub(crate) fn for_testing(locale: Locale) -> Self {
-        Self {
-            locale,
-            granted_capabilities: GrantedCapabilities {
-                http_hosts: Vec::new(),
-                game_data: Vec::new(),
-                storage: false,
-                clipboard_write: false,
-                provider: false,
-            },
-            settings: Vec::new(),
-            session_data: None,
-        }
     }
 }

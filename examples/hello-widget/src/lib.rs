@@ -17,7 +17,7 @@ struct HelloWidget {
 }
 
 impl HelloWidget {
-    fn render(&mut self, context: &WidgetContext) -> Result<GuestOutput, GuestError> {
+    fn render(&mut self, context: &mut WidgetContext) -> Result<GuestOutput, GuestError> {
         self.revision += 1;
         let greeting = if self.greeted && !self.name.is_empty() {
             LocalizedText::new(format!("Hello {}!", self.name))
@@ -40,19 +40,19 @@ impl HelloWidget {
         )?;
         let root = view.container(&[greeting, button, input])?;
         let view = view.finish(root, self.revision)?;
-        Ok(OutputBuilder::new().view(view)?.finish())
+        Ok(OutputBuilder::new(context).view(view)?.finish())
     }
 }
 
 impl Widget for HelloWidget {
-    fn init(&mut self, context: &WidgetContext) -> Result<GuestOutput, GuestError> {
+    fn init(&mut self, context: &mut WidgetContext) -> Result<GuestOutput, GuestError> {
         self.render(context)
     }
 
     fn handle(
         &mut self,
         event: HostEvent,
-        context: &WidgetContext,
+        context: &mut WidgetContext,
     ) -> Result<GuestOutput, GuestError> {
         if let HostEvent::Interaction(interaction) = event {
             match (interaction.element_id.as_str(), interaction.kind) {
@@ -74,7 +74,7 @@ overcrow_widget_sdk::export_widget!(crate::HelloWidget);
 mod tests {
     use std::{env, fs};
 
-    use overcrow_widget_sdk::{Locale, WidgetHarness};
+    use overcrow_widget_sdk::{HostEvent, Interaction, InteractionKind, Locale, WidgetHarness};
     use wasmparser::{ComponentExternalKind, ComponentTypeRef, Encoding, Parser, Payload};
 
     use super::HelloWidget;
@@ -84,18 +84,39 @@ mod tests {
         let mut widget = HelloWidget::default();
         let locale = Locale::parse("en").expect("valid locale");
         let mut harness = WidgetHarness::new(&mut widget, locale).expect("widget init");
+        let interaction = |element_id: &str, kind| {
+            HostEvent::Interaction(Interaction {
+                element_id: element_id.to_owned(),
+                kind,
+            })
+        };
 
         assert_eq!(harness.button_label("greet"), Some("Greet"));
-        harness.locale_changed("fr").expect("French locale");
+        harness
+            .send(HostEvent::LocaleChanged("fr".to_owned()))
+            .expect("French locale");
         assert_eq!(harness.button_label("greet"), Some("Saluer"));
         harness
-            .value_changed("name", "Ada")
+            .send(interaction(
+                "name",
+                InteractionKind::ValueChanged("Ada".to_owned()),
+            ))
             .expect("host-owned text value");
         assert_eq!(harness.text_input_value("name"), Some("Ada"));
-        harness.click("greet").expect("scoped click");
+        harness
+            .send(interaction("greet", InteractionKind::Clicked))
+            .expect("scoped click");
         assert_eq!(harness.text_at(0), Some("Bonjour Ada !"));
-        assert!(harness.click("name").is_err());
-        assert!(harness.click("unknown").is_err());
+        assert!(
+            harness
+                .send(interaction("name", InteractionKind::Clicked))
+                .is_err()
+        );
+        assert!(
+            harness
+                .send(interaction("unknown", InteractionKind::Clicked))
+                .is_err()
+        );
     }
 
     #[test]
