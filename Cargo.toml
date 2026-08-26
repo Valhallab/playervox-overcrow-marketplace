@@ -1,8 +1,17 @@
 [workspace]
-members = []
+members = [
+    "examples/hello-widget",
+    "sdk/rust/overcrow-widget-sdk",
+]
 resolver = "3"
 
 [workspace.package]
 edition = "2024"
 license = "AGPL-3.0-only"
 rust-version = "1.98"
+
+[workspace.dependencies]
+dlmalloc = { version = "=0.2.14", default-features = false, features = ["global"] }
+rlibc = "=1.0.0"
+spin = { version = "=0.12.3", default-features = false, features = ["mutex", "spin_mutex"] }
+wit-bindgen = { version = "=0.53.1", default-features = false, features = ["macros", "realloc"] }

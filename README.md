@@ -6,10 +6,11 @@ OverCrow. Application and overlay code remain in the OverCrow repository.
 
 ## Current status
 
-This repository currently defines contributor and review policy only. It does
-not publish a catalog, accept arbitrary public submissions, provide production
-signing material, or make any security certification. Those steps remain gated
-on a separate sandbox security audit and explicit maintainer authorization.
+This repository currently provides the local Rust SDK and a hello proof of
+concept alongside contributor and review policy. It does not publish a catalog,
+accept arbitrary public submissions, provide production signing material, or
+make any security certification. Those steps remain gated on a separate
+sandbox security audit and explicit maintainer authorization.
 
 Future local development catalogs will be signed only with a clearly labelled
 development fixture key and accepted only by debug OverCrow builds. Production

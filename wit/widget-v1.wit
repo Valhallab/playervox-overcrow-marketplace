@@ -1,0 +1,106 @@
+package overcrow:extension@1.0.0;
+
+world widget-v1 {
+enum overlay-mode-code { passive, interactive }
+enum drag-phase { started, moved, ended }
+
+record interaction {
+  element-id: string,
+  kind: interaction-kind,
+}
+
+variant interaction-kind {
+  clicked,
+  value-changed(string),
+  submitted(string),
+  selection-changed(u32),
+  toggled(bool),
+  focused(bool),
+  hovered(bool),
+  scrolled(s32),
+  dragged(tuple<u16, u16, drag-phase>),
+}
+
+record session-data {
+  selected-active: bool,
+  steam-app-id: option<u32>,
+  session-elapsed-ms: option<u64>,
+  overlay-mode: overlay-mode-code,
+  cpu-percent-hundredths: option<u32>,
+  resident-bytes: option<u64>,
+  cpu-temperature-millicelsius: option<s64>,
+  gpu-temperature-millicelsius: option<s64>,
+}
+
+record canvas-line { start-x-milli: u16, start-y-milli: u16, end-x-milli: u16, end-y-milli: u16 }
+record canvas-rect { x-milli: u16, y-milli: u16, width-milli: u16, height-milli: u16 }
+record canvas-text { x-milli: u16, y-milli: u16, text: string }
+variant canvas-primitive { line(canvas-line), rect(canvas-rect), text(canvas-text) }
+
+variant view-node {
+  container(list<u32>),
+  text(string),
+  image(string),
+  button(tuple<string, string>),
+  toggle(tuple<string, string, bool>),
+  text-input(tuple<string, string, string>),
+  selection(tuple<string, list<string>, u32>),
+  progress(tuple<string, u16>),
+  canvas(tuple<string, list<canvas-primitive>>),
+}
+
+record view { revision: u64, root: u32, nodes: list<view-node> }
+
+record http-header { name: string, value: string }
+record http-response-metadata {
+  content-type: option<string>,
+  headers: list<http-header>,
+}
+
+variant host-event {
+  tick(u64),
+  interaction(interaction),
+  http-result(tuple<u32, option<u16>, list<u8>, http-response-metadata>),
+  storage-result(tuple<u32, option<list<u8>>>),
+  provider-data(tuple<string, string, u64, list<u8>>),
+  session-data(session-data),
+  locale-changed(string),
+  settings-changed(tuple<u64, list<u8>>),
+}
+
+variant host-command {
+  http-get(tuple<u32, string, string>),
+  storage-get(tuple<u32, string>),
+  storage-set(tuple<u32, string, list<u8>>),
+  storage-delete(tuple<u32, string>),
+  clipboard-write(string),
+  provider-publish(tuple<string, u64, list<u8>>),
+}
+
+record guest-output {
+  view: option<view>,
+  commands: list<host-command>,
+  next-wake-ms: option<u32>,
+}
+
+record granted-capabilities {
+  http-hosts: list<string>,
+  game-data: list<string>,
+  storage: bool,
+  clipboard-write: bool,
+  provider: bool,
+}
+
+record init-input {
+  locale: string,
+  granted-capabilities: granted-capabilities,
+  settings: list<u8>,
+  session-data: option<session-data>,
+}
+
+enum guest-error { invalid-input, invalid-state, unavailable }
+
+  export init: func(input: init-input) -> result<guest-output, guest-error>;
+  export handle: func(event: host-event) -> result<guest-output, guest-error>;
+  export stop: func();
+}
