@@ -1,0 +1,8 @@
+{
+  "data": [
+    {"slug": "arcane_energize", "i18n": {"en": {"name": "Arcane Energize"}}},
+    {"slug": "arcane_grace", "i18n": {"en": {"name": "Arcane Grace"}}},
+    {"slug": "forma_blueprint", "i18n": {"en": {"name": "Forma Blueprint"}}},
+    {"slug": "primed_flow", "i18n": {"en": {"name": "Primed Flow"}}}
+  ]
+}

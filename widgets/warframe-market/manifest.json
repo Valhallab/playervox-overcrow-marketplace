@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "id": "com.playervox.overcrow.warframe.market",
+  "version": "1.0.0",
+  "kind": "bundle",
+  "apiVersion": "1",
+  "defaultLocale": "en",
+  "availableLocales": ["en", "fr"],
+  "games": [{"platform": "steam", "id": "230410"}],
+  "dependencies": [],
+  "capabilities": {
+    "http": ["api.warframe.market"],
+    "gameData": ["overcrow.session.v1"],
+    "storage": true,
+    "clipboardWrite": true,
+    "provider": false
+  },
+  "display": {
+    "showInPassive": true,
+    "xMilli": 500,
+    "yMilli": 100,
+    "width": 500,
+    "height": 650,
+    "scaleMilli": 1000,
+    "transparent": true
+  },
+  "files": {
+    "component": {
+      "path": "component.wasm",
+      "sha256": "65ce1660aa53e7f849d6409e857cc0a339939b7ceb332b642515ed010ee61e23"
+    },
+    "locales": {
+      "en": {
+        "path": "locales/en.json",
+        "sha256": "f333c5451ea17e99f76d61000536734d398f13b736180c5ccc7e66ced8f1f1f8"
+      },
+      "fr": {
+        "path": "locales/fr.json",
+        "sha256": "9e1385a595aff108cb9254fd0a005c87408f6cb2059fd5053703e48c0aac8873"
+      }
+    },
+    "assets": {}
+  }
+}
