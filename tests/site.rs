@@ -25,7 +25,7 @@ fn marketplace_site_is_localized_dom_safe_and_hides_providers() {
     assert!(!styles.is_empty());
 
     let status = Command::new("node")
-        .args(["--test", "tests/site-runtime.test.js"])
+        .arg("tests/site-runtime.test.js")
         .current_dir(repository_root())
         .status()
         .expect("start site runtime tests");

@@ -75,9 +75,7 @@ fn generated_catalog_has_five_visible_packages_and_one_hidden_provider() {
 #[test]
 fn generated_catalog_binds_only_the_four_worldstate_consumers() {
     let catalog = payload(generated_catalog_fixture());
-    let targets = catalog["targets"]
-        .as_array()
-        .expect("catalog targets");
+    let targets = catalog["targets"].as_array().expect("catalog targets");
     let provider = targets
         .iter()
         .find(|target| target["manifest"]["id"] == "com.playervox.overcrow.warframe.worldstate")
@@ -88,11 +86,20 @@ fn generated_catalog_binds_only_the_four_worldstate_consumers() {
         "com.playervox.overcrow.warframe.sortie-archon",
         "com.playervox.overcrow.warframe.invasions",
     ] {
-        let target = targets.iter().find(|target| target["manifest"]["id"] == id).expect("consumer");
-        assert_eq!(target["manifest"]["dependencies"], serde_json::json!([{
-            "id": provider["manifest"]["id"], "version": provider["manifest"]["version"], "sha256": provider["packageSha256"],
-        }]));
+        let target = targets
+            .iter()
+            .find(|target| target["manifest"]["id"] == id)
+            .expect("consumer");
+        assert_eq!(
+            target["manifest"]["dependencies"],
+            serde_json::json!([{
+                "id": provider["manifest"]["id"], "version": provider["manifest"]["version"], "sha256": provider["packageSha256"],
+            }])
+        );
     }
-    let market = targets.iter().find(|target| target["manifest"]["id"] == "com.playervox.overcrow.warframe.market").expect("market");
+    let market = targets
+        .iter()
+        .find(|target| target["manifest"]["id"] == "com.playervox.overcrow.warframe.market")
+        .expect("market");
     assert_eq!(market["manifest"]["dependencies"], serde_json::json!([]));
 }

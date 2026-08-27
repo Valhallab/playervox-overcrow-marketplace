@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
     fs::File,
     io::{Read as _, Write as _},
@@ -496,13 +496,6 @@ pub(crate) fn build_catalog(
         let right = right.package.metadata().manifest();
         (left.id(), left.version()).cmp(&(right.id(), right.version()))
     });
-    if inputs.windows(2).any(|pair| {
-        let left = pair[0].package.metadata().manifest();
-        let right = pair[1].package.metadata().manifest();
-        left.id() == right.id() && left.version() == right.version()
-    }) {
-        return Err(CatalogCode::Target);
-    }
     validate_dependencies(&inputs)?;
     let mut targets = Vec::with_capacity(inputs.len());
     for input in inputs {
@@ -561,16 +554,13 @@ pub(crate) fn build_catalog(
 
 fn validate_dependencies(inputs: &[&PreparedTarget<'_>]) -> Result<(), CatalogCode> {
     let mut targets = BTreeMap::new();
-    let mut identifiers = BTreeMap::new();
+    let mut identifiers = BTreeSet::new();
     for (index, input) in inputs.iter().enumerate() {
         let manifest = input.package.metadata().manifest();
-        if targets
-            .insert((manifest.id(), manifest.version()), index)
-            .is_some()
-            || identifiers.insert(manifest.id(), index).is_some()
-        {
+        if !identifiers.insert(manifest.id()) {
             return Err(CatalogCode::Target);
         }
+        targets.insert((manifest.id(), manifest.version()), index);
     }
     let mut edges = vec![Vec::new(); inputs.len()];
     for (index, input) in inputs.iter().enumerate() {
@@ -579,9 +569,6 @@ fn validate_dependencies(inputs: &[&PreparedTarget<'_>]) -> Result<(), CatalogCo
             let dependency_index = *targets
                 .get(&(dependency.id(), dependency.version()))
                 .ok_or(CatalogCode::Target)?;
-            if dependency_index == index {
-                return Err(CatalogCode::Target);
-            }
             let target = inputs[dependency_index];
             let dependency_manifest = target.package.metadata().manifest();
             if dependency_manifest.kind() != PackageKind::Provider
@@ -595,15 +582,25 @@ fn validate_dependencies(inputs: &[&PreparedTarget<'_>]) -> Result<(), CatalogCo
     }
     let mut color = vec![0u8; inputs.len()];
     for start in 0..inputs.len() {
-        if color[start] != 0 { continue; }
+        if color[start] != 0 {
+            continue;
+        }
         let mut stack = vec![(start, 0usize)];
         color[start] = 1;
         while let Some((node, edge)) = stack.pop() {
-            if edge == edges[node].len() { color[node] = 2; continue; }
+            if edge == edges[node].len() {
+                color[node] = 2;
+                continue;
+            }
             stack.push((node, edge + 1));
             let next = edges[node][edge];
-            if color[next] == 1 { return Err(CatalogCode::Target); }
-            if color[next] == 0 { color[next] = 1; stack.push((next, 0)); }
+            if color[next] == 1 {
+                return Err(CatalogCode::Target);
+            }
+            if color[next] == 0 {
+                color[next] = 1;
+                stack.push((next, 0));
+            }
         }
     }
     Ok(())
@@ -798,8 +795,7 @@ mod tests {
     use super::{
         CatalogCode, CatalogOrigin, DEV_SEED, DEVELOPMENT_KEY_ID, PreparedTarget, PublisherState,
         SequenceState, build_catalog, parse_counter, read_private_input, sign_payload,
-        validate_dependencies,
-        verify_catalog, verify_envelope,
+        validate_dependencies, verify_catalog, verify_envelope,
     };
     use crate::{
         metadata::{CatalogStatus, validate_metadata},
@@ -1087,108 +1083,332 @@ mod tests {
         }
     }
 
-    #[test]
-    fn catalog_rejects_dependencies_that_do_not_bind_a_verified_provider_archive() {
-        let provider = validate_metadata(
-            include_bytes!("../../../providers/warframe-worldstate/manifest.json"),
-            include_bytes!("../../../providers/warframe-worldstate/listing.json"),
+    fn artifact(manifest: Value, listing: &[u8], archive: &[u8]) -> PackageArtifact {
+        PackageArtifact::fixture(
+            validate_metadata(
+                &serde_json::to_vec(&manifest).expect("manifest JSON"),
+                listing,
+            )
+            .expect("valid fixture metadata"),
+            archive.to_vec(),
+            None,
         )
-        .expect("provider metadata");
-        let provider = PackageArtifact::fixture(provider, b"provider archive".to_vec(), None);
+    }
+
+    fn provider() -> PackageArtifact {
+        artifact(
+            serde_json::from_slice(include_bytes!(
+                "../../../providers/warframe-worldstate/manifest.json"
+            ))
+            .expect("provider manifest"),
+            include_bytes!("../../../providers/warframe-worldstate/listing.json"),
+            b"provider archive",
+        )
+    }
+
+    fn dependency(id: &str, version: &str, sha256: &str) -> Value {
+        json!({"id": id, "version": version, "sha256": sha256})
+    }
+
+    fn status_widget(dependencies: Value) -> PackageArtifact {
         let mut manifest: Value = serde_json::from_slice(include_bytes!(
             "../../../widgets/warframe-status/manifest.json"
         ))
         .expect("status manifest");
-        manifest["dependencies"][0]["sha256"] = json!(provider.archive_sha256());
-        let manifest = serde_json::to_vec(&manifest).expect("status manifest JSON");
-        let widget = validate_metadata(
-            &manifest,
+        manifest["dependencies"] = dependencies;
+        artifact(
+            manifest,
             include_bytes!("../../../widgets/warframe-status/listing.json"),
+            b"widget archive",
         )
-        .expect("widget metadata");
-        let widget = PackageArtifact::fixture(widget, b"widget archive".to_vec(), None);
-        let inputs = [
-            PreparedTarget {
-                package: &provider,
-                status: CatalogStatus::Verified,
+    }
+
+    fn validate_widget_dependency(
+        target: &PackageArtifact,
+        status: CatalogStatus,
+        dependency: Value,
+    ) -> Result<(), CatalogCode> {
+        let widget = status_widget(json!([dependency]));
+        validate_dependencies(&[
+            &PreparedTarget {
+                package: target,
+                status,
             },
-            PreparedTarget {
+            &PreparedTarget {
                 package: &widget,
                 status: CatalogStatus::Verified,
             },
-        ];
-        assert!(
-            build_catalog(
-                &inputs,
-                2,
-                NOW,
-                "2036-08-26T00:00:00Z",
-                CatalogOrigin::Development,
-                DEVELOPMENT_KEY_ID,
-                &DEV_SEED
-            )
-            .is_ok()
-        );
+        ])
+    }
 
-        let mut wrong_manifest: Value = serde_json::from_slice(&manifest).expect("status manifest");
-        wrong_manifest["dependencies"][0]["sha256"] = json!("0".repeat(64));
-        let wrong_manifest = serde_json::to_vec(&wrong_manifest).expect("wrong manifest JSON");
-        let wrong = validate_metadata(
-            &wrong_manifest,
-            include_bytes!("../../../widgets/warframe-status/listing.json"),
-        )
-        .expect("wrong metadata remains structurally valid");
-        let wrong = PackageArtifact::fixture(wrong, b"widget archive".to_vec(), None);
-        let inputs = [
-            PreparedTarget {
-                package: &provider,
-                status: CatalogStatus::Verified,
-            },
-            PreparedTarget {
-                package: &wrong,
-                status: CatalogStatus::Verified,
-            },
-        ];
-        assert!(
-            build_catalog(
-                &inputs,
-                2,
-                NOW,
-                "2036-08-26T00:00:00Z",
-                CatalogOrigin::Development,
-                DEVELOPMENT_KEY_ID,
-                &DEV_SEED
-            )
-            .is_err()
+    #[test]
+    fn dependency_graph_accepts_a_verified_provider_archive_binding() {
+        let provider = provider();
+        assert_eq!(
+            validate_widget_dependency(
+                &provider,
+                CatalogStatus::Verified,
+                dependency(
+                    provider.metadata().manifest().id(),
+                    provider.metadata().manifest().version(),
+                    provider.archive_sha256(),
+                ),
+            ),
+            Ok(())
         );
     }
 
     #[test]
-    fn dependency_graph_rejects_each_invalid_edge_class() {
-        fn artifact(manifest: Value, listing: &[u8], archive: &[u8]) -> PackageArtifact {
-            PackageArtifact::fixture(
-                validate_metadata(&serde_json::to_vec(&manifest).expect("JSON"), listing)
-                    .expect("metadata"),
-                archive.to_vec(),
-                None,
+    fn dependency_graph_rejects_a_dangling_provider_id() {
+        let provider = provider();
+        assert_eq!(
+            validate_widget_dependency(
+                &provider,
+                CatalogStatus::Verified,
+                dependency(
+                    "com.playervox.overcrow.missing",
+                    provider.metadata().manifest().version(),
+                    provider.archive_sha256(),
+                ),
+            ),
+            Err(CatalogCode::Target)
+        );
+    }
+
+    #[test]
+    fn dependency_graph_rejects_a_wrong_provider_version() {
+        let provider = provider();
+        assert_eq!(
+            validate_widget_dependency(
+                &provider,
+                CatalogStatus::Verified,
+                dependency(
+                    provider.metadata().manifest().id(),
+                    "9.9.9",
+                    provider.archive_sha256(),
+                ),
+            ),
+            Err(CatalogCode::Target)
+        );
+    }
+
+    #[test]
+    fn dependency_graph_rejects_a_wrong_provider_archive_hash() {
+        let provider = provider();
+        assert_eq!(
+            validate_widget_dependency(
+                &provider,
+                CatalogStatus::Verified,
+                dependency(
+                    provider.metadata().manifest().id(),
+                    provider.metadata().manifest().version(),
+                    &"0".repeat(64),
+                ),
+            ),
+            Err(CatalogCode::Target)
+        );
+    }
+
+    #[test]
+    fn dependency_graph_rejects_a_revoked_provider() {
+        let provider = provider();
+        assert_eq!(
+            validate_widget_dependency(
+                &provider,
+                CatalogStatus::Revoked,
+                dependency(
+                    provider.metadata().manifest().id(),
+                    provider.metadata().manifest().version(),
+                    provider.archive_sha256(),
+                ),
+            ),
+            Err(CatalogCode::Target)
+        );
+    }
+
+    #[test]
+    fn dependency_graph_rejects_a_security_suspended_provider() {
+        let provider = provider();
+        assert_eq!(
+            validate_widget_dependency(
+                &provider,
+                CatalogStatus::SecuritySuspended,
+                dependency(
+                    provider.metadata().manifest().id(),
+                    provider.metadata().manifest().version(),
+                    provider.archive_sha256(),
+                ),
+            ),
+            Err(CatalogCode::Target)
+        );
+    }
+
+    #[test]
+    fn dependency_graph_rejects_a_visible_non_provider_target() {
+        let target = artifact(
+            serde_json::from_slice(include_bytes!(
+                "../../../widgets/warframe-market/manifest.json"
+            ))
+            .expect("market manifest"),
+            include_bytes!("../../../widgets/warframe-market/listing.json"),
+            b"market archive",
+        );
+        assert_eq!(
+            validate_widget_dependency(
+                &target,
+                CatalogStatus::Verified,
+                dependency(
+                    target.metadata().manifest().id(),
+                    target.metadata().manifest().version(),
+                    target.archive_sha256(),
+                ),
+            ),
+            Err(CatalogCode::Target)
+        );
+    }
+
+    #[test]
+    fn dependency_graph_rejects_a_self_dependency() {
+        let original = provider();
+        let mut manifest: Value = serde_json::from_slice(include_bytes!(
+            "../../../providers/warframe-worldstate/manifest.json"
+        ))
+        .expect("provider manifest");
+        manifest["dependencies"] = json!([dependency(
+            original.metadata().manifest().id(),
+            original.metadata().manifest().version(),
+            original.archive_sha256(),
+        )]);
+        let provider = artifact(
+            manifest,
+            include_bytes!("../../../providers/warframe-worldstate/listing.json"),
+            b"provider archive",
+        );
+        assert_eq!(
+            validate_dependencies(&[&PreparedTarget {
+                package: &provider,
+                status: CatalogStatus::Verified,
+            }]),
+            Err(CatalogCode::Target)
+        );
+    }
+
+    #[test]
+    fn dependency_graph_rejects_a_two_provider_cycle() {
+        let provider_a = provider();
+        let mut provider_b_manifest: Value = serde_json::from_slice(include_bytes!(
+            "../../../providers/warframe-worldstate/manifest.json"
+        ))
+        .expect("provider manifest");
+        provider_b_manifest["id"] = json!("com.playervox.overcrow.warframe.worldstate.backup");
+        let provider_b = artifact(
+            provider_b_manifest.clone(),
+            include_bytes!("../../../providers/warframe-worldstate/listing.json"),
+            b"backup provider archive",
+        );
+
+        let mut provider_a_manifest: Value = serde_json::from_slice(include_bytes!(
+            "../../../providers/warframe-worldstate/manifest.json"
+        ))
+        .expect("provider manifest");
+        provider_a_manifest["dependencies"] = json!([dependency(
+            provider_b.metadata().manifest().id(),
+            provider_b.metadata().manifest().version(),
+            provider_b.archive_sha256(),
+        )]);
+        provider_b_manifest["dependencies"] = json!([dependency(
+            provider_a.metadata().manifest().id(),
+            provider_a.metadata().manifest().version(),
+            provider_a.archive_sha256(),
+        )]);
+        let provider_a = artifact(
+            provider_a_manifest,
+            include_bytes!("../../../providers/warframe-worldstate/listing.json"),
+            b"provider archive",
+        );
+        let provider_b = artifact(
+            provider_b_manifest,
+            include_bytes!("../../../providers/warframe-worldstate/listing.json"),
+            b"backup provider archive",
+        );
+        assert_eq!(
+            validate_dependencies(&[
+                &PreparedTarget {
+                    package: &provider_a,
+                    status: CatalogStatus::Verified,
+                },
+                &PreparedTarget {
+                    package: &provider_b,
+                    status: CatalogStatus::Verified,
+                },
+            ]),
+            Err(CatalogCode::Target)
+        );
+    }
+
+    #[test]
+    fn dependency_graph_rejects_an_exact_duplicate_identity() {
+        let provider = provider();
+        let inputs = [
+            PreparedTarget {
+                package: &provider,
+                status: CatalogStatus::Verified,
+            },
+            PreparedTarget {
+                package: &provider,
+                status: CatalogStatus::Verified,
+            },
+        ];
+        assert_eq!(
+            build_catalog(
+                &inputs,
+                2,
+                NOW,
+                "2036-08-26T00:00:00Z",
+                CatalogOrigin::Development,
+                DEVELOPMENT_KEY_ID,
+                &DEV_SEED,
             )
-        }
-        let provider_manifest: Value = serde_json::from_slice(include_bytes!("../../../providers/warframe-worldstate/manifest.json")).expect("provider manifest");
-        let widget_manifest: Value = serde_json::from_slice(include_bytes!("../../../widgets/warframe-status/manifest.json")).expect("widget manifest");
-        let provider_listing = include_bytes!("../../../providers/warframe-worldstate/listing.json");
-        let widget_listing = include_bytes!("../../../widgets/warframe-status/listing.json");
-        let provider = artifact(provider_manifest.clone(), provider_listing, b"provider");
-        let dependency = |id: &str, version: &str, sha: &str| json!({"id": id, "version": version, "sha256": sha});
-        let invalid = |dependencies: Value, status: CatalogStatus| {
-            let mut manifest = widget_manifest.clone(); manifest["dependencies"] = dependencies;
-            let widget = artifact(manifest, widget_listing, b"widget");
-            validate_dependencies(&[&PreparedTarget { package: &provider, status }, &PreparedTarget { package: &widget, status: CatalogStatus::Verified }])
-        };
-        for dependencies in [
-            json!([dependency("com.playervox.overcrow.missing", "1.0.0", provider.archive_sha256())]),
-            json!([dependency(provider.metadata().manifest().id(), "9.9.9", provider.archive_sha256())]),
-            json!([dependency(provider.metadata().manifest().id(), "1.0.0", &"0".repeat(64))]),
-        ] { assert_eq!(invalid(dependencies, CatalogStatus::Verified), Err(CatalogCode::Target)); }
-        assert_eq!(invalid(json!([dependency(provider.metadata().manifest().id(), "1.0.0", provider.archive_sha256())]), CatalogStatus::Revoked), Err(CatalogCode::Target));
+            .map(|_| ()),
+            Err(CatalogCode::Target)
+        );
+    }
+
+    #[test]
+    fn dependency_graph_rejects_an_ambiguous_multi_version_identity() {
+        let provider_a = provider();
+        let mut manifest: Value = serde_json::from_slice(include_bytes!(
+            "../../../providers/warframe-worldstate/manifest.json"
+        ))
+        .expect("provider manifest");
+        manifest["version"] = json!("2.0.0");
+        let provider_b = artifact(
+            manifest,
+            include_bytes!("../../../providers/warframe-worldstate/listing.json"),
+            b"provider version two archive",
+        );
+        let inputs = [
+            PreparedTarget {
+                package: &provider_a,
+                status: CatalogStatus::Verified,
+            },
+            PreparedTarget {
+                package: &provider_b,
+                status: CatalogStatus::Verified,
+            },
+        ];
+        assert_eq!(
+            build_catalog(
+                &inputs,
+                2,
+                NOW,
+                "2036-08-26T00:00:00Z",
+                CatalogOrigin::Development,
+                DEVELOPMENT_KEY_ID,
+                &DEV_SEED,
+            )
+            .map(|_| ()),
+            Err(CatalogCode::Target)
+        );
     }
 }

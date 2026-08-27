@@ -22,20 +22,9 @@ fi
 stage=$(/usr/bin/mktemp -d "$repo_root/.build-local.XXXXXXXXXX") || exit 1
 source_root="$stage/repository"
 component_paths=''
-next_public=""
-previous_public=""
 cleanup() {
     status=$?
     trap - EXIT HUP INT TERM
-    if test -n "$previous_public" && test -d "$previous_public" && ! test -e "$repo_root/public"; then
-        /usr/bin/mv -- "$previous_public" "$repo_root/public" || status=1
-    fi
-    if test -n "$next_public" && { test -e "$next_public" || test -L "$next_public"; }; then
-        /usr/bin/rm -rf -- "$next_public"
-    fi
-    if test -n "$previous_public" && { test -e "$previous_public" || test -L "$previous_public"; }; then
-        /usr/bin/rm -rf -- "$previous_public"
-    fi
     # shellcheck disable=SC2086 # paths are created by stage_component and contain no whitespace
     for component_path in $component_paths; do
         /usr/bin/rm -f -- "$component_path"
@@ -208,16 +197,7 @@ if test -e "$repo_root/public" && { test ! -d "$repo_root/public" || test -L "$r
     exit 1
 fi
 /usr/bin/mv -- "$source_root/public" "$next_public"
-if test -e "$repo_root/public"; then
-    /usr/bin/mv -- "$repo_root/public" "$previous_public"
-fi
-if test "${MARKETPLACE_TEST_FAIL_AFTER_MOVE:-}" = 1; then
-    printf '%s\n' 'error: test publication fault' >&2
-    exit 1
-fi
-if ! /usr/bin/mv -- "$next_public" "$repo_root/public"; then
-    if test -e "$previous_public"; then /usr/bin/mv -- "$previous_public" "$repo_root/public"; fi
-    exit 1
-fi
-if test -e "$previous_public"; then /usr/bin/rm -rf -- "$previous_public"; fi
+sh "$script_dir/publish-directory.sh" \
+    "$next_public" "$repo_root/public" "$previous_public" \
+    /usr/bin/mv /usr/bin/mv /usr/bin/mv
 cd "$repo_root"

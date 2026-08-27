@@ -44,6 +44,8 @@ jobs:
       - name: Generate deterministic local catalog and site
         run: |
           scripts/build-local.sh
+          node tests/site-runtime.test.js public/marketplace/v1/catalog.json
+          cargo run -p marketplace-tool --locked -- verify public/marketplace/v1/catalog.json
           cp -a public "${RUNNER_TEMP}/public-first"
           scripts/build-local.sh
           diff --recursive --no-dereference "${RUNNER_TEMP}/public-first" public
@@ -54,10 +56,9 @@ jobs:
             packages::generated_packages_match_catalog_digests_and_keep_provider_hidden --locked -- --exact
           cargo test -p marketplace-tool --test marketplace \
             site::marketplace_site_is_localized_dom_safe_and_hides_providers --locked -- --exact
-          node --test tests/site-runtime.test.js
       - name: Policy and shell checks
         run: |
           scripts/check-policy.sh
           sh tests/check-policy-smoke.sh
-          shellcheck scripts/*.sh
-          sh -n scripts/*.sh
+          shellcheck scripts/*.sh tests/*.sh
+          sh -n scripts/*.sh tests/*.sh
