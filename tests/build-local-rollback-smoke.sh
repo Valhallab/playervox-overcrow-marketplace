@@ -97,18 +97,20 @@ printf '%s\n' \
     '/usr/bin/mv "$@"' >"$move_into_raced_destination"
 /usr/bin/chmod 0700 "$move_into_raced_destination"
 
-race_next_reservation="$scratch/race-next-reservation"
+# Mutation helper for the old ordering, where ownership was claimed before this
+# staged-move boundary without first reserving the wrapper.
+old_move_boundary_contender="$scratch/old-move-boundary-contender"
 # shellcheck disable=SC2016 # generated helper expands these variables when run
 printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
-    'if /usr/bin/mkdir -m 0700 -- "$RACED_NEXT_PUBLIC" 2>/dev/null; then' \
-    '    /usr/bin/mkdir -- "$RACED_NEXT_PUBLIC/foreign"' \
-    '    printf "%s\n" foreign-owned >"$RACED_NEXT_PUBLIC/foreign/owned.txt"' \
-    '    : >"$RACE_WON"' \
+    'if /usr/bin/mkdir -m 0700 -- "$NEXT_PUBLIC_AT_MOVE_BOUNDARY" 2>/dev/null; then' \
+    '    /usr/bin/mkdir -- "$NEXT_PUBLIC_AT_MOVE_BOUNDARY/foreign"' \
+    '    printf "%s\n" foreign-owned >"$NEXT_PUBLIC_AT_MOVE_BOUNDARY/foreign/owned.txt"' \
+    '    : >"$CONTENDER_CREATED_WRAPPER"' \
     'fi' \
-    '/usr/bin/false' >"$race_next_reservation"
-/usr/bin/chmod 0700 "$race_next_reservation"
+    '/usr/bin/false' >"$old_move_boundary_contender"
+/usr/bin/chmod 0700 "$old_move_boundary_contender"
 
 if should_run validation; then
     staged_public="$scratch/staged-validation/public"
@@ -166,17 +168,20 @@ if should_run race-next; then
     staged_public="$scratch/staged-race-next/public"
     next_public="$copy/.public-next.race"
     previous_public="$copy/.public-previous.race-next"
-    race_won="$scratch/race-next-won"
+    contender_created_wrapper="$scratch/old-move-boundary-contender-created-wrapper"
     make_staged_public "$staged_public"
-    if RACED_NEXT_PUBLIC="$next_public" RACE_WON="$race_won" \
+    # The fixed publisher has already reserved next_public at this injected move
+    # boundary. Reverting to the old ordering lets the contender create it.
+    if NEXT_PUBLIC_AT_MOVE_BOUNDARY="$next_public" \
+            CONTENDER_CREATED_WRAPPER="$contender_created_wrapper" \
             sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
-            "$race_next_reservation" /usr/bin/mv /usr/bin/mv /usr/bin/mv; then
-        printf '%s\n' 'error: raced next path unexpectedly accepted publication' >&2
+            "$old_move_boundary_contender" /usr/bin/mv /usr/bin/mv /usr/bin/mv; then
+        printf '%s\n' 'error: old move-boundary contender unexpectedly accepted publication' >&2
         exit 1
     fi
     test -f "$staged_public/next"
     foreign_marker="$next_public/foreign/owned.txt"
-    if test -f "$race_won"; then
+    if test -f "$contender_created_wrapper"; then
         test -f "$foreign_marker"
         test "$(/usr/bin/cat "$foreign_marker")" = foreign-owned
         /usr/bin/rm -rf -- "$next_public"
@@ -186,17 +191,22 @@ if should_run race-next; then
     assert_absent "$previous_public"
     assert_prior_public
 
+    # Deterministically present a foreign wrapper at the fixed mkdir reservation
+    # boundary and verify refusal leaves the entire wrapper unchanged.
     /usr/bin/mkdir -m 0700 -- "$next_public"
     /usr/bin/mkdir -- "$next_public/foreign"
     printf '%s\n' foreign-owned >"$foreign_marker"
+    preexisting_next="$scratch/preexisting-next"
+    /usr/bin/cp -a -- "$next_public" "$preexisting_next"
     if sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
             /usr/bin/mv /usr/bin/mv /usr/bin/mv /usr/bin/mv; then
-        printf '%s\n' 'error: foreign next path unexpectedly accepted publication' >&2
+        printf '%s\n' 'error: pre-existing next wrapper unexpectedly accepted publication' >&2
         exit 1
     fi
     test -f "$staged_public/next"
     test -f "$foreign_marker"
     test "$(/usr/bin/cat "$foreign_marker")" = foreign-owned
+    /usr/bin/diff --recursive --no-dereference "$preexisting_next" "$next_public"
     assert_absent "$previous_public"
     assert_prior_public
     /usr/bin/rm -rf -- "$next_public"
