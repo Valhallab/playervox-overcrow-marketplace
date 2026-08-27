@@ -153,18 +153,17 @@ cargo run --manifest-path "$repo_root/tools/marketplace-tool/Cargo.toml" --locke
     --development-key
  cargo run --manifest-path "$repo_root/tools/marketplace-tool/Cargo.toml" --locked -- verify public/marketplace/v1/catalog.json
 
-publish_file() {
+require_identical_source() {
     relative=$1
     source="$source_root/$relative"
     destination="$repo_root/$relative"
     if test ! -f "$source" || test -L "$source" || test ! -f "$destination" || test -L "$destination"; then
-        printf '%s\n' "error: unsafe generated source path: $relative" >&2
+        printf '%s\n' "error: unsafe tracked source path: $relative" >&2
         exit 1
     fi
     if ! /usr/bin/cmp -s -- "$source" "$destination"; then
-        temporary="$destination.publish.$$"
-        /usr/bin/install -m 0644 "$source" "$temporary"
-        /usr/bin/mv -f -- "$temporary" "$destination"
+        printf '%s\n' "error: generated tracked source differs: $relative" >&2
+        exit 1
     fi
 }
 for relative in marketplace/development-catalog-state.json \
@@ -172,13 +171,29 @@ for relative in marketplace/development-catalog-state.json \
         widgets/warframe-status/manifest.json widgets/warframe-fissures/manifest.json \
         widgets/warframe-sortie-archon/manifest.json widgets/warframe-invasions/manifest.json \
         widgets/warframe-market/manifest.json; do
-    publish_file "$relative"
+    require_identical_source "$relative"
+done
+
+for file in index.html app.js styles.css; do
+    /usr/bin/install -m 0644 "site/$file" "public/$file"
+    if test ! -f "public/$file" || test -L "public/$file"; then
+        printf '%s\n' "error: generated site file is unsafe: $file" >&2
+        exit 1
+    fi
 done
 
 next_public="$repo_root/.public-next.$$"
 previous_public="$repo_root/.public-previous.$$"
 if test -e "$next_public" || test -L "$next_public"; then
     printf '%s\n' 'error: publication staging path already exists' >&2
+    exit 1
+fi
+if test -e "$previous_public" || test -L "$previous_public"; then
+    printf '%s\n' 'error: previous publication path already exists' >&2
+    exit 1
+fi
+if test -e "$repo_root/public" && { test ! -d "$repo_root/public" || test -L "$repo_root/public"; }; then
+    printf '%s\n' 'error: existing public path is unsafe' >&2
     exit 1
 fi
 /usr/bin/mv -- "$source_root/public" "$next_public"

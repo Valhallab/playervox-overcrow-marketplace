@@ -8,3 +8,11 @@ printf '%s\\n' '-----BEGIN PRIVATE '"KEY-----" >"$fixture"
 if "$repo_root/scripts/check-policy.sh"; then exit 1; fi
 printf '%s\\n' 'g'"hp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN" >"$fixture"
 if "$repo_root/scripts/check-policy.sh"; then exit 1; fi
+for secret in \
+    'AGE-SECRET-'"KEY-1abcdefghijklmnopqrstuvwxyz" \
+    'sk'"-proj_abcdefghijklmnopqrstuvwxyz" \
+    'xox'"b-abcdefghijklmnopqrstuvwxyz" \
+    'AKIA'"ABCDEFGHIJKLMNOP"; do
+    printf '%s\\n' "$secret" >"$fixture"
+    if "$repo_root/scripts/check-policy.sh"; then exit 1; fi
+done

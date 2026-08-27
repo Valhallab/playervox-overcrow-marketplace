@@ -561,24 +561,49 @@ pub(crate) fn build_catalog(
 
 fn validate_dependencies(inputs: &[&PreparedTarget<'_>]) -> Result<(), CatalogCode> {
     let mut targets = BTreeMap::new();
-    for input in inputs {
+    let mut identifiers = BTreeMap::new();
+    for (index, input) in inputs.iter().enumerate() {
         let manifest = input.package.metadata().manifest();
-        targets.insert((manifest.id(), manifest.version()), *input);
+        if targets
+            .insert((manifest.id(), manifest.version()), index)
+            .is_some()
+            || identifiers.insert(manifest.id(), index).is_some()
+        {
+            return Err(CatalogCode::Target);
+        }
     }
-    for input in inputs {
+    let mut edges = vec![Vec::new(); inputs.len()];
+    for (index, input) in inputs.iter().enumerate() {
         let manifest = input.package.metadata().manifest();
         for dependency in manifest.dependencies() {
-            let target = targets
+            let dependency_index = *targets
                 .get(&(dependency.id(), dependency.version()))
                 .ok_or(CatalogCode::Target)?;
+            if dependency_index == index {
+                return Err(CatalogCode::Target);
+            }
+            let target = inputs[dependency_index];
             let dependency_manifest = target.package.metadata().manifest();
-            if dependency_manifest.id() == manifest.id()
-                || dependency_manifest.kind() != PackageKind::Provider
+            if dependency_manifest.kind() != PackageKind::Provider
                 || target.status != CatalogStatus::Verified
                 || target.package.archive_sha256() != dependency.sha256()
             {
                 return Err(CatalogCode::Target);
             }
+            edges[index].push(dependency_index);
+        }
+    }
+    let mut color = vec![0u8; inputs.len()];
+    for start in 0..inputs.len() {
+        if color[start] != 0 { continue; }
+        let mut stack = vec![(start, 0usize)];
+        color[start] = 1;
+        while let Some((node, edge)) = stack.pop() {
+            if edge == edges[node].len() { color[node] = 2; continue; }
+            stack.push((node, edge + 1));
+            let next = edges[node][edge];
+            if color[next] == 1 { return Err(CatalogCode::Target); }
+            if color[next] == 0 { color[next] = 1; stack.push((next, 0)); }
         }
     }
     Ok(())

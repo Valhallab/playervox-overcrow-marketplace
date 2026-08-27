@@ -44,18 +44,34 @@ for required in \
     fi
 done
 
-if (
-    cd "$repo_root"
-    rg --hidden --no-ignore --text --files-with-matches \
-        'BEGIN ((RSA|OPENSSH|EC|DSA|PGP|ENCRYPTED|[A-Z0-9 ]+) )?PRIVATE K[E]Y( BLOCK)?|AGE-SECRET-K[E]Y-1|g[h][pousr]_[A-Za-z0-9]{30,}|s[k]-(proj-)?[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}' . \
-        --glob '!.git/**' \
-        --glob '!target/**' \
-        --glob '!fixtures/keys/development-ed25519.key'
-); then
-    printf '%s\n' 'error: private key material is not allowed' >&2
-    exit 1
+scan_pattern='BEGIN ((RSA|OPENSSH|EC|DSA|PGP|ENCRYPTED|[A-Z0-9 ]+) )?PRIVATE K[E]Y( BLOCK)?|AGE-SECRET-K[E]Y-1|g[h][pousr]_[A-Za-z0-9]{30,}|s[k]-(proj-)?[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}'
+if matches=$(cd "$repo_root" && git ls-files --cached --others --exclude-standard -z |
+    /usr/bin/grep -zv '^fixtures/keys/development-ed25519\.key$' |
+    /usr/bin/xargs -0 -r sh -c '
+        pattern=$1
+        shift
+        for path; do
+            result=0
+            rg -q "$pattern" -- "$path" || result=$?
+            case "$result" in
+                0) printf "%s\\n" "$path" ;;
+                1) ;;
+                *) exit "$result" ;;
+            esac
+        done
+    ' sh "$scan_pattern"); then
+    if test -n "$matches"; then
+        printf '%s\n' "$matches" >&2
+        scan_status=0
+    else
+        scan_status=1
+    fi
 else
     scan_status=$?
+fi
+if test "$scan_status" -eq 0; then
+    printf '%s\n' 'error: private key material is not allowed' >&2
+    exit 1
 fi
 if test "$scan_status" -ne 1; then
     printf '%s\n' 'error: private-key scan failed' >&2
