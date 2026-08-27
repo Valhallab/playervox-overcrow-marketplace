@@ -11,10 +11,19 @@ Storage is a bounded package-scoped key/value service. Use `storage-get`,
 `storage-set`, or `storage-delete` only when storage was declared and granted;
 results arrive as `storage-result`. Components never receive filesystem paths.
 
-Providers publish one bounded payload with a strictly increasing revision and
-a canonical `provider-id/schema.vN` ID. Dependent widgets receive only schemas
-authorized by their exact installed dependency. Provider data is coalesced;
-write handlers for the latest value, not for a message queue.
+Providers publish one bounded payload with a revision that strictly increases
+within the current runner generation and a canonical
+`provider-id/schema.vN` ID. The host maps this local revision onto a globally
+increasing broker revision and rejects output from stopped generations.
+Dependent widgets receive only schemas authorized by their exact installed
+dependency. Provider data is coalesced; write handlers for the latest value,
+not for a message queue.
+
+Provider errors are recoverable lifecycle signals. The host keeps delivering
+scheduled ticks after a guest reports temporary unavailability so a provider
+can retry within its declared cadence. A dependent widget must still validate
+the provider-owned capture timestamp and render stale data as unavailable;
+retaining a previous broker value does not make it fresh.
 
 The optional `overcrow.session.v1` feed contains only the selected active game,
 Steam app ID, elapsed milliseconds, overlay mode, and sanitized resource

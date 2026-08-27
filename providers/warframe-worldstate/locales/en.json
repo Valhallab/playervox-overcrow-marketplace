@@ -1,0 +1,4 @@
+{
+  "name": "Warframe Worldstate Provider",
+  "description": "Shares bounded public Warframe world-state data with installed widgets."
+}

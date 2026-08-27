@@ -3,8 +3,10 @@
 Run native SDK and widget behavior tests first:
 
 ```sh
-cargo test -p overcrow-widget-sdk -p hello-widget --locked
-cargo clippy -p overcrow-widget-sdk -p hello-widget --all-targets --locked -- -D warnings
+cargo test -p overcrow-widget-sdk -p hello-widget \
+  -p warframe-worldstate-provider --locked
+cargo clippy -p overcrow-widget-sdk -p hello-widget \
+  -p warframe-worldstate-provider --all-targets --locked -- -D warnings
 ```
 
 `WidgetHarness` initializes real widget state, routes scoped semantic events,

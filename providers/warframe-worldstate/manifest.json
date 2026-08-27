@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "com.playervox.overcrow.warframe.worldstate",
+  "version": "1.0.0",
+  "kind": "provider",
+  "apiVersion": "1",
+  "defaultLocale": "en",
+  "availableLocales": ["en", "fr"],
+  "games": [{"platform": "steam", "id": "230410"}],
+  "dependencies": [],
+  "capabilities": {
+    "http": ["api.warframe.com"],
+    "gameData": [],
+    "storage": false,
+    "clipboardWrite": false,
+    "provider": true
+  },
+  "files": {
+    "component": {
+      "path": "component.wasm",
+      "sha256": "547351e0d05997e8f43af123e8524c41ada73db7edddf49ab966c9ba224ceb15"
+    },
+    "locales": {
+      "en": {
+        "path": "locales/en.json",
+        "sha256": "0923eb1aeb1ec29832d0c306fc848e0ae9cfb9e065862dc42dfa359e6458fcb6"
+      },
+      "fr": {
+        "path": "locales/fr.json",
+        "sha256": "0cb733b1630cefd06532ac4da08a395a5e402612afaebefe0cbfb15510a02be4"
+      }
+    },
+    "assets": {}
+  }
+}

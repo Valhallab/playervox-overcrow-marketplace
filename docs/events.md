@@ -18,8 +18,10 @@ granted host command; clipboard read does not exist.
 Passive overlays are click-through and receive zero interaction events. They
 may still receive bounded ticks, locale and settings changes, sanitized session
 data, HTTP or storage results for prior requests, and subscribed provider data.
-Tick values and session elapsed time are host-provided integers, not access to a
-system clock.
+A tick is host-owned Unix UTC milliseconds, clamped to be nondecreasing during
+one controller lifetime; equal consecutive values are valid. Session elapsed
+time is a separate host-provided integer. Neither value gives a component
+direct access to a system clock.
 
 `WidgetHarness` exercises the same scoped semantic event shape. It refuses an
 ID absent from the current view, a semantic event for the wrong node type, and

@@ -6,11 +6,12 @@ OverCrow. Application and overlay code remain in the OverCrow repository.
 
 ## Current status
 
-This repository currently provides the local Rust SDK and a hello proof of
-concept alongside contributor and review policy. It does not publish a catalog,
+This repository currently provides the local Rust SDK, deterministic package
+and signed-catalog tooling, a hello proof of concept, and the external
+Warframe worldstate provider source. It does not deploy a public catalog,
 accept arbitrary public submissions, provide production signing material, or
-make any security certification. Those steps remain gated on a separate
-sandbox security audit and explicit maintainer authorization.
+make any security certification. Those steps remain gated on human review,
+application integration, and explicit maintainer authorization.
 
 Future local development catalogs will be signed only with a clearly labelled
 development fixture key and accepted only by debug OverCrow builds. Production
