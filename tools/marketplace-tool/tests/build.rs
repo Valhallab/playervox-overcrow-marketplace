@@ -102,7 +102,7 @@ fn cli_build_is_reproducible_and_verifies_its_complete_source() {
                 .join("marketplace/development-catalog-state.json")
         )
         .expect("development state"),
-        include_bytes!("../../../marketplace/development-catalog-state.json")
+        b"{\"schemaVersion\":1,\"sequence\":1,\"payloadSha256\":\"2ab96a4bf6bb053c7864b01b00448a34182c87bd2f0a8b76c4dea06601a6c9f9\"}\n"
     );
     let catalog_path = fixture.path().join("public/marketplace/v1/catalog.json");
     let first = fs::read(&catalog_path).expect("first catalog");
@@ -302,17 +302,22 @@ fn prepare_fixture(repository: &Path, component: &Path) {
         )
         .expect("source fixture");
     }
-    for relative in [
-        "marketplace/targets.json",
-        "marketplace/development-sequence.txt",
-        "fixtures/keys/development-ed25519.key",
-    ] {
-        fs::copy(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../..")
-                .join(relative),
-            repository.join(relative),
-        )
-        .expect("publisher fixture");
-    }
+    let development_key = "fixtures/keys/development-ed25519.key";
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(development_key),
+        repository.join(development_key),
+    )
+    .expect("publisher fixture");
+    fs::write(
+        repository.join("marketplace/targets.json"),
+        b"[{\"sourceDirectory\":\"examples/hello-widget\",\"status\":\"verified\"}]\n",
+    )
+    .expect("hello-only target fixture");
+    fs::write(
+        repository.join("marketplace/development-sequence.txt"),
+        b"1\n",
+    )
+    .expect("fixture development sequence");
 }

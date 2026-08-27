@@ -16,6 +16,23 @@ Reviewers must verify:
 - an exact reviewed revision, maintainer approval record, and maintainer
   signature before catalog inclusion.
 
+Reviewers also confirm that declared rendering uses only the supported native
+nodes (rows, columns, grids, scroll regions, text, host icons, bounded raster
+images, buttons, toggles, text inputs, selections, lists, progress, charts,
+and bounded 2D canvas) and receives only the documented semantic events. They
+must check every capability: exact HTTPS hosts, `overcrow.session.v1` game
+data, private storage, clipboard write, and provider publication. A package
+must remain inside the documented manifest, listing, component, archive,
+entry, asset, preview, locale, dependency, and host limits, and declare an
+exact default locale with a safe fallback.
+
+For a user-visible package with a hidden provider, review the exact dependency
+ID, version, and digest and present the combined permission set in plain
+language. A provider is disclosed in details and consent but never becomes a
+normal browsing card. Catalog inclusion requires a reproducible local build,
+valid development signature for development work, and a separate human
+approval; it never authorizes production signing.
+
 Review fails closed on missing evidence, ambiguous ownership, mutable sources,
 unreviewed capability expansion, unknown files, or inconsistent metadata. A
 later update repeats the applicable review; prior approval does not cover new

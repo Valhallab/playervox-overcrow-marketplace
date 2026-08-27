@@ -1,0 +1,61 @@
+name: marketplace-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install toolchain and checks
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+          rustup target add wasm32-wasip2
+          cargo install wasm-tools --version 1.245.1 --locked
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck
+      - name: Format, lint, and test
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo test --workspace --all-targets --locked
+      - name: Build and inspect all components
+        run: |
+          cargo build --workspace --release --target wasm32-wasip2 --locked
+          for component in \
+            warframe_worldstate_provider \
+            warframe_status_widget \
+            warframe_fissures_widget \
+            warframe_sortie_archon_widget \
+            warframe_invasions_widget \
+            warframe_market_widget; do
+            cargo run -p marketplace-tool --locked -- inspect-component \
+              "target/wasm32-wasip2/release/${component}.wasm"
+          done
+      - name: Generate deterministic local catalog and site
+        run: |
+          scripts/build-local.sh
+          cp -a public "${RUNNER_TEMP}/public-first"
+          scripts/build-local.sh
+          diff --recursive --no-dereference "${RUNNER_TEMP}/public-first" public
+          cargo run -p marketplace-tool --locked -- verify public/marketplace/v1/catalog.json
+          cargo test -p marketplace-tool --test marketplace \
+            catalog::generated_catalog_has_five_visible_packages_and_one_hidden_provider --locked -- --exact
+          cargo test -p marketplace-tool --test marketplace \
+            packages::generated_packages_match_catalog_digests_and_keep_provider_hidden --locked -- --exact
+          cargo test -p marketplace-tool --test marketplace \
+            site::marketplace_site_is_localized_dom_safe_and_hides_providers --locked -- --exact
+      - name: Policy and shell checks
+        run: |
+          scripts/check-policy.sh
+          shellcheck scripts/*.sh
+          sh -n scripts/*.sh

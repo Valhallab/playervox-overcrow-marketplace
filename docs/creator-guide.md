@@ -30,6 +30,34 @@ manifest: check the context and handle an unavailable capability. The SDK has
 no system clock, randomness, filesystem, environment, socket, subprocess,
 clipboard-read, raw-input, or arbitrary-log API.
 
+## Views, events, and capabilities
+
+The host renders a bounded native view tree. Available nodes are rows,
+columns, grids, scroll regions, text, host icons, bounded raster images,
+buttons, toggles, text inputs, selections, lists, progress indicators, charts,
+and bounded 2D canvases. Every interactive node needs a stable ID. The host
+can emit `clicked`, `value-changed`, `submitted`, `selection-changed`,
+`toggled`, `focused`, `hovered`, `scrolled`, and `dragged` only where the node
+type permits them; see [events.md](events.md). Passive overlays receive no
+interaction events.
+
+Declare only the capabilities the package can use: brokered HTTPS `GET` access
+to exact hosts, the reviewed `overcrow.session.v1` game-data feed, bounded
+private storage, clipboard write, and provider publication. All are denied
+until the host and user grant them. Components never receive direct network,
+filesystem, process, raw input, game-memory, or clipboard-read access.
+
+## Package and language limits
+
+Manifests and listings are each limited to 64 KiB; components to 4 MiB;
+packages to 16 MiB and 64 entries; raster assets to 8 MiB compressed and
+32 MiB decoded in total; and a preview to 256 KiB. A manifest can declare up
+to 32 locales, games, and dependencies, up to 16 HTTPS hosts, and a listing
+can expose up to 16 localized entries. Declare the exact `availableLocales`,
+including the required `defaultLocale`. The host chooses the application
+locale when available and otherwise uses the default; missing strings also
+fall back to that default. Official Warframe packages provide `en` and `fr`.
+
 Translations beyond the declared default locale are optional. Declare the
 exact available languages in the manifest, keep the default complete, and use
 `LocalizedText` for exact-locale selection with default fallback. See the
@@ -39,3 +67,10 @@ The application’s explicit local-unverified installation flow is not yet
 user-available. When that integration lands, local packages will receive the
 same manifest validation and sandbox as signed packages and will remain
 disabled until the user enables them.
+
+For local catalog development, build all components, run
+`scripts/build-local.sh`, verify `public/marketplace/v1/catalog.json`, then
+serve `public` on loopback. The future Control Center installs a local package
+only after an explicit unverified-development confirmation and leaves it
+disabled. Do not produce or use a production-signed package from this
+repository.

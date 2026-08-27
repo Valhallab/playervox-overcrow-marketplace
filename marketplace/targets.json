@@ -1,6 +1,26 @@
 [
   {
-    "sourceDirectory": "examples/hello-widget",
+    "sourceDirectory": "providers/warframe-worldstate",
+    "status": "verified"
+  },
+  {
+    "sourceDirectory": "widgets/warframe-fissures",
+    "status": "verified"
+  },
+  {
+    "sourceDirectory": "widgets/warframe-invasions",
+    "status": "verified"
+  },
+  {
+    "sourceDirectory": "widgets/warframe-market",
+    "status": "verified"
+  },
+  {
+    "sourceDirectory": "widgets/warframe-sortie-archon",
+    "status": "verified"
+  },
+  {
+    "sourceDirectory": "widgets/warframe-status",
     "status": "verified"
   }
 ]

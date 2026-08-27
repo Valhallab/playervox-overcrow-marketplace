@@ -1,0 +1,73 @@
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+    sync::OnceLock,
+};
+
+use serde_json::Value;
+
+pub(crate) fn repository_root() -> &'static Path {
+    static ROOT: OnceLock<PathBuf> = OnceLock::new();
+    ROOT.get_or_init(|| {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("canonical marketplace repository")
+    })
+}
+
+pub(crate) fn generated_catalog_fixture() -> &'static Value {
+    static CATALOG: OnceLock<Value> = OnceLock::new();
+    CATALOG.get_or_init(|| {
+        let status = Command::new("sh")
+            .arg("scripts/build-local.sh")
+            .current_dir(repository_root())
+            .status()
+            .expect("start local marketplace generation");
+        assert!(
+            status.success(),
+            "local marketplace generation must succeed"
+        );
+
+        let catalog = std::fs::read(repository_root().join("public/marketplace/v1/catalog.json"))
+            .expect("generated catalog");
+        serde_json::from_slice(&catalog).expect("catalog envelope JSON")
+    })
+}
+
+fn payload(catalog: &Value) -> Value {
+    let encoded = catalog["payload"].as_str().expect("catalog payload");
+    let decoded =
+        base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, encoded)
+            .expect("base64 catalog payload");
+    serde_json::from_slice(&decoded).expect("catalog payload JSON")
+}
+
+#[test]
+fn generated_catalog_has_five_visible_packages_and_one_hidden_provider() {
+    let catalog = payload(generated_catalog_fixture());
+    let targets = catalog["targets"].as_array().expect("catalog targets");
+    assert_eq!(
+        targets
+            .iter()
+            .filter(|target| target["manifest"]["kind"] != "provider")
+            .count(),
+        5,
+        "widgets and bundles are visible marketplace packages"
+    );
+    assert_eq!(
+        targets
+            .iter()
+            .filter(|target| target["manifest"]["kind"] == "provider")
+            .count(),
+        1
+    );
+    assert!(targets.iter().all(|target| {
+        target["manifest"]["availableLocales"] == serde_json::json!(["en", "fr"])
+            && target["listing"]["localizations"]
+                .as_array()
+                .expect("listing localizations")
+                .iter()
+                .all(|text| matches!(text["locale"].as_str(), Some("en" | "fr")))
+    }));
+}

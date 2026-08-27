@@ -1,0 +1,37 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+  background: #10131a;
+  color: #f5f7fa;
+}
+
+body {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+header {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.eyebrow {
+  color: #ffca6b;
+  font-weight: 700;
+  margin: 0;
+}
+
+#catalog {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  margin-top: 2rem;
+}
+
+.card {
+  border: 1px solid #3c465b;
+  border-radius: 0.75rem;
+  padding: 1rem;
+  background: #19202c;
+}

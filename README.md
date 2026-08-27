@@ -6,14 +6,34 @@ OverCrow. Application and overlay code remain in the OverCrow repository.
 
 ## Current status
 
-This repository currently provides the local Rust SDK, deterministic package
-and signed-catalog tooling, a hello proof of concept, and the external
-Warframe worldstate provider with Status, Void Fissures, Sortie and Archon
-Hunt, and Invasions widget sources. The Warframe packages are not yet listed
-in the development catalog. This repository does not deploy a public catalog,
-accept arbitrary public submissions, provide production signing material, or
-make any security certification. Those steps remain gated on human review,
-application integration, and explicit maintainer authorization.
+This repository provides the local Rust SDK, deterministic package and signed
+catalog tooling, a static local catalog site, and five external Warframe
+packages: Status, Void Fissures, Sortie & Archon, Invasions, and Market. The
+first four use one hidden Warframe Worldstate Provider; Market is a standalone
+bundle. The site makes this dependency visible on each applicable card without
+showing the provider as a normal browseable package.
+
+Generate the local catalog and site only after the WebAssembly components are
+built:
+
+```sh
+cargo build --workspace --release --target wasm32-wasip2 --locked
+scripts/build-local.sh
+cargo run -p marketplace-tool --locked -- verify public/marketplace/v1/catalog.json
+```
+
+The generated `/public` directory is ignored and reproducible. The build
+temporarily stages each `component.wasm` beside its package metadata and
+removes it before exiting; source package directories must never retain or
+commit those binaries. Serve `/public` through a local loopback HTTP server to
+browse the catalog. The static site uses English by default and has a French
+language switch. It uses no remote resources and is labelled
+**Development - unverified**.
+
+This repository does not deploy a public catalog, accept arbitrary public
+submissions, provide production signing material, or make any security
+certification. Those steps remain gated on human review, application
+integration, and explicit maintainer authorization.
 
 Future local development catalogs will be signed only with a clearly labelled
 development fixture key and accepted only by debug OverCrow builds. Production
