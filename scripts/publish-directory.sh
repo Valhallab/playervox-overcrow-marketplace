@@ -111,13 +111,25 @@ trap 'handle_signal 129' HUP
 trap 'handle_signal 130' INT
 trap 'handle_signal 143' TERM
 
-next_owned=1
 mutation_active=1
-if "$move_staged" -T -- "$staged_public" "$next_public"; then
+if /usr/bin/mkdir -m 0700 -- "$next_public"; then
+    next_owned=1
+    mutation_active=0
+    abort_if_interrupted
+else
+    mutation_active=0
+    abort_if_interrupted
+    printf '%s\n' 'error: next publication reservation failed' >&2
+    exit 1
+fi
+
+next_tree="$next_public/tree"
+mutation_active=1
+if "$move_staged" -T -- "$staged_public" "$next_tree"; then
     mutation_active=0
     abort_if_interrupted
     if test -e "$staged_public" || test -L "$staged_public" \
-            || test ! -d "$next_public" || test -L "$next_public"; then
+            || test ! -d "$next_tree" || test -L "$next_tree"; then
         printf '%s\n' 'error: staged publication move was incomplete' >&2
         exit 1
     fi
@@ -152,10 +164,10 @@ if test -e "$public" || test -L "$public"; then
 fi
 
 mutation_active=1
-if "$move_next" -T -- "$next_public" "$public"; then
+if "$move_next" -T -- "$next_tree" "$public"; then
     mutation_active=0
     abort_if_interrupted
-    if test -e "$next_public" || test -L "$next_public" \
+    if test -e "$next_tree" || test -L "$next_tree" \
             || test ! -d "$public" || test -L "$public"; then
         printf '%s\n' 'error: publication move was incomplete' >&2
         exit 1

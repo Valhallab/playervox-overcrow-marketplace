@@ -97,6 +97,19 @@ printf '%s\n' \
     '/usr/bin/mv "$@"' >"$move_into_raced_destination"
 /usr/bin/chmod 0700 "$move_into_raced_destination"
 
+race_next_reservation="$scratch/race-next-reservation"
+# shellcheck disable=SC2016 # generated helper expands these variables when run
+printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'if /usr/bin/mkdir -m 0700 -- "$RACED_NEXT_PUBLIC" 2>/dev/null; then' \
+    '    /usr/bin/mkdir -- "$RACED_NEXT_PUBLIC/foreign"' \
+    '    printf "%s\n" foreign-owned >"$RACED_NEXT_PUBLIC/foreign/owned.txt"' \
+    '    : >"$RACE_WON"' \
+    'fi' \
+    '/usr/bin/false' >"$race_next_reservation"
+/usr/bin/chmod 0700 "$race_next_reservation"
+
 if should_run validation; then
     staged_public="$scratch/staged-validation/public"
     next_public="$copy/.public-next.validation"
@@ -153,16 +166,40 @@ if should_run race-next; then
     staged_public="$scratch/staged-race-next/public"
     next_public="$copy/.public-next.race"
     previous_public="$copy/.public-previous.race-next"
+    race_won="$scratch/race-next-won"
     make_staged_public "$staged_public"
-    if sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
-            "$move_into_raced_destination" /usr/bin/mv /usr/bin/mv /usr/bin/mv; then
+    if RACED_NEXT_PUBLIC="$next_public" RACE_WON="$race_won" \
+            sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
+            "$race_next_reservation" /usr/bin/mv /usr/bin/mv /usr/bin/mv; then
         printf '%s\n' 'error: raced next path unexpectedly accepted publication' >&2
         exit 1
     fi
     test -f "$staged_public/next"
-    assert_absent "$next_public"
+    foreign_marker="$next_public/foreign/owned.txt"
+    if test -f "$race_won"; then
+        test -f "$foreign_marker"
+        test "$(/usr/bin/cat "$foreign_marker")" = foreign-owned
+        /usr/bin/rm -rf -- "$next_public"
+    else
+        assert_absent "$next_public"
+    fi
     assert_absent "$previous_public"
     assert_prior_public
+
+    /usr/bin/mkdir -m 0700 -- "$next_public"
+    /usr/bin/mkdir -- "$next_public/foreign"
+    printf '%s\n' foreign-owned >"$foreign_marker"
+    if sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
+            /usr/bin/mv /usr/bin/mv /usr/bin/mv /usr/bin/mv; then
+        printf '%s\n' 'error: foreign next path unexpectedly accepted publication' >&2
+        exit 1
+    fi
+    test -f "$staged_public/next"
+    test -f "$foreign_marker"
+    test "$(/usr/bin/cat "$foreign_marker")" = foreign-owned
+    assert_absent "$previous_public"
+    assert_prior_public
+    /usr/bin/rm -rf -- "$next_public"
 fi
 
 if should_run race-previous; then
