@@ -22,9 +22,20 @@ fi
 stage=$(/usr/bin/mktemp -d "$repo_root/.build-local.XXXXXXXXXX") || exit 1
 source_root="$stage/repository"
 component_paths=''
+next_public=""
+previous_public=""
 cleanup() {
     status=$?
     trap - EXIT HUP INT TERM
+    if test -n "$previous_public" && test -d "$previous_public" && ! test -e "$repo_root/public"; then
+        /usr/bin/mv -- "$previous_public" "$repo_root/public" || status=1
+    fi
+    if test -n "$next_public" && { test -e "$next_public" || test -L "$next_public"; }; then
+        /usr/bin/rm -rf -- "$next_public"
+    fi
+    if test -n "$previous_public" && { test -e "$previous_public" || test -L "$previous_public"; }; then
+        /usr/bin/rm -rf -- "$previous_public"
+    fi
     # shellcheck disable=SC2086 # paths are created by stage_component and contain no whitespace
     for component_path in $component_paths; do
         /usr/bin/rm -f -- "$component_path"

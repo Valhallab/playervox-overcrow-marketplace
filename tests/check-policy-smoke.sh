@@ -6,6 +6,10 @@ cleanup() { /usr/bin/rm -f -- "$fixture"; }
 trap cleanup EXIT HUP INT TERM
 printf '%s\\n' '-----BEGIN PRIVATE '"KEY-----" >"$fixture"
 if "$repo_root/scripts/check-policy.sh"; then exit 1; fi
+for block in 'ENCRYPTED PRIVATE KEY' 'DSA PRIVATE KEY' 'PGP PRIVATE KEY BLOCK'; do
+    printf '%s\\n' "-----BEGIN $block-----" >"$fixture"
+    if "$repo_root/scripts/check-policy.sh"; then exit 1; fi
+done
 printf '%s\\n' 'g'"hp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN" >"$fixture"
 if "$repo_root/scripts/check-policy.sh"; then exit 1; fi
 for secret in \
