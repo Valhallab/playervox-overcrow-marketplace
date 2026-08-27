@@ -1,0 +1,21 @@
+{
+  "capturedAtSecs": 1777000000,
+  "status": {
+    "rows": [
+      {"id": "cetus", "state": "day", "activationSecs": null, "expiresAtSecs": 1777000900, "location": null},
+      {"id": "cambion", "state": "fass", "activationSecs": null, "expiresAtSecs": 1777000900, "location": null},
+      {"id": "vallis", "state": "cold", "activationSecs": null, "expiresAtSecs": 1777000600, "location": null},
+      {"id": "zariman", "state": "grineer", "activationSecs": null, "expiresAtSecs": 1777001800, "location": null},
+      {"id": "daily-reset", "state": null, "activationSecs": null, "expiresAtSecs": 1777003600, "location": null},
+      {"id": "baro", "state": "present", "activationSecs": 1776999000, "expiresAtSecs": 1777003600, "location": "Larunda Relay · Mercury"}
+    ]
+  },
+  "fissures": [
+    {"instanceId": "000000000000000000000001", "era": "axi", "missionType": "Defense", "node": "Galatea · Neptune", "expiresAtSecs": 1777000900, "steelPath": false, "railjack": false},
+    {"instanceId": "storm-11111111111111111111111111111111111111111111111111111111", "era": "lith", "missionType": "Void Storm", "node": "Mordo Cluster · Saturn", "expiresAtSecs": 1777001200, "steelPath": false, "railjack": true},
+    {"instanceId": "000000000000000000000003", "era": "neo", "missionType": "Capture", "node": "Aphrodite · Venus", "expiresAtSecs": 1776999999, "steelPath": true, "railjack": false}
+  ],
+  "sortie": null,
+  "archon": null,
+  "invasions": []
+}

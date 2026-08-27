@@ -4,6 +4,9 @@ members = [
     "providers/warframe-worldstate",
     "sdk/rust/overcrow-widget-sdk",
     "tools/marketplace-tool",
+    "widgets/warframe-data",
+    "widgets/warframe-fissures",
+    "widgets/warframe-status",
 ]
 resolver = "3"
 

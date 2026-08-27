@@ -8,10 +8,12 @@ OverCrow. Application and overlay code remain in the OverCrow repository.
 
 This repository currently provides the local Rust SDK, deterministic package
 and signed-catalog tooling, a hello proof of concept, and the external
-Warframe worldstate provider source. It does not deploy a public catalog,
-accept arbitrary public submissions, provide production signing material, or
-make any security certification. Those steps remain gated on human review,
-application integration, and explicit maintainer authorization.
+Warframe worldstate provider, Status widget, and Void Fissures widget sources.
+The Warframe packages are not yet listed in the development catalog. This
+repository does not deploy a public catalog, accept arbitrary public
+submissions, provide production signing material, or make any security
+certification. Those steps remain gated on human review, application
+integration, and explicit maintainer authorization.
 
 Future local development catalogs will be signed only with a clearly labelled
 development fixture key and accepted only by debug OverCrow builds. Production

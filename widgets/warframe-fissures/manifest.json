@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "id": "com.playervox.overcrow.warframe.fissures",
+  "version": "1.0.0",
+  "kind": "widget",
+  "apiVersion": "1",
+  "defaultLocale": "en",
+  "availableLocales": ["en", "fr"],
+  "games": [{"platform": "steam", "id": "230410"}],
+  "dependencies": [
+    {
+      "id": "com.playervox.overcrow.warframe.worldstate",
+      "version": "1.0.0",
+      "sha256": "92d2dd8d82042c2d7f507939274e6b329eee6aae0312af68e0e6316c68311fe3"
+    }
+  ],
+  "capabilities": {
+    "http": [],
+    "gameData": ["overcrow.session.v1"],
+    "storage": true,
+    "clipboardWrite": false,
+    "provider": false
+  },
+  "display": {
+    "showInPassive": true,
+    "xMilli": 420,
+    "yMilli": 100,
+    "width": 480,
+    "height": 600,
+    "scaleMilli": 1000,
+    "transparent": true
+  },
+  "files": {
+    "component": {
+      "path": "component.wasm",
+      "sha256": "ed2b830f84c0164c549015e890c180d419a03c992bb145f3f28ad801d96f0fc4"
+    },
+    "locales": {
+      "en": {
+        "path": "locales/en.json",
+        "sha256": "23fa5ad83d00a81a2794396a7e5e63669fcba8e2f0456437311c1d5d52b87da2"
+      },
+      "fr": {
+        "path": "locales/fr.json",
+        "sha256": "8f838940d87b5bcb199e0a6fc4b3ab6f2d6c6e3fc78cabb994cd40c1a0d684e8"
+      }
+    },
+    "assets": {}
+  }
+}
