@@ -1,75 +1,21 @@
 "use strict";
-
+const MAX_ENVELOPE_BYTES = 1024 * 1024;
+const MAX_TARGETS = 500;
+const KEY_ID = "overcrow-development-2026";
 const state = { locale: "en", targets: [] };
 const catalog = document.getElementById("catalog");
 const language = document.getElementById("language");
-
-function decodePayload(value) {
-  const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
-  const bytes = Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
-  return JSON.parse(new TextDecoder().decode(bytes));
-}
-
-function localized(target) {
-  const available = target.listing.localizations;
-  return available.find((text) => text.locale === state.locale)
-    || available.find((text) => text.locale === target.manifest.defaultLocale)
-    || available[0];
-}
-
-function dependencyText(target) {
-  if (target.manifest.dependencies.length === 0) {
-    return "Standalone package";
-  }
-  const names = target.manifest.dependencies.map((dependency) => {
-    const provider = state.targets.find((candidate) => candidate.manifest.id === dependency.id);
-    return provider ? localized(provider).name : "Warframe Worldstate Provider";
-  });
-  return `Includes dependency: ${names.join(", ")}`;
-}
-
-function card(target) {
-  const text = localized(target);
-  const element = document.createElement("article");
-  element.className = "card";
-  const name = document.createElement("h2");
-  name.textContent = text.name;
-  const description = document.createElement("p");
-  description.textContent = text.description;
-  const languages = document.createElement("p");
-  languages.textContent = `Languages: ${target.manifest.availableLocales.join(", ")}`;
-  const dependency = document.createElement("p");
-  dependency.textContent = dependencyText(target);
-  element.append(name, description, languages, dependency);
-  return element;
-}
-
-function render() {
-  catalog.replaceChildren();
-  const visible = state.targets.filter((target) => target.manifest.kind !== "provider");
-  for (const target of visible) {
-    catalog.append(card(target));
-  }
-}
-
-language.addEventListener("change", () => {
-  const locale = language.value === "fr" ? "fr" : "en";
-  state.locale = locale;
-  document.documentElement.lang = state.locale;
-  render();
-});
-
-fetch("/marketplace/v1/catalog.json")
-  .then((response) => {
-    if (!response.ok) throw new Error("catalog unavailable");
-    return response.json();
-  })
-  .then((envelope) => {
-    state.targets = decodePayload(envelope.payload).targets;
-    render();
-  })
-  .catch(() => {
-    const message = document.createElement("p");
-    message.textContent = "Catalog unavailable.";
-    catalog.replaceChildren(message);
-  });
+const copy = { en: { http: "Fetches public data from", session: "Reads OverCrow session data", storage: "Stores private widget settings", clipboard: "Writes a trade message to clipboard", provider: "Publishes bounded public world-state data", dependency: "Includes dependency", standalone: "Standalone package" }, fr: { http: "Récupère des données publiques depuis", session: "Lit les données de session OverCrow", storage: "Stocke des réglages privés du widget", clipboard: "Écrit un message d’échange dans le presse-papiers", provider: "Publie des données publiques bornées de l’état mondial", dependency: "Inclut la dépendance", standalone: "Paquet autonome" } };
+function string(value, maximum) { return typeof value === "string" && value.length > 0 && value.length <= maximum; }
+function digest(value) { return typeof value === "string" && /^[0-9a-f]{64}$/.test(value); }
+function decode(value) { if (!string(value, Math.ceil(MAX_ENVELOPE_BYTES * 4 / 3))) throw new Error("payload"); const bytes = Uint8Array.from(atob(value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=")), (item) => item.charCodeAt(0)); if (bytes.length > MAX_ENVELOPE_BYTES) throw new Error("payload"); return JSON.parse(new TextDecoder().decode(bytes)); }
+function capabilities(value) { return value && typeof value === "object" && Array.isArray(value.http) && value.http.length <= 16 && value.http.every((host) => string(host, 253)) && Array.isArray(value.gameData) && value.gameData.every((feed) => feed === "overcrow.session.v1") && typeof value.storage === "boolean" && typeof value.clipboardWrite === "boolean" && typeof value.provider === "boolean"; }
+function target(value) { const manifest = value && value.manifest; const listing = value && value.listing; return value && value.status === "verified" && manifest && listing && string(manifest.id, 192) && ["widget", "bundle", "provider"].includes(manifest.kind) && manifest.defaultLocale === "en" && Array.isArray(manifest.availableLocales) && manifest.availableLocales.join(",") === "en,fr" && Array.isArray(manifest.dependencies) && manifest.dependencies.length <= 32 && manifest.dependencies.every((dependency) => dependency && string(dependency.id, 192) && string(dependency.version, 64) && digest(dependency.sha256)) && capabilities(manifest.capabilities) && Array.isArray(listing.localizations) && listing.localizations.length === 2 && listing.localizations.every((text) => text && ["en", "fr"].includes(text.locale) && string(text.name, 128) && string(text.description, 512)); }
+function validate(text) { if (typeof text !== "string" || text.length === 0 || text.length > MAX_ENVELOPE_BYTES) throw new Error("envelope"); const envelope = JSON.parse(text); if (!envelope || envelope.schemaVersion !== 1 || envelope.keyId !== KEY_ID || !string(envelope.payload, Math.ceil(MAX_ENVELOPE_BYTES * 4 / 3)) || !string(envelope.signature, 128)) throw new Error("envelope"); const payload = decode(envelope.payload); if (!payload || payload.schemaVersion !== 1 || !Number.isSafeInteger(payload.sequence) || payload.sequence < 1 || !Array.isArray(payload.targets) || payload.targets.length === 0 || payload.targets.length > MAX_TARGETS || !payload.targets.every(target)) throw new Error("payload"); const ids = new Set(payload.targets.map((item) => item.manifest.id)); if (ids.size !== payload.targets.length) throw new Error("target"); for (const item of payload.targets) for (const dependency of item.manifest.dependencies) { const provider = payload.targets.find((candidate) => candidate.manifest.id === dependency.id); if (!provider || provider.manifest.kind !== "provider" || provider.status !== "verified") throw new Error("dependency"); } return payload.targets; }
+function localized(item) { return item.listing.localizations.find((text) => text.locale === state.locale) || item.listing.localizations.find((text) => text.locale === item.manifest.defaultLocale); }
+function details(item) { const languageCopy = copy[state.locale]; const entries = [item, ...item.manifest.dependencies.map((dependency) => state.targets.find((candidate) => candidate.manifest.id === dependency.id))]; const capabilitySet = entries.map((entry) => entry.manifest.capabilities); const hosts = [...new Set(capabilitySet.flatMap((value) => value.http))]; const values = []; const dependencies = item.manifest.dependencies.map((dependency) => localized(state.targets.find((entry) => entry.manifest.id === dependency.id)).name); values.push(dependencies.length ? `${languageCopy.dependency}: ${dependencies.join(", ")}` : languageCopy.standalone); if (hosts.length) values.push(`${languageCopy.http}: ${hosts.join(", ")}`); if (capabilitySet.some((value) => value.gameData.includes("overcrow.session.v1"))) values.push(languageCopy.session); if (capabilitySet.some((value) => value.storage)) values.push(languageCopy.storage); if (capabilitySet.some((value) => value.clipboardWrite)) values.push(languageCopy.clipboard); if (capabilitySet.some((value) => value.provider)) values.push(languageCopy.provider); return values; }
+function card(item) { const text = localized(item); const element = document.createElement("article"); element.className = "card"; for (const [tag, value] of [["h2", text.name], ["p", text.description], ["p", `Languages: ${item.manifest.availableLocales.join(", ")}`], ...details(item).map((value) => ["p", value])]) { const child = document.createElement(tag); child.textContent = value; element.append(child); } return element; }
+function render() { catalog.replaceChildren(); for (const item of state.targets.filter((item) => item.manifest.kind !== "provider")) catalog.append(card(item)); }
+function unavailable() { const message = document.createElement("p"); message.textContent = "Catalog unavailable."; catalog.replaceChildren(message); }
+language.addEventListener("change", () => { state.locale = language.value === "fr" ? "fr" : "en"; document.documentElement.lang = state.locale; render(); });
+fetch("/marketplace/v1/catalog.json").then((response) => { const length = response.headers && response.headers.get("content-length"); if (!response.ok || (length !== null && (!/^\d+$/.test(length) || Number(length) > MAX_ENVELOPE_BYTES))) throw new Error("catalog unavailable"); return response.text(); }).then((text) => { state.targets = validate(text); render(); }).catch(unavailable);

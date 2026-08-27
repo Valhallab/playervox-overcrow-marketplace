@@ -20,6 +20,7 @@ if ! /usr/bin/flock -n 9; then
 fi
 
 stage=$(/usr/bin/mktemp -d "$repo_root/.build-local.XXXXXXXXXX") || exit 1
+source_root="$stage/repository"
 component_paths=''
 cleanup() {
     status=$?
@@ -42,6 +43,10 @@ cargo build --release --target wasm32-wasip2 --locked \
     -p warframe-invasions-widget \
     -p warframe-market-widget
 
+/usr/bin/install -d -m 0700 "$source_root"
+/usr/bin/cp -R -- marketplace fixtures providers widgets site "$source_root/"
+cd "$source_root"
+
 stage_component() {
     source_path=$1
     built_name=$2
@@ -50,7 +55,7 @@ stage_component() {
         printf '%s\n' "error: refusing to replace existing source component: $component_path" >&2
         exit 1
     fi
-    /usr/bin/install -m 0644 "target/wasm32-wasip2/release/$built_name.wasm" "$component_path"
+    /usr/bin/install -m 0644 "$repo_root/target/wasm32-wasip2/release/$built_name.wasm" "$component_path"
     component_paths="$component_paths $component_path"
 }
 
@@ -96,7 +101,7 @@ provider_package_digest() {
     printf '%s\n' 1 >"$provider_repository/marketplace/development-sequence.txt"
     printf '%s\n' '[{"sourceDirectory":"providers/warframe-worldstate","status":"verified"}]' \
         >"$provider_repository/marketplace/targets.json"
-    cargo run -p marketplace-tool --locked -- build \
+    cargo run --manifest-path "$repo_root/tools/marketplace-tool/Cargo.toml" --locked -- build \
         --repository "$provider_repository" \
         --generated-at 2026-08-27T00:00:00Z \
         --expires-at 2036-08-27T00:00:00Z \
@@ -141,14 +146,48 @@ for widget in status fissures sortie-archon invasions; do
     replace_provider_digest "widgets/warframe-$widget/manifest.json" "$provider_digest"
 done
 
-cargo run -p marketplace-tool --locked -- build \
-    --repository "$repo_root" \
+cargo run --manifest-path "$repo_root/tools/marketplace-tool/Cargo.toml" --locked -- build \
+    --repository "$source_root" \
     --generated-at 2026-08-27T00:00:00Z \
     --expires-at 2036-08-27T00:00:00Z \
     --development-key
-cargo run -p marketplace-tool --locked -- verify public/marketplace/v1/catalog.json
+ cargo run --manifest-path "$repo_root/tools/marketplace-tool/Cargo.toml" --locked -- verify public/marketplace/v1/catalog.json
 
-/usr/bin/install -d -m 0755 public
-for file in index.html app.js styles.css; do
-    /usr/bin/install -m 0644 "site/$file" "public/$file"
+publish_file() {
+    relative=$1
+    source="$source_root/$relative"
+    destination="$repo_root/$relative"
+    if test ! -f "$source" || test -L "$source" || test ! -f "$destination" || test -L "$destination"; then
+        printf '%s\n' "error: unsafe generated source path: $relative" >&2
+        exit 1
+    fi
+    if ! /usr/bin/cmp -s -- "$source" "$destination"; then
+        temporary="$destination.publish.$$"
+        /usr/bin/install -m 0644 "$source" "$temporary"
+        /usr/bin/mv -f -- "$temporary" "$destination"
+    fi
+}
+for relative in marketplace/development-catalog-state.json \
+        providers/warframe-worldstate/manifest.json \
+        widgets/warframe-status/manifest.json widgets/warframe-fissures/manifest.json \
+        widgets/warframe-sortie-archon/manifest.json widgets/warframe-invasions/manifest.json \
+        widgets/warframe-market/manifest.json; do
+    publish_file "$relative"
 done
+
+next_public="$repo_root/.public-next.$$"
+previous_public="$repo_root/.public-previous.$$"
+if test -e "$next_public" || test -L "$next_public"; then
+    printf '%s\n' 'error: publication staging path already exists' >&2
+    exit 1
+fi
+/usr/bin/mv -- "$source_root/public" "$next_public"
+if test -e "$repo_root/public"; then
+    /usr/bin/mv -- "$repo_root/public" "$previous_public"
+fi
+if ! /usr/bin/mv -- "$next_public" "$repo_root/public"; then
+    if test -e "$previous_public"; then /usr/bin/mv -- "$previous_public" "$repo_root/public"; fi
+    exit 1
+fi
+if test -e "$previous_public"; then /usr/bin/rm -rf -- "$previous_public"; fi
+cd "$repo_root"

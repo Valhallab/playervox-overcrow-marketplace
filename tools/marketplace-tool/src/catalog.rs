@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     ffi::{OsStr, OsString},
     fs::File,
     io::{Read as _, Write as _},
@@ -502,6 +503,7 @@ pub(crate) fn build_catalog(
     }) {
         return Err(CatalogCode::Target);
     }
+    validate_dependencies(&inputs)?;
     let mut targets = Vec::with_capacity(inputs.len());
     for input in inputs {
         let metadata = input.package.metadata();
@@ -555,6 +557,31 @@ pub(crate) fn build_catalog(
     }
     let envelope = sign_payload(key_id, &payload, seed)?;
     Ok(CatalogBuild { payload, envelope })
+}
+
+fn validate_dependencies(inputs: &[&PreparedTarget<'_>]) -> Result<(), CatalogCode> {
+    let mut targets = BTreeMap::new();
+    for input in inputs {
+        let manifest = input.package.metadata().manifest();
+        targets.insert((manifest.id(), manifest.version()), *input);
+    }
+    for input in inputs {
+        let manifest = input.package.metadata().manifest();
+        for dependency in manifest.dependencies() {
+            let target = targets
+                .get(&(dependency.id(), dependency.version()))
+                .ok_or(CatalogCode::Target)?;
+            let dependency_manifest = target.package.metadata().manifest();
+            if dependency_manifest.id() == manifest.id()
+                || dependency_manifest.kind() != PackageKind::Provider
+                || target.status != CatalogStatus::Verified
+                || target.package.archive_sha256() != dependency.sha256()
+            {
+                return Err(CatalogCode::Target);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn parse_time(value: &str) -> Result<chrono::DateTime<chrono::Utc>, CatalogCode> {
@@ -1032,5 +1059,81 @@ mod tests {
                 Err(CatalogCode::Signature)
             );
         }
+    }
+
+    #[test]
+    fn catalog_rejects_dependencies_that_do_not_bind_a_verified_provider_archive() {
+        let provider = validate_metadata(
+            include_bytes!("../../../providers/warframe-worldstate/manifest.json"),
+            include_bytes!("../../../providers/warframe-worldstate/listing.json"),
+        )
+        .expect("provider metadata");
+        let provider = PackageArtifact::fixture(provider, b"provider archive".to_vec(), None);
+        let mut manifest: Value = serde_json::from_slice(include_bytes!(
+            "../../../widgets/warframe-status/manifest.json"
+        ))
+        .expect("status manifest");
+        manifest["dependencies"][0]["sha256"] = json!(provider.archive_sha256());
+        let manifest = serde_json::to_vec(&manifest).expect("status manifest JSON");
+        let widget = validate_metadata(
+            &manifest,
+            include_bytes!("../../../widgets/warframe-status/listing.json"),
+        )
+        .expect("widget metadata");
+        let widget = PackageArtifact::fixture(widget, b"widget archive".to_vec(), None);
+        let inputs = [
+            PreparedTarget {
+                package: &provider,
+                status: CatalogStatus::Verified,
+            },
+            PreparedTarget {
+                package: &widget,
+                status: CatalogStatus::Verified,
+            },
+        ];
+        assert!(
+            build_catalog(
+                &inputs,
+                2,
+                NOW,
+                "2036-08-26T00:00:00Z",
+                CatalogOrigin::Development,
+                DEVELOPMENT_KEY_ID,
+                &DEV_SEED
+            )
+            .is_ok()
+        );
+
+        let mut wrong_manifest: Value = serde_json::from_slice(&manifest).expect("status manifest");
+        wrong_manifest["dependencies"][0]["sha256"] = json!("0".repeat(64));
+        let wrong_manifest = serde_json::to_vec(&wrong_manifest).expect("wrong manifest JSON");
+        let wrong = validate_metadata(
+            &wrong_manifest,
+            include_bytes!("../../../widgets/warframe-status/listing.json"),
+        )
+        .expect("wrong metadata remains structurally valid");
+        let wrong = PackageArtifact::fixture(wrong, b"widget archive".to_vec(), None);
+        let inputs = [
+            PreparedTarget {
+                package: &provider,
+                status: CatalogStatus::Verified,
+            },
+            PreparedTarget {
+                package: &wrong,
+                status: CatalogStatus::Verified,
+            },
+        ];
+        assert!(
+            build_catalog(
+                &inputs,
+                2,
+                NOW,
+                "2036-08-26T00:00:00Z",
+                CatalogOrigin::Development,
+                DEVELOPMENT_KEY_ID,
+                &DEV_SEED
+            )
+            .is_err()
+        );
     }
 }

@@ -1,4 +1,5 @@
 use crate::catalog::repository_root;
+use std::process::Command;
 
 #[test]
 fn marketplace_site_is_localized_dom_safe_and_hides_providers() {
@@ -21,12 +22,12 @@ fn marketplace_site_is_localized_dom_safe_and_hides_providers() {
         !app.contains("innerHTML"),
         "site must not parse creator content as HTML"
     );
-    assert!(app.contains("manifest.kind !== \"provider\""));
-    assert!(app.contains("Warframe Worldstate Provider"));
-    assert!(
-        app.contains("language.value === \"fr\""),
-        "French selection must be explicit"
-    );
-    assert!(app.contains("fetch(\"/marketplace/v1/catalog.json\")"));
     assert!(!styles.is_empty());
+
+    let status = Command::new("node")
+        .args(["--test", "tests/site-runtime.test.js"])
+        .current_dir(repository_root())
+        .status()
+        .expect("start site runtime tests");
+    assert!(status.success(), "site runtime tests must pass");
 }

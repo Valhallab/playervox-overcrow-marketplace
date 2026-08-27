@@ -54,8 +54,10 @@ jobs:
             packages::generated_packages_match_catalog_digests_and_keep_provider_hidden --locked -- --exact
           cargo test -p marketplace-tool --test marketplace \
             site::marketplace_site_is_localized_dom_safe_and_hides_providers --locked -- --exact
+          node --test tests/site-runtime.test.js
       - name: Policy and shell checks
         run: |
           scripts/check-policy.sh
+          sh tests/check-policy-smoke.sh
           shellcheck scripts/*.sh
           sh -n scripts/*.sh

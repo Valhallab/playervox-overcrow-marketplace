@@ -93,6 +93,10 @@ impl Manifest {
     pub(crate) fn files(&self) -> &PackageFiles {
         &self.files
     }
+
+    pub(crate) fn dependencies(&self) -> &[Dependency] {
+        &self.dependencies
+    }
 }
 
 #[derive(Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
@@ -112,10 +116,22 @@ struct GameScope {
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Dependency {
+pub(crate) struct Dependency {
     id: String,
     version: String,
     sha256: String,
+}
+
+impl Dependency {
+    pub(crate) fn id(&self) -> &str {
+        &self.id
+    }
+    pub(crate) fn version(&self) -> &str {
+        &self.version
+    }
+    pub(crate) fn sha256(&self) -> &str {
+        &self.sha256
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -275,7 +291,7 @@ impl TargetSpec {
     }
 }
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum CatalogStatus {
     Verified,

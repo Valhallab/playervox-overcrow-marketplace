@@ -47,8 +47,9 @@ done
 if (
     cd "$repo_root"
     rg --hidden --no-ignore --text --files-with-matches \
-        'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY' . \
+        'BEGIN ((RSA|OPENSSH|EC|DSA|PGP|ENCRYPTED|[A-Z0-9 ]+) )?PRIVATE K[E]Y( BLOCK)?|AGE-SECRET-K[E]Y-1|g[h][pousr]_[A-Za-z0-9]{30,}|s[k]-(proj-)?[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}' . \
         --glob '!.git/**' \
+        --glob '!target/**' \
         --glob '!fixtures/keys/development-ed25519.key'
 ); then
     printf '%s\n' 'error: private key material is not allowed' >&2
