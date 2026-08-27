@@ -184,20 +184,7 @@ done
 
 next_public="$repo_root/.public-next.$$"
 previous_public="$repo_root/.public-previous.$$"
-if test -e "$next_public" || test -L "$next_public"; then
-    printf '%s\n' 'error: publication staging path already exists' >&2
-    exit 1
-fi
-if test -e "$previous_public" || test -L "$previous_public"; then
-    printf '%s\n' 'error: previous publication path already exists' >&2
-    exit 1
-fi
-if test -e "$repo_root/public" && { test ! -d "$repo_root/public" || test -L "$repo_root/public"; }; then
-    printf '%s\n' 'error: existing public path is unsafe' >&2
-    exit 1
-fi
-/usr/bin/mv -- "$source_root/public" "$next_public"
 sh "$script_dir/publish-directory.sh" \
-    "$next_public" "$repo_root/public" "$previous_public" \
-    /usr/bin/mv /usr/bin/mv /usr/bin/mv
+    "$source_root/public" "$repo_root/public" "$next_public" "$previous_public" \
+    /usr/bin/mv /usr/bin/mv /usr/bin/mv /usr/bin/mv
 cd "$repo_root"
