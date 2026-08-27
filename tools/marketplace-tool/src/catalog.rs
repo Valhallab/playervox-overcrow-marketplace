@@ -798,6 +798,7 @@ mod tests {
     use super::{
         CatalogCode, CatalogOrigin, DEV_SEED, DEVELOPMENT_KEY_ID, PreparedTarget, PublisherState,
         SequenceState, build_catalog, parse_counter, read_private_input, sign_payload,
+        validate_dependencies,
         verify_catalog, verify_envelope,
     };
     use crate::{
@@ -1160,5 +1161,34 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn dependency_graph_rejects_each_invalid_edge_class() {
+        fn artifact(manifest: Value, listing: &[u8], archive: &[u8]) -> PackageArtifact {
+            PackageArtifact::fixture(
+                validate_metadata(&serde_json::to_vec(&manifest).expect("JSON"), listing)
+                    .expect("metadata"),
+                archive.to_vec(),
+                None,
+            )
+        }
+        let provider_manifest: Value = serde_json::from_slice(include_bytes!("../../../providers/warframe-worldstate/manifest.json")).expect("provider manifest");
+        let widget_manifest: Value = serde_json::from_slice(include_bytes!("../../../widgets/warframe-status/manifest.json")).expect("widget manifest");
+        let provider_listing = include_bytes!("../../../providers/warframe-worldstate/listing.json");
+        let widget_listing = include_bytes!("../../../widgets/warframe-status/listing.json");
+        let provider = artifact(provider_manifest.clone(), provider_listing, b"provider");
+        let dependency = |id: &str, version: &str, sha: &str| json!({"id": id, "version": version, "sha256": sha});
+        let invalid = |dependencies: Value, status: CatalogStatus| {
+            let mut manifest = widget_manifest.clone(); manifest["dependencies"] = dependencies;
+            let widget = artifact(manifest, widget_listing, b"widget");
+            validate_dependencies(&[&PreparedTarget { package: &provider, status }, &PreparedTarget { package: &widget, status: CatalogStatus::Verified }])
+        };
+        for dependencies in [
+            json!([dependency("com.playervox.overcrow.missing", "1.0.0", provider.archive_sha256())]),
+            json!([dependency(provider.metadata().manifest().id(), "9.9.9", provider.archive_sha256())]),
+            json!([dependency(provider.metadata().manifest().id(), "1.0.0", &"0".repeat(64))]),
+        ] { assert_eq!(invalid(dependencies, CatalogStatus::Verified), Err(CatalogCode::Target)); }
+        assert_eq!(invalid(json!([dependency(provider.metadata().manifest().id(), "1.0.0", provider.archive_sha256())]), CatalogStatus::Revoked), Err(CatalogCode::Target));
     }
 }

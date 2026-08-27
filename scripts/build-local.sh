@@ -211,6 +211,10 @@ fi
 if test -e "$repo_root/public"; then
     /usr/bin/mv -- "$repo_root/public" "$previous_public"
 fi
+if test "${MARKETPLACE_TEST_FAIL_AFTER_MOVE:-}" = 1; then
+    printf '%s\n' 'error: test publication fault' >&2
+    exit 1
+fi
 if ! /usr/bin/mv -- "$next_public" "$repo_root/public"; then
     if test -e "$previous_public"; then /usr/bin/mv -- "$previous_public" "$repo_root/public"; fi
     exit 1
