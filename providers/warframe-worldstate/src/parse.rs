@@ -728,6 +728,9 @@ fn parse_invasions(values: &[RawInvasion], labels: &Labels) -> Result<Vec<Invasi
         let attacker_reward = parse_reward(&value.attacker_reward, labels)?;
         let defender_reward = parse_reward(&value.defender_reward, labels)?;
         let goal = value.goal;
+        if goal == 0 {
+            return Err(ParseError);
+        }
         let goal_id = goal.to_string();
         let instance_id = match &value.id {
             Some(id) => canonical_oid(&id.oid)?,

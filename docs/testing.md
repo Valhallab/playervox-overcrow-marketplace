@@ -5,10 +5,12 @@ Run native SDK and widget behavior tests first:
 ```sh
 cargo test -p overcrow-widget-sdk -p hello-widget \
   -p warframe-worldstate-provider -p warframe-widget-data \
-  -p warframe-status-widget -p warframe-fissures-widget --locked
+  -p warframe-status-widget -p warframe-fissures-widget \
+  -p warframe-sortie-archon-widget -p warframe-invasions-widget --locked
 cargo clippy -p overcrow-widget-sdk -p hello-widget \
   -p warframe-worldstate-provider -p warframe-widget-data \
   -p warframe-status-widget -p warframe-fissures-widget \
+  -p warframe-sortie-archon-widget -p warframe-invasions-widget \
   --all-targets --locked -- -D warnings
 ```
 

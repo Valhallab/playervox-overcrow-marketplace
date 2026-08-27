@@ -810,6 +810,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "warframe-invasions-widget"
+version = "1.0.0"
+dependencies = [
+ "overcrow-widget-sdk",
+ "serde",
+ "serde_json",
+ "warframe-widget-data",
+]
+
+[[package]]
+name = "warframe-sortie-archon-widget"
+version = "1.0.0"
+dependencies = [
+ "overcrow-widget-sdk",
+ "serde",
+ "serde_json",
+ "warframe-widget-data",
+]
+
+[[package]]
 name = "warframe-status-widget"
 version = "1.0.0"
 dependencies = [

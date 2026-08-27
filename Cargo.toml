@@ -6,6 +6,8 @@ members = [
     "tools/marketplace-tool",
     "widgets/warframe-data",
     "widgets/warframe-fissures",
+    "widgets/warframe-invasions",
+    "widgets/warframe-sortie-archon",
     "widgets/warframe-status",
 ]
 resolver = "3"

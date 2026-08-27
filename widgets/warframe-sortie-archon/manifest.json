@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "com.playervox.overcrow.warframe.fissures",
+  "id": "com.playervox.overcrow.warframe.sortie-archon",
   "version": "1.0.0",
   "kind": "widget",
   "apiVersion": "1",
@@ -23,26 +23,26 @@
   },
   "display": {
     "showInPassive": true,
-    "xMilli": 420,
-    "yMilli": 100,
-    "width": 480,
-    "height": 600,
+    "xMilli": 20,
+    "yMilli": 480,
+    "width": 440,
+    "height": 560,
     "scaleMilli": 1000,
     "transparent": true
   },
   "files": {
     "component": {
       "path": "component.wasm",
-      "sha256": "5505e2f4d5543bbff88eb9547c1af908aac1edc5e6921a313b72efb25d8290a7"
+      "sha256": "96eb8f834af46ccc240b51f7b73c9df92b86b297efd64b243fd630a922c6e4bd"
     },
     "locales": {
       "en": {
         "path": "locales/en.json",
-        "sha256": "23fa5ad83d00a81a2794396a7e5e63669fcba8e2f0456437311c1d5d52b87da2"
+        "sha256": "af593adabd42048c5ce0e6d4628220235a6e4977c068db1a59c8b4c996bf5d30"
       },
       "fr": {
         "path": "locales/fr.json",
-        "sha256": "8f838940d87b5bcb199e0a6fc4b3ab6f2d6c6e3fc78cabb994cd40c1a0d684e8"
+        "sha256": "7cbbf8cb26f3502d19f14ab3d0f0db86185e6aa6e92cd5624fa22c913c50df56"
       }
     },
     "assets": {}

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "com.playervox.overcrow.warframe.fissures",
+  "id": "com.playervox.overcrow.warframe.invasions",
   "version": "1.0.0",
   "kind": "widget",
   "apiVersion": "1",
@@ -23,26 +23,26 @@
   },
   "display": {
     "showInPassive": true,
-    "xMilli": 420,
+    "xMilli": 500,
     "yMilli": 100,
-    "width": 480,
-    "height": 600,
+    "width": 500,
+    "height": 650,
     "scaleMilli": 1000,
     "transparent": true
   },
   "files": {
     "component": {
       "path": "component.wasm",
-      "sha256": "5505e2f4d5543bbff88eb9547c1af908aac1edc5e6921a313b72efb25d8290a7"
+      "sha256": "e3c744be541bd50acabcf55863c4ca5d95c63be1ea7f3d28ae70315e1bb0ea00"
     },
     "locales": {
       "en": {
         "path": "locales/en.json",
-        "sha256": "23fa5ad83d00a81a2794396a7e5e63669fcba8e2f0456437311c1d5d52b87da2"
+        "sha256": "c94c8d06648170a46ba01b393f0870b6825643c724249202c6524021027d1453"
       },
       "fr": {
         "path": "locales/fr.json",
-        "sha256": "8f838940d87b5bcb199e0a6fc4b3ab6f2d6c6e3fc78cabb994cd40c1a0d684e8"
+        "sha256": "e9a21d184c3139f2ce9e98429856a9f1e7f2768ccd52ec50cc556961e0dee80a"
       }
     },
     "assets": {}

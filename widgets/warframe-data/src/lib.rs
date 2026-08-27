@@ -23,6 +23,7 @@ const MAX_STATUS_ROWS: usize = 6;
 const MAX_FISSURES: usize = 96;
 const MAX_ACTIVITY_MISSIONS: usize = 3;
 const MAX_INVASIONS: usize = 32;
+const MAX_INVASION_ID_BYTES: usize = 60;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -242,7 +243,7 @@ fn validate_fissures(fissures: &mut [Fissure]) -> Result<(), DataError> {
     }
     let mut ids = BTreeSet::new();
     for fissure in fissures.iter() {
-        if !valid_id(&fissure.instance_id)
+        if !valid_public_id(&fissure.instance_id)
             || !ids.insert(fissure.instance_id.as_str())
             || !valid_display(&fissure.mission_type)
             || !valid_display(&fissure.node)
@@ -257,7 +258,7 @@ fn validate_fissures(fissures: &mut [Fissure]) -> Result<(), DataError> {
 }
 
 fn validate_activity(activity: &mut Activity) -> Result<(), DataError> {
-    if !valid_id(&activity.id)
+    if !valid_public_id(&activity.id)
         || !valid_display(&activity.boss)
         || activity.missions.is_empty()
         || activity.missions.len() > MAX_ACTIVITY_MISSIONS
@@ -267,7 +268,7 @@ fn validate_activity(activity: &mut Activity) -> Result<(), DataError> {
     validate_timestamp(activity.expires_at_secs, false)?;
     let mut ids = BTreeSet::new();
     for mission in &activity.missions {
-        if !valid_id(&mission.id)
+        if !valid_public_id(&mission.id)
             || !ids.insert(mission.id.as_str())
             || !valid_display(&mission.mission_type)
             || !valid_display(&mission.node)
@@ -291,11 +292,13 @@ fn validate_invasions(invasions: &mut [Invasion]) -> Result<(), DataError> {
     }
     let mut ids = BTreeSet::new();
     for invasion in invasions.iter() {
-        if !valid_id(&invasion.instance_id)
+        if !valid_public_id(&invasion.instance_id)
+            || invasion.instance_id.len() > MAX_INVASION_ID_BYTES
             || !ids.insert(invasion.instance_id.as_str())
             || !valid_display(&invasion.node)
             || !valid_display(&invasion.attacker_faction)
             || !valid_display(&invasion.defender_faction)
+            || invasion.goal == 0
             || invasion
                 .attacker_reward
                 .as_ref()
@@ -322,7 +325,7 @@ fn validate_timestamp(value: u64, allow_zero: bool) -> Result<(), DataError> {
         .ok_or(DataError)
 }
 
-fn valid_id(value: &str) -> bool {
+pub fn valid_public_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_ID_BYTES
         && value.bytes().all(|byte| {
@@ -452,6 +455,25 @@ mod tests {
     }
 
     #[test]
+    fn public_and_prefixed_invasion_ids_fit_the_widget_boundary() {
+        assert!(super::valid_public_id(&"a".repeat(64)));
+        assert!(!super::valid_public_id(&"a".repeat(65)));
+
+        let mut value: Value = serde_json::from_slice(FIXTURE).expect("worldstate fixture");
+        value["invasions"] = vec![invasion(&"a".repeat(60), 100)].into();
+        assert!(parse(&serde_json::to_vec(&value).expect("fixture JSON")).is_ok());
+        value["invasions"] = vec![invasion(&"a".repeat(61), 100)].into();
+        assert!(parse(&serde_json::to_vec(&value).expect("fixture JSON")).is_err());
+    }
+
+    #[test]
+    fn invasion_progress_requires_a_nonzero_goal() {
+        let mut value: Value = serde_json::from_slice(FIXTURE).expect("worldstate fixture");
+        value["invasions"] = vec![invasion("instance-a", 0)].into();
+        assert!(parse(&serde_json::to_vec(&value).expect("fixture JSON")).is_err());
+    }
+
+    #[test]
     fn envelope_bounds_are_exact() {
         let mut exact_payload = FIXTURE.to_vec();
         exact_payload.resize(MAX_PAYLOAD_BYTES, b' ');
@@ -503,6 +525,20 @@ mod tests {
             "expiresAtSecs": 1_777_000_900_u64,
             "steelPath": false,
             "railjack": false
+        })
+    }
+
+    fn invasion(instance_id: &str, goal: i64) -> Value {
+        json!({
+            "instanceId": instance_id,
+            "node": "Cassini · Saturn",
+            "attackerFaction": "Grineer",
+            "defenderFaction": "Corpus",
+            "attackerReward": null,
+            "defenderReward": null,
+            "count": 25,
+            "goal": goal,
+            "completed": false
         })
     }
 }

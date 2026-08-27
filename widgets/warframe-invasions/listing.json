@@ -1,0 +1,17 @@
+{
+  "author": "PlayerVox",
+  "spdxLicense": "AGPL-3.0-only",
+  "sourceUrl": "https://github.com/PlayerVox/playervox-overcrow-marketplace",
+  "localizations": [
+    {
+      "locale": "en",
+      "name": "Warframe Invasions",
+      "description": "Shows public invasions, progress, rewards, and local instance-scoped completion."
+    },
+    {
+      "locale": "fr",
+      "name": "Invasions Warframe",
+      "description": "Affiche les invasions publiques, leur progression, leurs récompenses et la complétion locale par instance."
+    }
+  ]
+}

@@ -11,7 +11,7 @@
     {
       "id": "com.playervox.overcrow.warframe.worldstate",
       "version": "1.0.0",
-      "sha256": "92d2dd8d82042c2d7f507939274e6b329eee6aae0312af68e0e6316c68311fe3"
+      "sha256": "d09322480d478b05f877e411d1eb3ef791b8ea76947d83c626cdf84c8afdae70"
     }
   ],
   "capabilities": {
@@ -33,7 +33,7 @@
   "files": {
     "component": {
       "path": "component.wasm",
-      "sha256": "5b4fbb9ceac07328b6516da7010f98d7385f60a87a796ab37665199ba14c8f36"
+      "sha256": "2285b353f5ab6cde6c9dec1b21646dc17e105467fe9cfe8e5ffecfccd342065b"
     },
     "locales": {
       "en": {

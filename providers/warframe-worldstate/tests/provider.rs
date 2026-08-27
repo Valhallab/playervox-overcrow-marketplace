@@ -142,6 +142,9 @@ fn epoch_forms_activity_identity_and_reward_counts_are_unambiguous() {
     let zero_reward = br#"{"Invasions":[{"_id":{"$oid":"000000000000000000000001"},"Node":"SolNode1","Faction":"FC_GRINEER","DefenderFaction":"FC_CORPUS","AttackerReward":{"countedItems":[{"ItemType":"/Lotus/Item","ItemCount":0}]}}]}"#;
     assert!(parse_worldstate(zero_reward, NOW_SECS).is_err());
 
+    let zero_goal = br#"{"Invasions":[{"_id":{"$oid":"000000000000000000000001"},"Node":"SolNode1","Faction":"FC_GRINEER","DefenderFaction":"FC_CORPUS","Goal":0}]}"#;
+    assert!(parse_worldstate(zero_goal, NOW_SECS).is_err());
+
     let duplicate_activities = br#"{"Sorties":[{"Boss":"BOSS","Expiry":1777001000,"Variants":[{"missionType":"MT_A","node":"NODE_A"}]},{"Boss":"BOSS","Expiry":1777001000,"Variants":[{"missionType":"MT_A","node":"NODE_A"}]}]}"#;
     let sortie = parse_worldstate(duplicate_activities, NOW_SECS)
         .expect("identical activity duplicate")
