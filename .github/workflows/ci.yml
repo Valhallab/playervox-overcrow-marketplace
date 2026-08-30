@@ -30,7 +30,14 @@ jobs:
           cargo test --workspace --all-targets --locked
       - name: Build and inspect all components
         run: |
-          cargo build --workspace --release --target wasm32-wasip2 --locked
+          cargo build --release --target wasm32-wasip2 --locked \
+            -p warframe-worldstate-provider \
+            -p warframe-status-widget \
+            -p warframe-fissures-widget \
+            -p warframe-sortie-archon-widget \
+            -p warframe-invasions-widget \
+            -p warframe-market-widget
+          component_stage=$(mktemp -d "${RUNNER_TEMP}/components.XXXXXXXXXX")
           for component in \
             warframe_worldstate_provider \
             warframe_status_widget \
@@ -38,8 +45,11 @@ jobs:
             warframe_sortie_archon_widget \
             warframe_invasions_widget \
             warframe_market_widget; do
+            install -m 0644 \
+              "target/wasm32-wasip2/release/${component}.wasm" \
+              "${component_stage}/${component}.wasm"
             cargo run -p marketplace-tool --locked -- inspect-component \
-              "target/wasm32-wasip2/release/${component}.wasm"
+              "${component_stage}/${component}.wasm"
           done
       - name: Generate deterministic local catalog and site
         run: |

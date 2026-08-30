@@ -13,11 +13,10 @@ first four use one hidden Warframe Worldstate Provider; Market is a standalone
 bundle. The site makes this dependency visible on each applicable card without
 showing the provider as a normal browseable package.
 
-Generate the local catalog and site only after the WebAssembly components are
-built:
+Generate the WebAssembly components, local catalog, and site with the bounded
+local build:
 
 ```sh
-cargo build --workspace --release --target wasm32-wasip2 --locked
 scripts/build-local.sh
 cargo run -p marketplace-tool --locked -- verify public/marketplace/v1/catalog.json
 ```

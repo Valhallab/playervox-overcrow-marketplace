@@ -17,7 +17,6 @@ production private key or passphrase.
 The local generation flow is:
 
 ```sh
-cargo build --workspace --release --target wasm32-wasip2 --locked
 scripts/build-local.sh
 cargo run -p marketplace-tool --locked -- verify public/marketplace/v1/catalog.json
 ```
