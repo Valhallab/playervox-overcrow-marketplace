@@ -10,6 +10,14 @@ repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 helper="$repo_root/scripts/sandbox-component-build.sh"
 scratch=$(/usr/bin/mktemp -d /tmp/marketplace-sandbox.XXXXXXXXXX)
 listener_pid=''
+write_build_plan() {
+    plan_target=$1
+    plan_package=$2
+    plan_artifact=$3
+    printf '%s\t%s\t%s\n' "$plan_package" "$plan_artifact" fixture \
+        >"$plan_target/build-plan.tsv"
+    /usr/bin/chmod 0600 "$plan_target/build-plan.tsv"
+}
 cleanup() {
     if test -n "$listener_pid"; then
         /usr/bin/kill "$listener_pid" 2>/dev/null || true
@@ -76,27 +84,42 @@ printf '%s\n' \
     '[[package]]' \
     'name = "sandbox-canary"' \
     'version = "0.1.0"' >"$source_root/Cargo.lock"
+printf '%s\n' \
+    '[toolchain]' \
+    'channel = "1.98.0"' \
+    'profile = "minimal"' >"$source_root/rust-toolchain.toml"
 printf '%s\n' '#[unsafe(no_mangle)] pub extern "C" fn canary() {}' >"$source_root/src/lib.rs"
 printf '%s\n' \
-    'use std::{env, fs, net::TcpStream};' \
+    'use std::{env, fs, io::Read, net::TcpStream};' \
     'fn main() {' \
-    "    if fs::read(\"$canary\").is_ok() { let _ = fs::write(\"/output/canary-leak\", b\"seen\"); }" \
-    "    if TcpStream::connect((\"127.0.0.1\", $port)).is_ok() { let _ = fs::write(\"/output/network-leak\", b\"seen\"); }" \
-    "    if env::vars_os().any(|(key, value)| key == \"OVERCROW_PRIVATE_ARGUMENT\" || value == \"$private_argument\") { let _ = fs::write(\"/output/environment-leak\", b\"seen\"); }" \
-    "    if env::var_os(\"HOME\").as_deref() != Some(std::ffi::OsStr::new(\"/home/build\")) { let _ = fs::write(\"/output/home-leak\", b\"seen\"); }" \
-    "    if fs::read_dir(\"$parent_home\").is_ok() { let _ = fs::write(\"/output/host-home-leak\", b\"seen\"); }" \
+    '    let mut inherited = Vec::new();' \
+    '    let _ = std::io::stdin().read_to_end(&mut inherited);' \
+    '    if inherited.windows(b"INHERITED-PIPE-CANARY".len()).any(|window| window == b"INHERITED-PIPE-CANARY") { panic!("stdin leak"); }' \
+    '    let source_created = fs::write("/source/source-write-canary", b"changed").is_ok();' \
+    '    let source_mutated = fs::write("/source/src/lib.rs", b"changed").is_ok();' \
+    '    if source_created || source_mutated { panic!("source write"); }' \
+    "    if fs::read(\"$canary\").is_ok() { panic!(\"canary leak\"); }" \
+    "    if TcpStream::connect((\"127.0.0.1\", $port)).is_ok() { panic!(\"network leak\"); }" \
+    "    if env::vars_os().any(|(key, value)| key == \"OVERCROW_PRIVATE_ARGUMENT\" || value == \"$private_argument\") { panic!(\"environment leak\"); }" \
+    "    if env::var_os(\"HOME\").as_deref() != Some(std::ffi::OsStr::new(\"/home/build\")) { panic!(\"home leak\"); }" \
+    "    if fs::read_dir(\"$parent_home\").is_ok() { panic!(\"host home leak\"); }" \
     '    if let Ok(entries) = fs::read_dir("/proc") {' \
     '        for entry in entries.flatten() {' \
     '            let path = entry.path().join("cmdline");' \
-    "            if fs::read(path).is_ok_and(|bytes| bytes.windows(${#private_argument}).any(|window| window == \"$private_argument\".as_bytes())) { let _ = fs::write(\"/output/process-leak\", b\"seen\"); }" \
+    "            if fs::read(path).is_ok_and(|bytes| bytes.windows(${#private_argument}).any(|window| window == \"$private_argument\".as_bytes())) { panic!(\"process leak\"); }" \
     '        }' \
     '    }' \
     '}' >"$source_root/build.rs"
+write_build_plan "$target_root" sandbox-canary sandbox_canary
 
 /usr/bin/cp -a -- "$source_root" "$scratch/source-before"
-OVERCROW_PRIVATE_ARGUMENT="$private_argument" sh "$helper" "$source_root" "$target_root"
+printf '%s\n' 'INHERITED-PIPE-CANARY' \
+    | OVERCROW_PRIVATE_ARGUMENT="$private_argument" \
+        sh "$helper" "$source_root" "$target_root"
 /usr/bin/diff --recursive --no-dereference "$scratch/source-before" "$source_root"
-test -f "$target_root/target/wasm32-wasip2/release/sandbox_canary.wasm"
+test ! -e "$source_root/source-write-canary" \
+    && test ! -L "$source_root/source-write-canary"
+test -f "$target_root/artifacts/sandbox_canary.wasm"
 for leak in canary-leak network-leak environment-leak home-leak host-home-leak process-leak; do
     test ! -e "$target_root/$leak" && test ! -L "$target_root/$leak"
 done
@@ -122,19 +145,145 @@ printf '%s\n' \
     '[[package]]' \
     'name = "include-canary"' \
     'version = "0.1.0"' >"$include_source/Cargo.lock"
+printf '%s\n' \
+    '[toolchain]' \
+    'channel = "1.98.0"' \
+    'profile = "minimal"' >"$include_source/rust-toolchain.toml"
 printf 'pub static CANARY: &[u8] = include_bytes!("%s");\n' "$canary" >"$include_source/src/lib.rs"
+write_build_plan "$include_target" include-canary include_canary
 if sh "$helper" "$include_source" "$include_target"; then
     printf '%s\n' 'error: include_bytes observed an external canary' >&2
     exit 1
 fi
 test ! -e "$include_target/include-leak" && test ! -L "$include_target/include-leak"
 
+fake_user="$scratch/fake-user"
+fake_toolchain="$fake_user/.rustup/toolchains/9.99.9-x86_64-unknown-linux-gnu"
+/usr/bin/install -d -m 0755 \
+    "$fake_toolchain/bin" \
+    "$fake_toolchain/lib/rustlib/wasm32-wasip2" \
+    "$fake_user/.cargo/registry/index" \
+    "$fake_user/.cargo/registry/cache" \
+    "$fake_user/.cargo/registry/src"
+printf '%s\n' '#!/bin/sh' 'exit 0' >"$fake_toolchain/bin/cargo"
+printf '%s\n' '#!/bin/sh' \
+    "printf '%s\\n' 'rustc 9.99.9 (fake 2099-01-01)'" \
+    "printf '%s\\n' 'binary: rustc'" \
+    "printf '%s\\n' 'commit-hash: fake'" \
+    "printf '%s\\n' 'commit-date: 2099-01-01'" \
+    "printf '%s\\n' 'host: x86_64-unknown-linux-gnu'" \
+    "printf '%s\\n' 'release: 9.99.9'" \
+    "printf '%s\\n' 'LLVM version: 99.0.0'" >"$fake_toolchain/bin/rustc"
+/usr/bin/chmod 0755 "$fake_toolchain/bin/cargo" "$fake_toolchain/bin/rustc"
+fake_target="$scratch/fake-toolchain-output"
+/usr/bin/install -d -m 0700 "$fake_target"
+write_build_plan "$fake_target" sandbox-canary sandbox_canary
+if env PATH="$fake_toolchain/bin:/usr/bin:/bin" \
+        sh "$helper" "$source_root" "$fake_target"; then
+    printf '%s\n' 'error: mismatched Rust toolchain was accepted' >&2
+    exit 1
+fi
+test "$(/usr/bin/find "$fake_target" -mindepth 1 -maxdepth 1 -printf '%f\n')" = build-plan.tsv
+
+fill_source="$scratch/fill-source"
+fill_target="$scratch/fill-output"
+/usr/bin/install -d -m 0700 "$fill_source/src" "$fill_target"
+printf '%s\n' \
+    '[package]' \
+    'name = "output-fill-canary"' \
+    'version = "0.1.0"' \
+    'edition = "2024"' \
+    'build = "build.rs"' \
+    '' \
+    '[lib]' \
+    'crate-type = ["cdylib"]' >"$fill_source/Cargo.toml"
+printf '%s\n' \
+    '# This file is automatically @generated by Cargo.' \
+    '# It is not intended for manual editing.' \
+    'version = 4' \
+    '' \
+    '[[package]]' \
+    'name = "output-fill-canary"' \
+    'version = "0.1.0"' >"$fill_source/Cargo.lock"
+printf '%s\n' \
+    '[toolchain]' \
+    'channel = "1.98.0"' \
+    'profile = "minimal"' >"$fill_source/rust-toolchain.toml"
+printf '%s\n' '#[unsafe(no_mangle)] pub extern "C" fn canary() {}' \
+    >"$fill_source/src/lib.rs"
+printf '%s\n' \
+    'use std::{env, fs::File, io::Write};' \
+    'fn main() {' \
+    '    let path = std::path::PathBuf::from(env::var_os("CARGO_TARGET_DIR").unwrap()).join("output-fill");' \
+    '    let mut file = File::create(path).unwrap();' \
+    '    let chunk = vec![0x5a; 1024 * 1024];' \
+    '    for _ in 0..300 { file.write_all(&chunk).unwrap(); }' \
+    '    file.sync_all().unwrap();' \
+    '}' >"$fill_source/build.rs"
+write_build_plan "$fill_target" output-fill-canary output_fill_canary
+if sh "$helper" "$fill_source" "$fill_target"; then
+    printf '%s\n' 'error: output-filling build was accepted' >&2
+    exit 1
+fi
+fill_target_kib=$(/usr/bin/du -sk "$fill_target" | /usr/bin/cut -f 1)
+test "$fill_target_kib" -lt 4096
+
+hang_source="$scratch/hang-source"
+hang_target="$scratch/hang-output"
+/usr/bin/install -d -m 0700 "$hang_source/src" "$hang_target"
+printf '%s\n' \
+    '[package]' \
+    'name = "hang-canary"' \
+    'version = "0.1.0"' \
+    'edition = "2024"' \
+    'build = "build.rs"' \
+    '' \
+    '[lib]' \
+    'crate-type = ["cdylib"]' >"$hang_source/Cargo.toml"
+printf '%s\n' \
+    '# This file is automatically @generated by Cargo.' \
+    '# It is not intended for manual editing.' \
+    'version = 4' \
+    '' \
+    '[[package]]' \
+    'name = "hang-canary"' \
+    'version = "0.1.0"' >"$hang_source/Cargo.lock"
+printf '%s\n' \
+    '[toolchain]' \
+    'channel = "1.98.0"' \
+    'profile = "minimal"' >"$hang_source/rust-toolchain.toml"
+printf '%s\n' '#[unsafe(no_mangle)] pub extern "C" fn canary() {}' \
+    >"$hang_source/src/lib.rs"
+printf '%s\n' \
+    'fn main() {' \
+    '    loop { std::hint::spin_loop(); }' \
+    '}' >"$hang_source/build.rs"
+write_build_plan "$hang_target" hang-canary hang_canary
+set +e
+/usr/bin/timeout --signal=TERM --kill-after=2 30 \
+    sh "$helper" "$hang_source" "$hang_target"
+hang_status=$?
+set -e
+case "$hang_status" in
+    0)
+        printf '%s\n' 'error: compile-time hang was accepted' >&2
+        exit 1
+        ;;
+    124 | 137)
+        printf '%s\n' 'error: compile-time hang escaped internal limits' >&2
+        exit 1
+        ;;
+esac
+hang_target_kib=$(/usr/bin/du -sk "$hang_target" | /usr/bin/cut -f 1)
+test "$hang_target_kib" -lt 4096
+
 missing_target="$scratch/missing-bwrap-output"
 /usr/bin/install -d -m 0700 "$missing_target"
+write_build_plan "$missing_target" sandbox-canary sandbox_canary
 if env PATH=/no-trusted-tools /bin/sh "$helper" "$source_root" "$missing_target"; then
     printf '%s\n' 'error: sandbox build succeeded without Bubblewrap' >&2
     exit 1
 fi
-test -z "$(/usr/bin/find "$missing_target" -mindepth 1 -print -quit)"
+test "$(/usr/bin/find "$missing_target" -mindepth 1 -maxdepth 1 -printf '%f\n')" = build-plan.tsv
 
 printf '%s\n' 'Component sandbox smoke tests passed'

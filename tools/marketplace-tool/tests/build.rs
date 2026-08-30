@@ -13,6 +13,68 @@ const FIXED_GENERATED: &str = "2026-08-25T00:00:00Z";
 const FIXED_EXPIRES: &str = "2036-08-25T00:00:00Z";
 
 #[test]
+fn snapshot_plan_accepts_only_a_bounded_regular_reviewed_tree() {
+    let fixture = tempfile::tempdir().expect("fixture repository");
+    initialize_git_fixture(fixture.path());
+    fs::write(fixture.path().join("alpha.txt"), b"alpha\n").expect("regular file");
+    fs::write(fixture.path().join("build.sh"), b"#!/bin/sh\nexit 0\n").expect("script");
+    fs::set_permissions(
+        fixture.path().join("build.sh"),
+        Permissions::from_mode(0o755),
+    )
+    .expect("script mode");
+    let revision = commit_git_fixture(fixture.path(), "regular tree");
+    let output = snapshot_plan(fixture.path(), &revision);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"2\t23\n");
+    assert!(output.stderr.is_empty());
+
+    let fixture = tempfile::tempdir().expect("symlink repository");
+    initialize_git_fixture(fixture.path());
+    fs::write(fixture.path().join("target"), b"target\n").expect("symlink target");
+    symlink("target", fixture.path().join("link")).expect("tracked symlink");
+    let revision = commit_git_fixture(fixture.path(), "symlink tree");
+    assert!(!snapshot_plan(fixture.path(), &revision).status.success());
+
+    let fixture = tempfile::tempdir().expect("malformed path repository");
+    initialize_git_fixture(fixture.path());
+    fs::write(fixture.path().join("bad\nname"), b"bad\n").expect("malformed path");
+    let revision = commit_git_fixture(fixture.path(), "malformed path");
+    assert!(!snapshot_plan(fixture.path(), &revision).status.success());
+
+    let fixture = tempfile::tempdir().expect("entry limit repository");
+    initialize_git_fixture(fixture.path());
+    fs::create_dir(fixture.path().join("entries")).expect("entry directory");
+    for index in 0..1_001 {
+        fs::write(fixture.path().join(format!("entries/{index:04}")), b"x").expect("bounded entry");
+    }
+    let revision = commit_git_fixture(fixture.path(), "excessive entries");
+    assert!(!snapshot_plan(fixture.path(), &revision).status.success());
+
+    let fixture = tempfile::tempdir().expect("file limit repository");
+    initialize_git_fixture(fixture.path());
+    fs::write(
+        fixture.path().join("oversized"),
+        vec![b'x'; 8 * 1024 * 1024 + 1],
+    )
+    .expect("oversized file");
+    let revision = commit_git_fixture(fixture.path(), "oversized file");
+    assert!(!snapshot_plan(fixture.path(), &revision).status.success());
+
+    let fixture = tempfile::tempdir().expect("aggregate limit repository");
+    initialize_git_fixture(fixture.path());
+    for index in 0..3 {
+        fs::write(
+            fixture.path().join(format!("aggregate-{index}")),
+            vec![b'a' + index; 6 * 1024 * 1024],
+        )
+        .expect("aggregate file");
+    }
+    let revision = commit_git_fixture(fixture.path(), "excessive aggregate");
+    assert!(!snapshot_plan(fixture.path(), &revision).status.success());
+}
+
+#[test]
 fn build_plan_emits_only_validated_fixed_fields() {
     let fixture = tempfile::tempdir().expect("fixture repository");
     prepare_build_plan_fixture(fixture.path());
@@ -283,6 +345,96 @@ fn bind_build_rejects_missing_duplicate_extra_or_unknown_bindings() {
 }
 
 #[test]
+fn bind_build_requires_exact_dependency_bearing_provider_bindings_without_partial_rewrites() {
+    let fixture = tempfile::tempdir().expect("provider binding repository");
+    prepare_provider_bind_fixture(fixture.path());
+    let source = fixture.path().join("examples/hello-widget");
+    let manifest_path = source.join("manifest.json");
+    let before: Value = serde_json::from_slice(&fs::read(&manifest_path).expect("manifest"))
+        .expect("manifest JSON");
+    let bindings = fixture.path().join("bindings.json");
+    write_private_bindings(
+        &bindings,
+        serde_json::json!({
+            "schemaVersion": 1,
+            "components": [{
+                "sourceDirectory": "examples/hello-widget",
+                "sha256": "11".repeat(32)
+            }],
+            "providers": [{
+                "id": "com.playervox.overcrow.warframe.worldstate",
+                "version": "1.0.0",
+                "sha256": "22".repeat(32)
+            }]
+        }),
+    );
+    assert!(bind_build(fixture.path(), &bindings).status.success());
+    let mut expected = before;
+    expected["files"]["component"]["sha256"] = Value::String("11".repeat(32));
+    expected["dependencies"][0]["sha256"] = Value::String("22".repeat(32));
+    let after: Value = serde_json::from_slice(&fs::read(&manifest_path).expect("bound manifest"))
+        .expect("bound manifest JSON");
+    assert_eq!(after, expected);
+
+    for providers in [
+        serde_json::json!([]),
+        serde_json::json!([
+            {
+                "id": "com.playervox.overcrow.warframe.worldstate",
+                "version": "1.0.0",
+                "sha256": "22".repeat(32)
+            },
+            {
+                "id": "com.playervox.overcrow.extra",
+                "version": "1.0.0",
+                "sha256": "33".repeat(32)
+            }
+        ]),
+        serde_json::json!([
+            {
+                "id": "com.playervox.overcrow.warframe.worldstate",
+                "version": "1.0.0",
+                "sha256": "22".repeat(32)
+            },
+            {
+                "id": "com.playervox.overcrow.warframe.worldstate",
+                "version": "1.0.0",
+                "sha256": "33".repeat(32)
+            }
+        ]),
+        serde_json::json!([{
+            "id": "com.playervox.overcrow.warframe.worldstate",
+            "version": "1.0.0",
+            "sha256": "22".repeat(32),
+            "url": "https://creator.invalid/provider"
+        }]),
+    ] {
+        let fixture = tempfile::tempdir().expect("rejected provider binding repository");
+        prepare_provider_bind_fixture(fixture.path());
+        let manifest_path = fixture.path().join("examples/hello-widget/manifest.json");
+        let before = fs::read(&manifest_path).expect("manifest before rejection");
+        let bindings = fixture.path().join("bindings.json");
+        write_private_bindings(
+            &bindings,
+            serde_json::json!({
+                "schemaVersion": 1,
+                "components": [{
+                    "sourceDirectory": "examples/hello-widget",
+                    "sha256": "11".repeat(32)
+                }],
+                "providers": providers
+            }),
+        );
+        assert!(!bind_build(fixture.path(), &bindings).status.success());
+        assert_eq!(
+            fs::read(&manifest_path).expect("manifest after rejection"),
+            before,
+            "provider rejection must not rewrite any manifest bytes"
+        );
+    }
+}
+
+#[test]
 fn cli_build_is_reproducible_and_verifies_its_complete_source() {
     let fixture = tempfile::tempdir().expect("fixture repository");
     let target = tempfile::tempdir().expect("isolated cargo target");
@@ -480,6 +632,90 @@ fn build_plan(repository: &Path) -> Output {
         .expect("run build plan")
 }
 
+fn snapshot_plan(repository: &Path, revision: &str) -> Output {
+    tool()
+        .args(["snapshot-plan", "--repository"])
+        .arg(repository)
+        .arg("--revision")
+        .arg(revision)
+        .output()
+        .expect("run snapshot plan")
+}
+
+fn bind_build(repository: &Path, bindings: &Path) -> Output {
+    tool()
+        .args(["bind-build", "--repository"])
+        .arg(repository)
+        .arg("--bindings")
+        .arg(bindings)
+        .output()
+        .expect("bind build")
+}
+
+fn write_private_bindings(path: &Path, value: Value) {
+    let mut bytes = serde_json::to_vec(&value).expect("bindings JSON");
+    bytes.push(b'\n');
+    fs::write(path, bytes).expect("bindings fixture");
+    fs::set_permissions(path, Permissions::from_mode(0o600)).expect("private bindings");
+}
+
+fn initialize_git_fixture(repository: &Path) {
+    assert!(
+        Command::new("/usr/bin/git")
+            .args(["init", "--quiet"])
+            .arg(repository)
+            .status()
+            .expect("initialize Git fixture")
+            .success()
+    );
+    for (key, value) in [
+        ("user.name", "Marketplace Tests"),
+        ("user.email", "marketplace-tests@invalid.example"),
+    ] {
+        assert!(
+            Command::new("/usr/bin/git")
+                .args(["-C"])
+                .arg(repository)
+                .args(["config", key, value])
+                .status()
+                .expect("configure Git fixture")
+                .success()
+        );
+    }
+}
+
+fn commit_git_fixture(repository: &Path, message: &str) -> String {
+    assert!(
+        Command::new("/usr/bin/git")
+            .args(["-C"])
+            .arg(repository)
+            .args(["add", "--all"])
+            .status()
+            .expect("stage Git fixture")
+            .success()
+    );
+    assert!(
+        Command::new("/usr/bin/git")
+            .args(["-C"])
+            .arg(repository)
+            .args(["commit", "--quiet", "-m", message])
+            .status()
+            .expect("commit Git fixture")
+            .success()
+    );
+    let revision = Command::new("/usr/bin/git")
+        .args(["-C"])
+        .arg(repository)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .expect("resolve Git fixture revision");
+    assert!(revision.status.success());
+    String::from_utf8(revision.stdout)
+        .expect("revision UTF-8")
+        .trim()
+        .to_owned()
+}
+
 fn target(source: &str, package: &str, artifact: &str) -> Value {
     serde_json::json!({
         "sourceDirectory": source,
@@ -536,6 +772,20 @@ fn prepare_bind_fixture(repository: &Path) {
             source.join(relative),
         )
         .expect("metadata fixture");
+    }
+}
+
+fn prepare_provider_bind_fixture(repository: &Path) {
+    prepare_build_plan_fixture(repository);
+    let source = repository.join("examples/hello-widget");
+    for relative in ["manifest.json", "listing.json"] {
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../widgets/warframe-status")
+                .join(relative),
+            source.join(relative),
+        )
+        .expect("dependency-bearing metadata fixture");
     }
 }
 

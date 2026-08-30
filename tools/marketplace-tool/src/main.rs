@@ -34,6 +34,11 @@ use crate::{
 const MAX_CARGO_METADATA_BYTES: usize = 16 * 1024 * 1024;
 const CARGO_METADATA_TIMEOUT: Duration = Duration::from_secs(30);
 const CRATES_IO_SOURCE: &str = "registry+https://github.com/rust-lang/crates.io-index";
+const MAX_SNAPSHOT_PLAN_BYTES: usize = 1024 * 1024;
+const MAX_SNAPSHOT_ENTRIES: usize = 1_000;
+const MAX_SNAPSHOT_FILE_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_SNAPSHOT_AGGREGATE_BYTES: u64 = 16 * 1024 * 1024;
+const SNAPSHOT_PLAN_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy)]
 enum AppError {
@@ -118,6 +123,7 @@ fn run(arguments: Vec<OsString>) -> Result<(), AppError> {
         Some("policy") => policy(&arguments),
         Some("build-plan") => build_plan(&arguments),
         Some("bind-build") => bind_build(&arguments),
+        Some("snapshot-plan") => snapshot_plan(&arguments),
         _ => Err(AppError::Arguments),
     }
 }
@@ -318,6 +324,150 @@ fn build_plan(arguments: &[String]) -> Result<(), AppError> {
     std::io::stdout()
         .write_all(output.as_bytes())
         .map_err(|_| AppError::Output)
+}
+
+fn snapshot_plan(arguments: &[String]) -> Result<(), AppError> {
+    if arguments.len() != 5 || arguments[1] != "--repository" || arguments[3] != "--revision" {
+        return Err(AppError::Arguments);
+    }
+    let repository = Path::new(&arguments[2]);
+    if !safe_owned_root(repository) || !valid_object_id(&arguments[4]) {
+        return Err(AppError::Policy);
+    }
+    let mut child = Command::new("/usr/bin/git")
+        .args([
+            "--no-replace-objects",
+            "-C",
+            repository.to_str().ok_or(AppError::Policy)?,
+            "ls-tree",
+            "-r",
+            "-z",
+            "-l",
+            "--full-tree",
+            &arguments[4],
+        ])
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("LC_ALL", "C")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| AppError::Policy)?;
+    let stdout = child.stdout.take().ok_or(AppError::Policy)?;
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout
+            .take((MAX_SNAPSHOT_PLAN_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map(|_| bytes)
+    });
+    let deadline = Instant::now() + SNAPSHOT_PLAN_TIMEOUT;
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|_| AppError::Policy)? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(AppError::Policy);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let bytes = reader
+        .join()
+        .map_err(|_| AppError::Policy)?
+        .map_err(|_| AppError::Policy)?;
+    if !status.success() || bytes.len() > MAX_SNAPSHOT_PLAN_BYTES {
+        return Err(AppError::Policy);
+    }
+    let (entries, aggregate) = validate_snapshot_plan(&bytes)?;
+    let output = format!("{entries}\t{aggregate}\n");
+    std::io::stdout()
+        .write_all(output.as_bytes())
+        .map_err(|_| AppError::Output)
+}
+
+fn validate_snapshot_plan(bytes: &[u8]) -> Result<(usize, u64), AppError> {
+    let mut paths = BTreeSet::new();
+    let mut aggregate = 0_u64;
+    for record in bytes
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+    {
+        let tab = record
+            .iter()
+            .position(|byte| *byte == b'\t')
+            .ok_or(AppError::Policy)?;
+        let header = std::str::from_utf8(&record[..tab]).map_err(|_| AppError::Policy)?;
+        let mut fields = header.split_ascii_whitespace();
+        let mode = fields.next().ok_or(AppError::Policy)?;
+        let kind = fields.next().ok_or(AppError::Policy)?;
+        let object = fields.next().ok_or(AppError::Policy)?;
+        let size = fields
+            .next()
+            .and_then(|value| value.parse::<u64>().ok())
+            .ok_or(AppError::Policy)?;
+        if fields.next().is_some()
+            || !matches!(mode, "100644" | "100755")
+            || kind != "blob"
+            || !valid_object_id(object)
+            || size > MAX_SNAPSHOT_FILE_BYTES
+        {
+            return Err(AppError::Policy);
+        }
+        let path = std::str::from_utf8(&record[tab + 1..]).map_err(|_| AppError::Policy)?;
+        if !valid_snapshot_path(path) || !paths.insert(path) {
+            return Err(AppError::Policy);
+        }
+        if paths.len() > MAX_SNAPSHOT_ENTRIES {
+            return Err(AppError::Policy);
+        }
+        aggregate = aggregate.checked_add(size).ok_or(AppError::Policy)?;
+        if aggregate > MAX_SNAPSHOT_AGGREGATE_BYTES {
+            return Err(AppError::Policy);
+        }
+    }
+    if paths.is_empty() {
+        return Err(AppError::Policy);
+    }
+    Ok((paths.len(), aggregate))
+}
+
+fn valid_object_id(value: &str) -> bool {
+    matches!(value.len(), 40 | 64)
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn valid_snapshot_path(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 240
+        && !value.starts_with('/')
+        && !value.ends_with('/')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'/'))
+        && value
+            .split('/')
+            .all(|component| !component.is_empty() && !matches!(component, "." | ".."))
+}
+
+fn safe_owned_root(path: &Path) -> bool {
+    if !path.is_absolute() {
+        return false;
+    }
+    let Ok(canonical) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    if canonical != path {
+        return false;
+    }
+    File::open(path).is_ok_and(|directory| owned_directory_is_safe(&directory, false))
 }
 
 fn bind_build(arguments: &[String]) -> Result<(), AppError> {

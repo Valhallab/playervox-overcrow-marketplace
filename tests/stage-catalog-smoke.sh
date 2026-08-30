@@ -8,7 +8,14 @@ fi
 
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 scratch=$(/usr/bin/mktemp -d /tmp/marketplace-stage.XXXXXXXXXX)
-cleanup() { /usr/bin/rm -rf -- "$scratch"; }
+stage_pid=''
+cleanup() {
+    if test -n "$stage_pid"; then
+        /usr/bin/kill "$stage_pid" 2>/dev/null || true
+        wait "$stage_pid" 2>/dev/null || true
+    fi
+    /usr/bin/rm -rf -- "$scratch"
+}
 trap cleanup EXIT HUP INT TERM
 fixture="$scratch/repository"
 /usr/bin/install -d -m 0700 "$fixture"
@@ -81,5 +88,72 @@ for widget in status fissures sortie-archon invasions; do
     /usr/bin/grep -F "\"sha256\": \"$provider_digest\"" \
         "$staged/widgets/warframe-$widget/manifest.json" >/dev/null
 done
+
+production_fixture="$scratch/production-repository"
+/usr/bin/install -d -m 0700 "$production_fixture"
+for path in .gitignore Cargo.toml Cargo.lock rust-toolchain.toml marketplace fixtures providers widgets sdk wit examples tools web scripts; do
+    /usr/bin/cp -R -- "$repo_root/$path" "$production_fixture/"
+done
+/usr/bin/git init --quiet "$production_fixture"
+/usr/bin/git -C "$production_fixture" config user.name 'Marketplace Tests'
+/usr/bin/git -C "$production_fixture" config user.email 'marketplace-tests@invalid.example'
+/usr/bin/git -C "$production_fixture" add --all
+/usr/bin/git -C "$production_fixture" commit --quiet -m 'reviewed production fixture'
+
+printf '%s\n' 'ignored environment secret' \
+    >"$production_fixture/widgets/warframe-status/.env"
+printf '%s\n' 'ignored signing key' \
+    >"$production_fixture/widgets/warframe-status/ambient.key"
+printf '%s\n' 'ignored temporary payload' \
+    >"$production_fixture/widgets/warframe-status/ambient.tmp"
+production_stage="$scratch/production-stage"
+sh "$production_fixture/scripts/stage-catalog-repository.sh" \
+    --mode production "$production_stage"
+for relative in \
+        widgets/warframe-status/.env \
+        widgets/warframe-status/ambient.key \
+        widgets/warframe-status/ambient.tmp; do
+    if test -e "$production_stage/$relative" || test -L "$production_stage/$relative"; then
+        printf '%s\n' 'error: ignored ambient bytes entered production source' >&2
+        exit 1
+    fi
+done
+
+printf '%s\n' 'dirty candidate bytes' \
+    >>"$production_fixture/marketplace/targets.json"
+if sh "$production_fixture/scripts/stage-catalog-repository.sh" \
+        --mode production "$scratch/dirty-production-stage"; then
+    printf '%s\n' 'error: dirty production provenance was accepted' >&2
+    exit 1
+fi
+test ! -e "$scratch/dirty-production-stage" \
+    && test ! -L "$scratch/dirty-production-stage"
+
+/usr/bin/git --no-replace-objects -C "$production_fixture" \
+    show HEAD:marketplace/targets.json \
+    >"$production_fixture/marketplace/targets.json"
+race_stage="$scratch/race-production-stage"
+sh "$production_fixture/scripts/stage-catalog-repository.sh" \
+    --mode production "$race_stage" &
+stage_pid=$!
+attempt=0
+while test -z "$(/usr/bin/find "$scratch" -path "${race_stage}.build.*/repository/Cargo.toml" -print -quit)"; do
+    attempt=$((attempt + 1))
+    if test "$attempt" -ge 600; then
+        printf '%s\n' 'error: production race fixture did not reach its snapshot' >&2
+        exit 1
+    fi
+    /usr/bin/sleep 0.05
+done
+printf '%s\n' 'changed during production staging' >"$production_fixture/race-marker"
+/usr/bin/git -C "$production_fixture" add race-marker
+/usr/bin/git -C "$production_fixture" commit --quiet -m 'race production candidate'
+if wait "$stage_pid"; then
+    stage_pid=''
+    printf '%s\n' 'error: changed production provenance was accepted' >&2
+    exit 1
+fi
+stage_pid=''
+test ! -e "$race_stage" && test ! -L "$race_stage"
 
 printf '%s\n' 'Catalog staging smoke tests passed'
