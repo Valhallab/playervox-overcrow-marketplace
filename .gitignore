@@ -1,5 +1,6 @@
 /target/
 /public/
+/.worktrees/
 .env*
 *.key
 *.pem
