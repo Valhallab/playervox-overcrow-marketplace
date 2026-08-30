@@ -63,14 +63,15 @@ exact available languages in the manifest, keep the default complete, and use
 `LocalizedText` for exact-locale selection with default fallback. See the
 [localization policy](localization.md).
 
-The application’s explicit local-unverified installation flow is not yet
-user-available. When that integration lands, local packages will receive the
-same manifest validation and sandbox as signed packages and will remain
-disabled until the user enables them.
+The Control Center can install a local package only after an explicit
+unverified-development confirmation. Local packages receive the same manifest,
+archive, and sandbox validation as signed packages and remain disabled until
+the user enables them.
 
 For local catalog development, build all components, run
 `scripts/build-local.sh`, verify `public/marketplace/v1/catalog.json`, then
-serve `public` on loopback. The future Control Center installs a local package
-only after an explicit unverified-development confirmation and leaves it
-disabled. Do not produce or use a production-signed package from this
-repository.
+serve `public` on loopback. Debug OverCrow builds can browse the signed
+development catalog at the fixed numeric-loopback origin; release builds reject
+that origin. Separately, the Control Center accepts an individual local package
+only from its native file picker. Do not produce or use a production-signed
+package from this repository.
