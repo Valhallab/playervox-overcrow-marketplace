@@ -2,7 +2,7 @@ use std::{
     fs::{self, Permissions},
     os::unix::fs::{PermissionsExt as _, symlink},
     path::Path,
-    process::Command,
+    process::{Command, Output},
 };
 
 use image::{ExtendedColorType, ImageEncoder as _, codecs::png::PngEncoder};
@@ -11,6 +11,276 @@ use serde_json::Value;
 
 const FIXED_GENERATED: &str = "2026-08-25T00:00:00Z";
 const FIXED_EXPIRES: &str = "2036-08-25T00:00:00Z";
+
+#[test]
+fn build_plan_emits_only_validated_fixed_fields() {
+    let fixture = tempfile::tempdir().expect("fixture repository");
+    prepare_build_plan_fixture(fixture.path());
+
+    let output = build_plan(fixture.path());
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("UTF-8 plan"),
+        "hello-widget\thello_widget\texamples/hello-widget\n",
+    );
+    assert!(output.stderr.is_empty(), "successful plan stays quiet");
+    assert!(
+        !fixture.path().join("build-script-ran").exists(),
+        "metadata discovery must not execute creator code"
+    );
+}
+
+#[test]
+fn build_plan_rejects_invalid_and_excessive_target_fields() {
+    for targets in [
+        serde_json::json!([target(
+            " examples/hello-widget",
+            "hello-widget",
+            "hello_widget"
+        )]),
+        serde_json::json!([target(
+            "/examples/hello-widget",
+            "hello-widget",
+            "hello_widget"
+        )]),
+        serde_json::json!([target(
+            "examples/../hello-widget",
+            "hello-widget",
+            "hello_widget"
+        )]),
+        serde_json::json!([target(
+            "examples/hello-widget",
+            "hello widget",
+            "hello_widget"
+        )]),
+        serde_json::json!([target(
+            "examples/hello-widget",
+            "hello-widget",
+            "hello-widget"
+        )]),
+        serde_json::json!([{
+            "sourceDirectory": "examples/hello-widget",
+            "cargoPackage": "hello-widget",
+            "componentArtifact": "hello_widget",
+            "status": "verified",
+            "command": "creator-controlled"
+        }]),
+    ] {
+        let fixture = tempfile::tempdir().expect("fixture repository");
+        prepare_build_plan_fixture(fixture.path());
+        write_targets(fixture.path(), targets);
+        assert!(!build_plan(fixture.path()).status.success());
+    }
+
+    let fixture = tempfile::tempdir().expect("fixture repository");
+    prepare_build_plan_fixture(fixture.path());
+    let targets: Vec<_> = (0..501)
+        .map(|index| {
+            target(
+                &format!("examples/widget-{index}"),
+                &format!("widget-{index}"),
+                &format!("widget_{index}"),
+            )
+        })
+        .collect();
+    write_targets(fixture.path(), serde_json::Value::Array(targets));
+    assert!(!build_plan(fixture.path()).status.success());
+}
+
+#[test]
+fn build_plan_rejects_duplicate_package_and_artifact_identifiers() {
+    for second in [
+        target("examples/second", "hello-widget", "second"),
+        target("examples/second", "second", "hello_widget"),
+    ] {
+        let fixture = tempfile::tempdir().expect("fixture repository");
+        prepare_build_plan_fixture(fixture.path());
+        write_targets(
+            fixture.path(),
+            serde_json::json!([
+                target("examples/hello-widget", "hello-widget", "hello_widget"),
+                second
+            ]),
+        );
+        assert!(!build_plan(fixture.path()).status.success());
+    }
+}
+
+#[test]
+fn build_plan_rejects_mismatched_or_unsafe_creator_sources() {
+    let fixture = tempfile::tempdir().expect("fixture repository");
+    prepare_build_plan_fixture(fixture.path());
+    fs::create_dir_all(fixture.path().join("examples/declared")).expect("declared source");
+    write_targets(
+        fixture.path(),
+        serde_json::json!([target("examples/declared", "hello-widget", "hello_widget")]),
+    );
+    assert!(!build_plan(fixture.path()).status.success());
+
+    let fixture = tempfile::tempdir().expect("fixture repository");
+    prepare_build_plan_fixture(fixture.path());
+    let outside = tempfile::tempdir().expect("outside source");
+    symlink(
+        outside.path(),
+        fixture.path().join("examples/outside-source"),
+    )
+    .expect("escaping source link");
+    write_targets(
+        fixture.path(),
+        serde_json::json!([target(
+            "examples/outside-source",
+            "hello-widget",
+            "hello_widget"
+        )]),
+    );
+    assert!(!build_plan(fixture.path()).status.success());
+
+    let fixture = tempfile::tempdir().expect("fixture repository");
+    prepare_build_plan_fixture(fixture.path());
+    fs::set_permissions(
+        fixture.path().join("examples/hello-widget"),
+        Permissions::from_mode(0o777),
+    )
+    .expect("unsafe source permissions");
+    assert!(
+        !build_plan(fixture.path()).status.success(),
+        "group-writable creator source must be rejected"
+    );
+}
+
+#[test]
+fn build_plan_rejects_build_scripts_and_proc_macro_targets_without_running_them() {
+    let fixture = tempfile::tempdir().expect("fixture repository");
+    prepare_build_plan_fixture(fixture.path());
+    fs::write(
+        fixture.path().join("examples/hello-widget/Cargo.toml"),
+        "[package]\nname = \"hello-widget\"\nversion = \"0.1.0\"\nedition = \"2024\"\nbuild = \"build.rs\"\n\n[lib]\ncrate-type = [\"cdylib\"]\n",
+    )
+    .expect("build script manifest");
+    fs::write(
+        fixture.path().join("examples/hello-widget/build.rs"),
+        format!(
+            "fn main() {{ std::fs::write({:?}, b\"ran\").unwrap(); }}\n",
+            fixture.path().join("build-script-ran")
+        ),
+    )
+    .expect("build script fixture");
+    assert!(!build_plan(fixture.path()).status.success());
+    assert!(!fixture.path().join("build-script-ran").exists());
+
+    let fixture = tempfile::tempdir().expect("fixture repository");
+    prepare_build_plan_fixture(fixture.path());
+    fs::write(
+        fixture.path().join("examples/hello-widget/Cargo.toml"),
+        "[package]\nname = \"hello-widget\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lib]\nproc-macro = true\n",
+    )
+    .expect("proc macro manifest");
+    assert!(!build_plan(fixture.path()).status.success());
+}
+
+#[test]
+fn build_plan_rejects_git_custom_registry_and_unlocked_dependencies() {
+    for dependency in [
+        "bad = { git = \"https://example.invalid/repository\" }",
+        "bad = { version = \"1\", registry = \"private\" }",
+        "serde = \"1\"",
+    ] {
+        let fixture = tempfile::tempdir().expect("fixture repository");
+        prepare_build_plan_fixture(fixture.path());
+        fs::write(
+            fixture.path().join("examples/hello-widget/Cargo.toml"),
+            format!(
+                "[package]\nname = \"hello-widget\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[dependencies]\n{dependency}\n"
+            ),
+        )
+        .expect("dependency manifest");
+        assert!(!build_plan(fixture.path()).status.success(), "{dependency}");
+    }
+}
+
+#[test]
+fn bind_build_rewrites_only_validated_digest_fields() {
+    let fixture = tempfile::tempdir().expect("fixture repository");
+    prepare_build_plan_fixture(fixture.path());
+    let source = fixture.path().join("examples/hello-widget");
+    for relative in ["manifest.json", "listing.json"] {
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/hello-widget")
+                .join(relative),
+            source.join(relative),
+        )
+        .expect("metadata fixture");
+    }
+    let manifest_path = source.join("manifest.json");
+    let before: Value = serde_json::from_slice(&fs::read(&manifest_path).expect("manifest"))
+        .expect("manifest JSON");
+    let bindings = fixture.path().join("bindings.json");
+    fs::write(
+        &bindings,
+        b"{\"schemaVersion\":1,\"components\":[{\"sourceDirectory\":\"examples/hello-widget\",\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"}],\"providers\":[]}\n",
+    )
+    .expect("bindings fixture");
+    fs::set_permissions(&bindings, Permissions::from_mode(0o600)).expect("private bindings");
+
+    let output = tool()
+        .args(["bind-build", "--repository"])
+        .arg(fixture.path())
+        .arg("--bindings")
+        .arg(&bindings)
+        .output()
+        .expect("bind build");
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    let mut expected = before;
+    expected["files"]["component"]["sha256"] = serde_json::Value::String("1".repeat(64));
+    let after: Value = serde_json::from_slice(&fs::read(manifest_path).expect("bound manifest"))
+        .expect("bound manifest JSON");
+    assert_eq!(after, expected);
+}
+
+#[test]
+fn bind_build_rejects_missing_duplicate_extra_or_unknown_bindings() {
+    for value in [
+        serde_json::json!({"schemaVersion": 1, "components": [], "providers": []}),
+        serde_json::json!({
+            "schemaVersion": 1,
+            "components": [
+                {"sourceDirectory": "examples/hello-widget", "sha256": "11".repeat(32)},
+                {"sourceDirectory": "examples/hello-widget", "sha256": "22".repeat(32)}
+            ],
+            "providers": []
+        }),
+        serde_json::json!({
+            "schemaVersion": 1,
+            "components": [{"sourceDirectory": "examples/other", "sha256": "11".repeat(32)}],
+            "providers": []
+        }),
+        serde_json::json!({
+            "schemaVersion": 1,
+            "components": [{"sourceDirectory": "examples/hello-widget", "sha256": "11".repeat(32), "path": "/tmp/creator"}],
+            "providers": []
+        }),
+    ] {
+        let fixture = tempfile::tempdir().expect("fixture repository");
+        prepare_bind_fixture(fixture.path());
+        let bindings = fixture.path().join("bindings.json");
+        let mut bytes = serde_json::to_vec(&value).expect("bindings JSON");
+        bytes.push(b'\n');
+        fs::write(&bindings, bytes).expect("bindings fixture");
+        fs::set_permissions(&bindings, Permissions::from_mode(0o600)).expect("private bindings");
+        assert!(
+            !tool()
+                .args(["bind-build", "--repository"])
+                .arg(fixture.path())
+                .arg("--bindings")
+                .arg(bindings)
+                .status()
+                .expect("bind build")
+                .success()
+        );
+    }
+}
 
 #[test]
 fn cli_build_is_reproducible_and_verifies_its_complete_source() {
@@ -202,6 +472,73 @@ fn tool() -> Command {
     Command::new(env!("CARGO_BIN_EXE_marketplace-tool"))
 }
 
+fn build_plan(repository: &Path) -> Output {
+    tool()
+        .args(["build-plan", "--repository"])
+        .arg(repository)
+        .output()
+        .expect("run build plan")
+}
+
+fn target(source: &str, package: &str, artifact: &str) -> Value {
+    serde_json::json!({
+        "sourceDirectory": source,
+        "cargoPackage": package,
+        "componentArtifact": artifact,
+        "status": "verified"
+    })
+}
+
+fn write_targets(repository: &Path, targets: Value) {
+    let mut bytes = serde_json::to_vec_pretty(&targets).expect("target JSON");
+    bytes.push(b'\n');
+    fs::write(repository.join("marketplace/targets.json"), bytes).expect("target fixture");
+}
+
+fn prepare_build_plan_fixture(repository: &Path) {
+    let source = repository.join("examples/hello-widget");
+    fs::create_dir_all(source.join("src")).expect("source directories");
+    fs::create_dir_all(repository.join("marketplace")).expect("marketplace directory");
+    fs::write(
+        repository.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"examples/hello-widget\"]\nresolver = \"3\"\n",
+    )
+    .expect("workspace manifest");
+    fs::write(
+        repository.join("Cargo.lock"),
+        "# This file is automatically @generated by Cargo.\n# It is not intended for manual editing.\nversion = 4\n\n[[package]]\nname = \"hello-widget\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("workspace lockfile");
+    fs::write(
+        source.join("Cargo.toml"),
+        "[package]\nname = \"hello-widget\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lib]\ncrate-type = [\"cdylib\"]\n",
+    )
+    .expect("package manifest");
+    fs::write(source.join("src/lib.rs"), "pub fn fixture() {}\n").expect("package source");
+    write_targets(
+        repository,
+        serde_json::json!([target(
+            "examples/hello-widget",
+            "hello-widget",
+            "hello_widget"
+        )]),
+    );
+}
+
+fn prepare_bind_fixture(repository: &Path) {
+    prepare_build_plan_fixture(repository);
+    let source = repository.join("examples/hello-widget");
+    for relative in ["manifest.json", "listing.json"] {
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/hello-widget")
+                .join(relative),
+            source.join(relative),
+        )
+        .expect("metadata fixture");
+    }
+}
+
 fn inspect(component: &Path) -> bool {
     tool()
         .arg("inspect-component")
@@ -282,9 +619,9 @@ fn lower_hex(bytes: &[u8]) -> String {
 }
 
 fn prepare_fixture(repository: &Path, component: &Path) {
+    prepare_build_plan_fixture(repository);
     let source = repository.join("examples/hello-widget");
     fs::create_dir_all(source.join("locales")).expect("source directories");
-    fs::create_dir_all(repository.join("marketplace")).expect("marketplace directory");
     fs::create_dir_all(repository.join("fixtures/keys")).expect("key directory");
     fs::copy(component, source.join("component.wasm")).expect("component fixture");
     for relative in [
@@ -310,11 +647,6 @@ fn prepare_fixture(repository: &Path, component: &Path) {
         repository.join(development_key),
     )
     .expect("publisher fixture");
-    fs::write(
-        repository.join("marketplace/targets.json"),
-        b"[{\"sourceDirectory\":\"examples/hello-widget\",\"status\":\"verified\"}]\n",
-    )
-    .expect("hello-only target fixture");
     fs::write(
         repository.join("marketplace/development-sequence.txt"),
         b"1\n",

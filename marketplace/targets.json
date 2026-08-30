@@ -1,26 +1,38 @@
 [
   {
     "sourceDirectory": "providers/warframe-worldstate",
+    "cargoPackage": "warframe-worldstate-provider",
+    "componentArtifact": "warframe_worldstate_provider",
     "status": "verified"
   },
   {
     "sourceDirectory": "widgets/warframe-fissures",
+    "cargoPackage": "warframe-fissures-widget",
+    "componentArtifact": "warframe_fissures_widget",
     "status": "verified"
   },
   {
     "sourceDirectory": "widgets/warframe-invasions",
+    "cargoPackage": "warframe-invasions-widget",
+    "componentArtifact": "warframe_invasions_widget",
     "status": "verified"
   },
   {
     "sourceDirectory": "widgets/warframe-market",
+    "cargoPackage": "warframe-market-widget",
+    "componentArtifact": "warframe_market_widget",
     "status": "verified"
   },
   {
     "sourceDirectory": "widgets/warframe-sortie-archon",
+    "cargoPackage": "warframe-sortie-archon-widget",
+    "componentArtifact": "warframe_sortie_archon_widget",
     "status": "verified"
   },
   {
     "sourceDirectory": "widgets/warframe-status",
+    "cargoPackage": "warframe-status-widget",
+    "componentArtifact": "warframe_status_widget",
     "status": "verified"
   }
 ]

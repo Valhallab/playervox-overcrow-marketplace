@@ -160,6 +160,15 @@ impl SourceDirectory {
     }
 
     fn read(&self, relative: &str, maximum: usize) -> Result<Vec<u8>, PackageCode> {
+        self.read_with_mode(relative, maximum, None)
+    }
+
+    fn read_with_mode(
+        &self,
+        relative: &str,
+        maximum: usize,
+        expected_mode: Option<u32>,
+    ) -> Result<Vec<u8>, PackageCode> {
         if !valid_entry_path(relative) {
             return Err(PackageCode::UnsafeSource);
         }
@@ -171,7 +180,7 @@ impl SourceDirectory {
             ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS,
         )
         .map_err(|_| PackageCode::UnsafeSource)?;
-        read_descriptor(descriptor, maximum)
+        read_descriptor(descriptor, maximum, expected_mode)
     }
 }
 
@@ -183,13 +192,53 @@ pub(crate) fn read_source_file(
     SourceDirectory::open(root)?.read(relative, maximum)
 }
 
-fn read_descriptor(descriptor: OwnedFd, maximum: usize) -> Result<Vec<u8>, PackageCode> {
+pub(crate) fn validate_source_directory(
+    repository: &Path,
+    relative: &str,
+) -> Result<(), PackageCode> {
+    SourceDirectory::beneath(repository, relative).map(|_| ())
+}
+
+pub(crate) fn read_private_file(path: &Path, maximum: usize) -> Result<Vec<u8>, PackageCode> {
+    if !normalized_absolute(path) {
+        return Err(PackageCode::UnsafeSource);
+    }
+    let parent = path.parent().ok_or(PackageCode::UnsafeSource)?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(PackageCode::UnsafeSource)?;
+    SourceDirectory::open(parent)?.read_with_mode(name, maximum, Some(0o600))
+}
+
+pub(crate) fn replace_source_file(
+    repository: &Path,
+    source_directory: &str,
+    name: &str,
+    bytes: &[u8],
+) -> Result<(), PackageCode> {
+    if bytes.is_empty() || bytes.len() > 64 * 1024 {
+        return Err(PackageCode::EntrySize);
+    }
+    let source = SourceDirectory::beneath(repository, source_directory)?;
+    source.read(name, 64 * 1024)?;
+    let directory = File::from(source.0);
+    write_atomic(&directory, name, bytes)
+}
+
+fn read_descriptor(
+    descriptor: OwnedFd,
+    maximum: usize,
+    expected_mode: Option<u32>,
+) -> Result<Vec<u8>, PackageCode> {
     let file = File::from(descriptor);
     let metadata = file.metadata().map_err(|_| PackageCode::UnsafeSource)?;
+    let mode = metadata.permissions().mode() & 0o7777;
     if !metadata.is_file()
         || metadata.uid() != rustix::process::geteuid().as_raw()
         || metadata.nlink() != 1
         || metadata.permissions().mode() & 0o022 != 0
+        || expected_mode.is_some_and(|expected| mode != expected)
     {
         return Err(PackageCode::UnsafeSource);
     }
@@ -339,16 +388,25 @@ fn write_atomic(directory: &File, final_name: &str, bytes: &[u8]) -> Result<(), 
         directory,
         &temporary_name,
         OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-        Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::ROTH,
+        Mode::RUSR | Mode::WUSR,
     )
     .map_err(|_| PackageCode::UnsafeSource)?;
     let mut temporary = File::from(descriptor);
     let result = (|| {
-        validate_public_file(&temporary)?;
+        validate_file_mode(&temporary, 0o600)?;
         temporary
             .write_all(bytes)
             .and_then(|()| temporary.sync_all())
             .map_err(|_| PackageCode::UnsafeSource)?;
+        fchmod(
+            &temporary,
+            Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::ROTH,
+        )
+        .map_err(|_| PackageCode::UnsafeSource)?;
+        temporary
+            .sync_all()
+            .map_err(|_| PackageCode::UnsafeSource)?;
+        validate_public_file(&temporary)?;
         renameat(directory, &temporary_name, directory, final_name)
             .map_err(|_| PackageCode::UnsafeSource)?;
         fsync(directory).map_err(|_| PackageCode::UnsafeSource)

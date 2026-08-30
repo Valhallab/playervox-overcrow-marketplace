@@ -278,6 +278,8 @@ impl ValidatedMetadata {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct TargetSpec {
     source_directory: String,
+    cargo_package: String,
+    component_artifact: String,
     status: CatalogStatus,
 }
 
@@ -288,6 +290,85 @@ impl TargetSpec {
 
     pub(crate) const fn status(&self) -> CatalogStatus {
         self.status
+    }
+
+    pub(crate) fn cargo_package(&self) -> &str {
+        &self.cargo_package
+    }
+
+    pub(crate) fn component_artifact(&self) -> &str {
+        &self.component_artifact
+    }
+
+    pub(crate) fn build_plan_entry(&self) -> BuildPlanEntry<'_> {
+        BuildPlanEntry {
+            cargo_package: &self.cargo_package,
+            component_artifact: &self.component_artifact,
+            source_directory: &self.source_directory,
+        }
+    }
+}
+
+pub(crate) struct BuildPlanEntry<'a> {
+    pub(crate) cargo_package: &'a str,
+    pub(crate) component_artifact: &'a str,
+    pub(crate) source_directory: &'a str,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct BuildBindings {
+    schema_version: u32,
+    components: Vec<ComponentBinding>,
+    providers: Vec<ProviderBinding>,
+}
+
+impl BuildBindings {
+    pub(crate) fn components(&self) -> &[ComponentBinding] {
+        &self.components
+    }
+
+    pub(crate) fn providers(&self) -> &[ProviderBinding] {
+        &self.providers
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ComponentBinding {
+    source_directory: String,
+    sha256: String,
+}
+
+impl ComponentBinding {
+    pub(crate) fn source_directory(&self) -> &str {
+        &self.source_directory
+    }
+
+    pub(crate) fn sha256(&self) -> &str {
+        &self.sha256
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ProviderBinding {
+    id: String,
+    version: String,
+    sha256: String,
+}
+
+impl ProviderBinding {
+    pub(crate) fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub(crate) fn version(&self) -> &str {
+        &self.version
+    }
+
+    pub(crate) fn sha256(&self) -> &str {
+        &self.sha256
     }
 }
 
@@ -324,15 +405,78 @@ pub(crate) fn validate_targets(bytes: &[u8]) -> Result<Vec<TargetSpec>, PolicyCo
         return Err(PolicyCode::Targets);
     }
     let mut paths = BTreeSet::new();
+    let mut packages = BTreeSet::new();
+    let mut artifacts = BTreeSet::new();
     for target in &targets {
         if !valid_package_path(&target.source_directory)
             || !paths.insert(target.source_directory.clone())
+            || !valid_cargo_package(&target.cargo_package)
+            || !packages.insert(target.cargo_package.clone())
+            || !valid_component_artifact(&target.component_artifact)
+            || !artifacts.insert(target.component_artifact.clone())
         {
             return Err(PolicyCode::Targets);
         }
     }
     targets.sort_by(|left, right| left.source_directory.cmp(&right.source_directory));
     Ok(targets)
+}
+
+pub(crate) fn validate_build_bindings(bytes: &[u8]) -> Result<BuildBindings, PolicyCode> {
+    if bytes.len() > MAX_TARGETS_BYTES {
+        return Err(PolicyCode::Targets);
+    }
+    let bindings: BuildBindings = serde_json::from_slice(bytes).map_err(|_| PolicyCode::Targets)?;
+    if bindings.schema_version != 1
+        || bindings.components.len() > MAX_TARGETS
+        || bindings.providers.len() > MAX_MANIFEST_DEPENDENCIES * MAX_TARGETS
+    {
+        return Err(PolicyCode::Targets);
+    }
+    let mut components = BTreeSet::new();
+    for binding in &bindings.components {
+        if !valid_package_path(&binding.source_directory)
+            || !valid_sha256(&binding.sha256)
+            || !components.insert(binding.source_directory.clone())
+        {
+            return Err(PolicyCode::Targets);
+        }
+    }
+    let mut providers = BTreeSet::new();
+    for binding in &bindings.providers {
+        let version = Version::parse(&binding.version).map_err(|_| PolicyCode::Targets)?;
+        if !valid_extension_id(&binding.id)
+            || version.to_string() != binding.version
+            || !valid_sha256(&binding.sha256)
+            || !providers.insert((binding.id.clone(), binding.version.clone()))
+        {
+            return Err(PolicyCode::Targets);
+        }
+    }
+    Ok(bindings)
+}
+
+pub(crate) fn bind_manifest_digests(
+    manifest_bytes: &[u8],
+    listing_bytes: &[u8],
+    component_sha256: &str,
+    providers: &BTreeMap<(String, String), String>,
+) -> Result<Vec<u8>, PolicyError> {
+    if !valid_sha256(component_sha256) {
+        return Err(PolicyError::new(PolicyCode::Targets));
+    }
+    let mut metadata = validate_metadata(manifest_bytes, listing_bytes)?;
+    metadata.manifest.files.component.sha256 = component_sha256.to_owned();
+    for dependency in &mut metadata.manifest.dependencies {
+        dependency.sha256 = providers
+            .get(&(dependency.id.clone(), dependency.version.clone()))
+            .ok_or_else(|| PolicyError::new(PolicyCode::Targets))?
+            .clone();
+    }
+    let mut encoded = serde_json::to_vec_pretty(&metadata.manifest)
+        .map_err(|_| PolicyError::new(PolicyCode::Manifest))?;
+    encoded.push(b'\n');
+    Ok(encoded)
 }
 
 pub(crate) fn inspect_component(bytes: &[u8]) -> Result<(), PolicyCode> {
@@ -678,6 +822,24 @@ fn valid_extension_id(value: &str) -> bool {
         })
 }
 
+fn valid_cargo_package(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && (value.as_bytes()[0].is_ascii_lowercase() || value.as_bytes()[0].is_ascii_digit())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn valid_component_artifact(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && (value.as_bytes()[0].is_ascii_lowercase() || value.as_bytes()[0].is_ascii_digit())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
 fn valid_locale(value: &str) -> bool {
     match value.split_once('-') {
         None => value.len() == 2 && value.bytes().all(|byte| byte.is_ascii_lowercase()),
@@ -916,13 +1078,19 @@ mod tests {
 
     #[test]
     fn targets_are_strict_unique_and_publisher_owned() {
-        validate_targets(br#"[{"sourceDirectory":"examples/hello-widget","status":"verified"}]"#)
-            .expect("valid target");
+        validate_targets(
+            br#"[{"sourceDirectory":"examples/hello-widget","cargoPackage":"hello-widget","componentArtifact":"hello_widget","status":"verified"}]"#,
+        )
+        .expect("valid target");
+        validate_targets(
+            br#"[{"sourceDirectory":"examples/hello-widget","cargoPackage":"1-widget","componentArtifact":"1_widget","status":"verified"}]"#,
+        )
+        .expect("identifiers may start with an ASCII digit");
         for invalid in [
-            br#"[{"sourceDirectory":"../hello","status":"verified"}]"#.as_slice(),
-            br#"[{"sourceDirectory":"examples/hello-widget","status":"available"}]"#.as_slice(),
-            br#"[{"sourceDirectory":"examples/hello-widget","status":"verified","url":"https://evil.invalid"}]"#.as_slice(),
-            br#"[{"sourceDirectory":"examples/hello-widget","status":"verified"},{"sourceDirectory":"examples/hello-widget","status":"revoked"}]"#.as_slice(),
+            br#"[{"sourceDirectory":"../hello","cargoPackage":"hello-widget","componentArtifact":"hello_widget","status":"verified"}]"#.as_slice(),
+            br#"[{"sourceDirectory":"examples/hello-widget","cargoPackage":"hello-widget","componentArtifact":"hello_widget","status":"available"}]"#.as_slice(),
+            br#"[{"sourceDirectory":"examples/hello-widget","cargoPackage":"hello-widget","componentArtifact":"hello_widget","status":"verified","url":"https://evil.invalid"}]"#.as_slice(),
+            br#"[{"sourceDirectory":"examples/hello-widget","cargoPackage":"hello-widget","componentArtifact":"hello_widget","status":"verified"},{"sourceDirectory":"examples/hello-widget","cargoPackage":"hello-widget-two","componentArtifact":"hello_widget_two","status":"revoked"}]"#.as_slice(),
         ] {
             assert_eq!(validate_targets(invalid).map(|_| ()), Err(PolicyCode::Targets));
         }
