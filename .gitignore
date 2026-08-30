@@ -1,5 +1,6 @@
 /target/
 /public/
+/.build-production.*
 /.worktrees/
 .env*
 *.key

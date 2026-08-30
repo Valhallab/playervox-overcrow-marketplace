@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#080a09" />
+    <meta
+      name="description"
+      content="OverCrow is an upcoming, native, opt-in Linux game overlay with useful movable widgets—and zero injection."
+    />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://overcrow.playervox.com" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://overcrow.playervox.com" />
+    <meta property="og:site_name" content="PlayerVox OverCrow" />
+    <meta property="og:title" content="OverCrow — Less Alt-Tab. More game." />
+    <meta
+      property="og:description"
+      content="An upcoming native, opt-in Linux game overlay with movable widgets—and zero injection."
+    />
+    <meta property="og:image" content="https://overcrow.playervox.com/og-9acd2aee.jpg" />
+    <meta property="og:image:type" content="image/jpeg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="PlayerVox OverCrow widgets arranged over a game scene."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="OverCrow — Less Alt-Tab. More game." />
+    <meta
+      name="twitter:description"
+      content="An upcoming native, opt-in Linux game overlay with movable widgets—and zero injection."
+    />
+    <meta
+      name="twitter:image"
+      content="https://overcrow.playervox.com/og-9acd2aee.jpg"
+    />
+    <link
+      rel="preload"
+      href="/fonts/Manrope-Variable.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      href="/fonts/NotoSans-BlackItalic.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link rel="stylesheet" href="/styles-5428c51a.css" />
+    <script type="module" src="/site-7ef11cd4.js"></script>
+    <title>PlayerVox OverCrow — Less Alt-Tab. More game.</title>
+  </head>
+  <body>
+    <svg class="svg-definitions" aria-hidden="true">
+      <symbol id="icon-mic-off" viewBox="0 0 24 24">
+        <path d="M12 19v3" />
+        <path d="M15 9.34V5a3 3 0 0 0-5.68-1.33" />
+        <path d="M16.95 16.95A7 7 0 0 1 5 12v-2" />
+        <path d="M18.89 13.23A7 7 0 0 0 19 12v-2" />
+        <path d="m2 2 20 20" />
+        <path d="M9 9v3a3 3 0 0 0 5.12 2.12" />
+      </symbol>
+      <symbol id="icon-headphone-off" viewBox="0 0 24 24">
+        <path d="M21 14h-1.343" />
+        <path d="M9.128 3.47A9 9 0 0 1 21 12v3.343" />
+        <path d="m2 2 20 20" />
+        <path d="M20.414 20.414A2 2 0 0 1 19 21h-1a2 2 0 0 1-2-2v-3" />
+        <path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 2.636-6.364" />
+      </symbol>
+    </svg>
+    <canvas id="ambient-canvas" aria-hidden="true"></canvas>
+    <div class="page-grid" aria-hidden="true"></div>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+
+    <header class="site-header">
+      <nav class="nav-dock wrap" aria-label="Primary navigation">
+        <a class="brand-link" href="#top" aria-label="PlayerVox OverCrow home">
+          <span class="brand-mark" aria-hidden="true">
+            <span class="brand-mark-fill"></span>
+            <img class="brand-mark-image brand-mark-dark" src="/playervox-dark.svg" alt="" width="32" height="32" />
+            <img class="brand-mark-image brand-mark-light" src="/playervox-light.svg" alt="" width="32" height="32" />
+          </span>
+          <span class="brand-copy">
+            <strong>Player<span>Vox</span></strong>
+            <small>OverCrow</small>
+          </span>
+        </a>
+
+        <div class="nav-links">
+          <a href="#overlay-preview">Overlay</a>
+          <a href="#experience">Experience</a>
+        </div>
+
+        <div class="nav-actions">
+          <span class="button button-small button-light button-static">Coming soon</span>
+        </div>
+      </nav>
+    </header>
+
+    <main id="main-content">
+      <section class="hero wrap" id="top">
+        <div class="hero-orb hero-orb-one" aria-hidden="true"></div>
+        <div class="hero-orb hero-orb-two" aria-hidden="true"></div>
+
+        <div class="release-pill" data-reveal>
+          <span class="live-dot" aria-hidden="true"></span>
+          <span>Native Linux overlay</span>
+          <i aria-hidden="true"></i>
+          <span class="release-state">Coming soon</span>
+        </div>
+
+        <h1 data-reveal>
+          Less Alt-Tab.
+          <span>More game.</span>
+        </h1>
+        <p class="hero-lede" data-reveal>
+          Useful widgets, exactly where you want them. OverCrow stays outside
+          the game process and appears only for the Linux games you choose.
+        </p>
+        <div class="hero-actions" data-reveal>
+          <span class="button button-primary button-static">Coming soon</span>
+          <a class="button button-ghost" href="#overlay-preview">
+            See the overlay
+            <span class="play-mark" aria-hidden="true">▶</span>
+          </a>
+        </div>
+        <p class="hero-note" data-reveal>
+          Disabled by default <span aria-hidden="true">·</span> No game injection
+        </p>
+      </section>
+
+      <section
+        class="preview-section wrap"
+        id="overlay-preview"
+        aria-labelledby="preview-title"
+      >
+        <div class="section-heading preview-heading" data-reveal>
+          <div>
+            <p class="section-kicker"><span>01</span> THE OVERLAY</p>
+            <h2 id="preview-title">Everything in reach.</h2>
+          </div>
+          <p>A faithful composite of real OverCrow widgets.</p>
+        </div>
+
+        <div class="preview-wrap" data-reveal>
+          <div class="preview-aura" aria-hidden="true"></div>
+          <div
+            class="app-window"
+            data-spotlight
+            role="img"
+            aria-label="OverCrow overlay composed over a game, showing Discord voice, session, performance, Warframe status, mission tracker, notes, Twitch chat and media widgets."
+          >
+            <div class="window-bar">
+              <div class="window-controls" aria-hidden="true">
+                <span></span><span></span><span></span>
+              </div>
+              <p>
+                <span class="window-mark" aria-hidden="true">◆</span>
+                OVERCROW / ACTIVE GAME
+              </p>
+              <div class="window-state"><i></i> PASSIVE</div>
+            </div>
+
+            <div class="game-stage">
+              <div class="game-world" aria-hidden="true">
+                <div class="world-horizon"></div>
+                <div class="world-structure world-structure-one"></div>
+                <div class="world-structure world-structure-two"></div>
+                <div class="world-reticle"><span></span></div>
+                <p class="game-label game-label-top">WARFRAME · STEEL PATH</p>
+                <p class="game-label game-label-bottom">SQUAD 03 · ONLINE</p>
+              </div>
+
+              <article class="overlay-widget discord-widget">
+                <div class="widget-title-row discord-title">
+                  <div>
+                    <img class="discord-logo" src="/discord-symbol-blurple.png" alt="" width="20" height="16" />
+                    <p><strong>DISCORD VOICE</strong><small>CONNECTED</small></p>
+                  </div>
+                  <b>VOICE</b>
+                </div>
+                <div class="voice-list">
+                  <div class="voice-member speaking">
+                    <img class="voice-avatar avatar-mika" src="/avatar-mika.png" alt="" width="24" height="24" />
+                    <span>Mika</span>
+                  </div>
+                  <div class="voice-member">
+                    <img class="voice-avatar avatar-noct" src="/avatar-noct.png" alt="" width="24" height="24" />
+                    <span>Noct</span>
+                    <span class="voice-state-icons">
+                      <svg class="lucide lucide-mic-off" aria-label="Muted" role="img" viewBox="0 0 24 24">
+                        <use href="#icon-mic-off" />
+                      </svg>
+                      <svg class="lucide lucide-headphone-off" aria-label="Deafened" role="img" viewBox="0 0 24 24">
+                        <use href="#icon-headphone-off" />
+                      </svg>
+                    </span>
+                  </div>
+                  <div class="voice-member">
+                    <img class="voice-avatar avatar-lin" src="/avatar-lin.png" alt="" width="24" height="24" />
+                    <span>Lin</span>
+                  </div>
+                </div>
+              </article>
+
+              <article class="overlay-widget session-widget">
+                <span class="widget-label">SESSION</span>
+                <strong>01:32:45</strong>
+              </article>
+
+              <article class="overlay-widget performance-widget">
+                <div>
+                  <span>GAME CPU</span>
+                  <strong>4.18%</strong>
+                </div>
+                <div>
+                  <span>GAME RAM</span>
+                  <strong>6.34 GiB</strong>
+                </div>
+                <div>
+                  <span>CPU TEMP</span>
+                  <strong>63.4 °C</strong>
+                </div>
+                <div>
+                  <span>GPU TEMP</span>
+                  <strong>57.0 °C</strong>
+                </div>
+              </article>
+
+              <article class="overlay-widget status-widget">
+                <div class="widget-title-row">
+                  <div>
+                    <p><strong>WARFRAME STATUS</strong><small>WORLD STATE</small></p>
+                  </div>
+                  <b>LIVE</b>
+                </div>
+                <div class="cycle-grid">
+                  <p><span>Cetus</span><strong>Day</strong><time>12m 03s</time></p>
+                  <p><span>Vallis</span><strong>Warm</strong><time>04m 28s</time></p>
+                  <p><span>Cambion</span><strong>Vome</strong><time>38m 41s</time></p>
+                </div>
+              </article>
+
+              <article class="overlay-widget mission-widget">
+                <div class="widget-title-row">
+                  <div>
+                    <p><strong>SORTIE &amp; ARCHON</strong><small>MISSION TRACKER</small></p>
+                  </div>
+                  <b>DAILY + WEEKLY</b>
+                </div>
+                <div class="mission-group">
+                  <p class="mission-title"><i aria-hidden="true"></i><strong>SORTIE</strong><span>Lephantis</span><time>12h 38m</time></p>
+                  <p><i></i><strong>EXTERMINATE</strong><span>Telesto · Saturn</span><em>Enemy Armor</em></p>
+                  <p><i></i><strong>DEFENSE</strong><span>Hydron · Sedna</span><em>Radiation</em></p>
+                </div>
+                <div class="mission-group archon">
+                  <p class="mission-title"><i aria-hidden="true"></i><strong>ARCHON</strong><span>Boreal</span><time>3d 08h</time></p>
+                  <p><i></i><strong>SPY</strong><span>Earth</span><em>Azure shard</em></p>
+                </div>
+              </article>
+
+              <article class="overlay-widget notes-widget">
+                <div class="note-tabs"><strong>Daily run</strong><span>Build notes</span><b>＋</b></div>
+                <small>NOTE</small>
+                <p>Forma the Fulmin after the Archon hunt.</p>
+                <small>CHECKLIST</small>
+                <ul>
+                  <li class="done"><i></i><span>Sortie</span></li>
+                  <li><i></i><span>Archon hunt</span></li>
+                  <li><i></i><span>Check Baro</span></li>
+                </ul>
+              </article>
+
+              <article class="overlay-widget twitch-widget">
+                <div class="widget-title-row twitch-title">
+                  <div>
+                    <img src="/twitch-glitch-purple.png" alt="" width="20" height="23" />
+                    <p><strong>TWITCH CHAT</strong><small>CONNECTED</small></p>
+                  </div>
+                  <b>LIVE</b>
+                </div>
+                <div class="chat-lines">
+                  <p><strong>Kira</strong><span>one more run?</span></p>
+                  <p><strong>Noct</strong><span>relic is ready</span></p>
+                  <p><strong>Milo</strong><span>that build looks wild</span></p>
+                </div>
+                <div class="chat-input">Send a message… <span>↵</span></div>
+              </article>
+
+              <article class="overlay-widget media-widget">
+                <div class="media-copy">
+                  <span class="media-cover" aria-hidden="true"><i></i></span>
+                  <div>
+                    <span class="widget-label">NOW PLAYING</span>
+                    <strong>Night Drive</strong>
+                    <small>Signal / Noise</small>
+                  </div>
+                </div>
+                <div class="media-controls" aria-hidden="true">
+                  <span>
+                    <svg viewBox="0 0 24 24">
+                      <path d="M7 6v12M18 7l-8 5 8 5z" />
+                    </svg>
+                  </span>
+                  <b>
+                    <svg viewBox="0 0 24 24">
+                      <path d="M9 7v10M15 7v10" />
+                    </svg>
+                  </b>
+                  <span>
+                    <svg viewBox="0 0 24 24">
+                      <path d="M17 6v12M6 7l8 5-8 5z" />
+                    </svg>
+                  </span>
+                </div>
+              </article>
+
+              <div class="overlay-dock">
+                <span class="dock-brand">
+                  <img src="/playervox-dark.svg" alt="" width="22" height="22" />
+                </span>
+                <div><kbd>SUPER + ALT + O</kbd><small>TOGGLE</small></div>
+                <div><kbd>ESC</kbd><small>CLOSE</small></div>
+                <span class="dock-spacer"></span>
+                <span class="dock-button">Widget library</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      <section class="experience-section wrap" id="experience" aria-labelledby="experience-title">
+        <div class="section-heading" data-reveal>
+          <div>
+            <p class="section-kicker"><span>02</span> BUILT AROUND PLAY</p>
+            <h2 id="experience-title">An overlay with boundaries.</h2>
+          </div>
+          <p>
+            See performance, chat, notes and game data without leaving your
+            match.
+          </p>
+        </div>
+
+        <div class="bento-grid">
+          <article class="feature-card feature-card-large" data-spotlight data-reveal>
+            <div class="card-copy">
+              <p class="card-eyebrow">COMPOSE YOUR SPACE</p>
+              <h3>Put every widget where it belongs.</h3>
+              <p>
+                Move, resize, enable and reset widgets from the in-overlay
+                library. Passive widgets remain click-through while you play.
+              </p>
+            </div>
+            <div class="layout-demo" aria-hidden="true">
+              <img class="layout-game-scene" src="/overlay-demo-game.webp" alt="" width="1280" height="720" />
+
+              <article class="demo-widget demo-discord">
+                <div class="demo-voice-list">
+                  <p class="speaking"><img src="/avatar-mika.png" alt="" width="20" height="20" /><span>Mika</span></p>
+                  <p>
+                    <img src="/avatar-noct.png" alt="" width="20" height="20" />
+                    <span>Noct</span>
+                    <span class="demo-voice-state-icons">
+                      <svg class="lucide lucide-mic-off" aria-label="Muted" role="img" viewBox="0 0 24 24">
+                        <use href="#icon-mic-off" />
+                      </svg>
+                      <svg class="lucide lucide-headphone-off" aria-label="Deafened" role="img" viewBox="0 0 24 24">
+                        <use href="#icon-headphone-off" />
+                      </svg>
+                    </span>
+                  </p>
+                  <p><img src="/avatar-lin.png" alt="" width="20" height="20" /><span>Lin</span></p>
+                </div>
+              </article>
+
+              <article class="demo-widget demo-performance">
+                <div class="demo-metrics">
+                  <p><span>GAME CPU</span><strong>4.18%</strong></p>
+                  <p><span>GAME RAM</span><strong>6.34 GiB</strong></p>
+                  <p><span>CPU TEMP</span><strong>63.4 °C</strong></p>
+                  <p><span>GPU TEMP</span><strong>57.0 °C</strong></p>
+                </div>
+              </article>
+
+              <article class="demo-widget demo-twitch">
+                <div class="demo-widget-title">
+                  <span><img src="/twitch-glitch-purple.png" alt="" width="14" height="16" /> TWITCH CHAT</span>
+                  <small>LIVE</small>
+                </div>
+                <div class="demo-chat-lines">
+                  <p><strong>Kira</strong><span>one more run?</span></p>
+                  <p><strong>Noct</strong><span>relic is ready</span></p>
+                  <p><strong>Milo</strong><span>nice route</span></p>
+                </div>
+              </article>
+            </div>
+          </article>
+
+          <article class="feature-card safety-card" data-spotlight data-reveal>
+            <p class="card-eyebrow">EXTERNAL BY DESIGN</p>
+            <h3>Nothing inside your game.</h3>
+            <p>
+              No injection, graphics hooks, memory reading, input synthesis or
+              game-file modification.
+            </p>
+            <div class="safety-seal">
+              <span>ZERO</span>
+              <strong>INJECTION</strong>
+            </div>
+          </article>
+
+          <article class="feature-card privacy-card" data-spotlight data-reveal>
+            <p class="card-eyebrow">YOUR CHOICE</p>
+            <h3>Quiet until invited.</h3>
+            <p>
+              OverCrow starts disabled. Only games you explicitly select can
+              authorize overlays, shortcuts or interaction.
+            </p>
+            <div class="permission-demo" aria-hidden="true">
+              <div><i></i><span>Warframe</span><b>Enabled</b></div>
+              <div><i></i><span>Every other game</span><b>Off</b></div>
+            </div>
+          </article>
+
+          <article class="feature-card widget-card" data-spotlight data-reveal>
+            <div class="card-copy">
+              <p class="card-eyebrow">USEFUL, NOT NOISY</p>
+              <h3>A library that earns its screen space.</h3>
+              <p>
+                Performance, media, notes, Twitch chat, Discord voice and
+                focused game data—each bounded and independently controlled.
+              </p>
+            </div>
+            <div class="widget-cloud" aria-hidden="true">
+              <span>Session</span><span>Performance</span><span>Media</span>
+              <span>Notes</span><span>Twitch</span><span>Discord</span>
+              <span>Warframe</span><span>Stopwatch</span>
+            </div>
+          </article>
+        </div>
+      </section>
+
+    </main>
+
+    <footer class="footer wrap">
+      <div class="footer-identity">
+        <a class="brand-link" href="#top" aria-label="PlayerVox OverCrow home">
+          <span class="brand-mark" aria-hidden="true">
+            <span class="brand-mark-fill"></span>
+            <img class="brand-mark-image brand-mark-dark" src="/playervox-dark.svg" alt="" width="32" height="32" />
+            <img class="brand-mark-image brand-mark-light" src="/playervox-light.svg" alt="" width="32" height="32" />
+          </span>
+          <span class="brand-copy">
+            <strong>Player<span>Vox</span></strong>
+            <small>OverCrow</small>
+          </span>
+        </a>
+        <p>External. Opt-in. Linux native.</p>
+      </div>
+      <nav class="footer-links" aria-label="Footer navigation">
+        <a href="#overlay-preview">Overlay</a>
+        <a href="#experience">Experience</a>
+        <a href="#top">Back to top</a>
+      </nav>
+      <p class="footer-meta">© <span data-current-year>2026</span> VALHALLAB. ALL RIGHTS RESERVED.</p>
+    </footer>
+  </body>
+</html>
