@@ -34,4 +34,16 @@ header {
   border-radius: 0.75rem;
   padding: 1rem;
   background: #19202c;
+  overflow-wrap: anywhere;
+}
+
+.card a {
+  color: #8ecbff;
+}
+
+.preview {
+  border-radius: 0.5rem;
+  display: block;
+  height: auto;
+  max-width: 100%;
 }

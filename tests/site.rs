@@ -14,14 +14,29 @@ fn marketplace_site_is_localized_dom_safe_and_hides_providers() {
     );
     assert!(!index.contains("http://") && !index.contains("https://"));
     assert!(index.contains("English") && index.contains("Français"));
+    assert!(index.contains("href=\"./styles.css\""));
+    assert!(index.contains("src=\"./catalog-policy.js\""));
+    assert!(index.contains("src=\"./app.js\""));
+    assert!(
+        index.find("./catalog-policy.js") < index.find("./app.js"),
+        "catalog policy must load before the application"
+    );
+    assert!(index.contains("id=\"trust-label\""));
     assert!(
         app.contains("textContent"),
         "creator text must use DOM text nodes"
     );
-    assert!(
-        !app.contains("innerHTML"),
-        "site must not parse creator content as HTML"
-    );
+    for forbidden in [
+        "innerHTML",
+        "insertAdjacentHTML",
+        "document.write",
+        "outerHTML",
+    ] {
+        assert!(
+            !app.contains(forbidden),
+            "site must not parse creator content as HTML: {forbidden}"
+        );
+    }
     assert!(!styles.is_empty());
 
     let status = Command::new("node")

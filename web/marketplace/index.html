@@ -5,12 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; img-src 'self'; object-src 'none'; script-src 'self'; style-src 'self'">
     <title>OverCrow Widget Marketplace</title>
-    <link rel="stylesheet" href="/styles.css">
-    <script src="/app.js" defer></script>
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./catalog-policy.js" defer></script>
+    <script src="./app.js" defer></script>
   </head>
   <body>
     <header>
-      <p class="eyebrow">Development - unverified</p>
+      <p id="trust-label" class="eyebrow"></p>
       <h1>OverCrow Widget Marketplace</h1>
       <p>Only OverCrow Control Center verifies signatures and installs packages.</p>
       <label for="language">Language</label>
