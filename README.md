@@ -34,8 +34,8 @@ submissions, provide production signing material, or make any security
 certification. Those steps remain gated on human review, application
 integration, and explicit maintainer authorization.
 
-Future local development catalogs will be signed only with a clearly labelled
-development fixture key and accepted only by debug OverCrow builds. Production
+Local development catalogs are signed only with a clearly labelled development
+fixture key and accepted only by debug OverCrow builds. Production
 private keys and passphrases must never enter this repository, its artifacts,
 logs, CI output, or temporary files.
 

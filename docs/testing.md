@@ -6,12 +6,13 @@ Run native SDK and widget behavior tests first:
 cargo test -p overcrow-widget-sdk -p hello-widget \
   -p warframe-worldstate-provider -p warframe-widget-data \
   -p warframe-status-widget -p warframe-fissures-widget \
-  -p warframe-sortie-archon-widget -p warframe-invasions-widget --locked
+  -p warframe-sortie-archon-widget -p warframe-invasions-widget \
+  -p warframe-market-widget --locked
 cargo clippy -p overcrow-widget-sdk -p hello-widget \
   -p warframe-worldstate-provider -p warframe-widget-data \
   -p warframe-status-widget -p warframe-fissures-widget \
   -p warframe-sortie-archon-widget -p warframe-invasions-widget \
-  --all-targets --locked -- -D warnings
+  -p warframe-market-widget --all-targets --locked -- -D warnings
 ```
 
 `WidgetHarness` initializes real widget state, routes scoped semantic events,

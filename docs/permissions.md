@@ -12,8 +12,12 @@ widget and its exact dependencies:
 - **Game data:** a versioned, reviewed, read-only schema containing only fields
   explicitly supplied by OverCrow. Game memory, files, packets, and raw input
   are never exposed.
-- **Private settings:** an extension-scoped bounded store, only when a future
-  reviewed capability grants it.
+- **Private storage:** an extension-scoped bounded store, only when the reviewed
+  capability grants it; components never receive filesystem paths.
+- **Clipboard write:** bounded text emitted only from an authorized semantic
+  interaction; clipboard read does not exist.
+- **Provider publication:** a provider can publish only its declared bounded
+  schemas; only exact installed dependents can subscribe.
 - **Semantic actions:** stable element IDs and sanitized events such as
   `clicked`, `value-changed`, or `submitted`; no raw keyboard or mouse events.
 
