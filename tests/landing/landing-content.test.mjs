@@ -181,4 +181,3 @@ test("the footer carries the ValhallaB ownership notice", () => {
   );
   assert.doesNotMatch(html, /© <span data-current-year>2026<\/span> PlayerVox/);
 });
-

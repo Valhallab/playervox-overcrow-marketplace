@@ -44,4 +44,3 @@ test("canvas sizing stays within the GPU pixel budget on large displays", () => 
 test("the JavaScript bundle has no command-palette behavior", () => {
   assert.equal("isPaletteShortcut" in siteModule, false);
 });
-

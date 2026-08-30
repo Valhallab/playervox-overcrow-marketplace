@@ -51,4 +51,3 @@ test("repeated voice-state icons share one SVG definition", () => {
   assert.equal((html.match(/<path d="M12 19v3"/g) ?? []).length, 1);
   assert.equal((html.match(/<path d="M21 14h-1\.343"/g) ?? []).length, 1);
 });
-
