@@ -68,14 +68,21 @@ function withPayload(change, source = generated()) {
   return JSON.stringify(envelope);
 }
 
-function withTargets(change, source = generated()) {
+function withTargetGraph(change, source = generated()) {
   return withPayload((body) => {
     const targets = change(body.targets);
+    return { ...body, targets };
+  }, source);
+}
+
+function withTargets(change, source = generated()) {
+  return withTargetGraph((targets) => {
+    const changed = change(targets);
     assert.equal(
-      targets.filter((target) => target.manifest.kind === "provider").length,
+      changed.filter((target) => target.manifest.kind === "provider").length,
       1,
     );
-    return { ...body, targets };
+    return changed;
   }, source);
 }
 
@@ -83,6 +90,37 @@ function withListingName(name) {
   return withTargets((targets) => {
     const widget = targets.find((target) => target.manifest.kind === "widget");
     widget.listing.localizations[0].name = name;
+    return targets;
+  });
+}
+
+function withTransitiveProviders(cycle = false) {
+  return withTargetGraph((targets) => {
+    const provider = targets.find((target) => target.manifest.kind === "provider");
+    const upstream = structuredClone(provider);
+    upstream.manifest.id = "com.playervox.overcrow.warframe.public-data";
+    upstream.manifest.dependencies = cycle ? [{
+      id: provider.manifest.id,
+      version: provider.manifest.version,
+      sha256: provider.packageSha256,
+    }] : [];
+    upstream.manifest.capabilities.http = ["api.relay.example"];
+    upstream.packageSha256 = "c".repeat(64);
+    upstream.packageUrl = `${DEVELOPMENT_BASE}packages/${upstream.manifest.id}/${upstream.manifest.version}/${upstream.packageSha256}.ocpkg`;
+    for (const localization of upstream.listing.localizations) {
+      localization.name = localization.locale === "fr"
+        ? "Fournisseur public en amont"
+        : "Upstream Public Data Provider";
+      localization.description = localization.locale === "fr"
+        ? "Fournit des données publiques bornées en amont."
+        : "Supplies bounded upstream public data.";
+    }
+    provider.manifest.dependencies = [{
+      id: upstream.manifest.id,
+      version: upstream.manifest.version,
+      sha256: upstream.packageSha256,
+    }];
+    targets.push(upstream);
     return targets;
   });
 }
@@ -102,9 +140,9 @@ function productionCatalog() {
 }
 
 function streamed(body, options) {
-  const chunks = options.malformedChunk
+  const chunks = options.chunks || (options.malformedChunk
     ? ["not bytes"]
-    : [new Uint8Array(Buffer.from(body))];
+    : [new Uint8Array(Buffer.from(body))]);
   let index = 0;
   return {
     getReader: () => ({
@@ -264,6 +302,43 @@ test("French UI falls back to English creator copy when only English is supplied
   assert.match(cardText(card(page, /Warframe Void Fissures/u)), /Langues en/u);
 });
 
+test("accepts a declared non-English default when English metadata is present", async () => {
+  const frenchDefault = withTargets((targets) => {
+    const widget = targets.find((target) => target.manifest.kind === "widget");
+    widget.manifest.defaultLocale = "fr";
+    return targets;
+  });
+  const page = await run(frenchDefault);
+  assert.match(
+    cardText(card(page, /Warframe Void Fissures/u)),
+    /Shows active public Void Fissures/u,
+  );
+});
+
+test("French UI falls back to English copy rather than a non-English declared default", async () => {
+  const germanDefault = withTargets((targets) => {
+    const widget = targets.find((target) => target.manifest.kind === "widget");
+    widget.manifest.defaultLocale = "de";
+    widget.manifest.availableLocales = ["en", "de"];
+    const german = widget.listing.localizations.find((entry) => entry.locale === "fr");
+    german.locale = "de";
+    german.name = "Warframe-Leerenrisse";
+    german.description = "Zeigt öffentliche Leerenrisse an.";
+    return targets;
+  });
+  const page = await run(germanDefault);
+  page.language.value = "fr";
+  page.language.dispatch("change");
+  assert.match(
+    page.catalog.children.map(cardText).join("\n"),
+    /Warframe Void Fissures/u,
+  );
+  assert.doesNotMatch(
+    page.catalog.children.map(cardText).join("\n"),
+    /Warframe-Leerenrisse/u,
+  );
+});
+
 test("renders generic bounded Steam scopes", async () => {
   const multipleGames = withTargets((targets) => {
     const widget = targets.find((target) => target.manifest.kind === "widget");
@@ -316,6 +391,28 @@ test("sets preview src only for its exact immutable object URL", async () => {
   assert.equal(image.getAttribute("alt"), "");
 });
 
+test("renders names and capabilities from the complete transitive provider closure", async () => {
+  const page = await run(withTransitiveProviders());
+  const fissures = cardText(card(page, /Warframe Void Fissures/u));
+  assert.match(
+    fissures,
+    /Includes dependencies: Warframe Worldstate Provider, Upstream Public Data Provider/u,
+  );
+  assert.match(
+    fissures,
+    /Fetches public data from: api\.warframe\.com, api\.relay\.example/u,
+  );
+  assert.equal(page.catalog.children.length, 5);
+  assert.doesNotMatch(
+    page.catalog.children.map(cardText).join("\n"),
+    /Supplies bounded upstream public data/u,
+  );
+});
+
+test("rejects a provider dependency cycle", async () => {
+  unavailable(await run(withTransitiveProviders(true)));
+});
+
 test("rejects a policy that differs from the fixed trust configuration", async () => {
   await assert.rejects(
     run(generated(), {
@@ -343,6 +440,19 @@ const invalidCatalogs = [
   ["missing length", "x".repeat(1024 * 1024 + 1), {}],
   ["absent stream", generated(), { noBody: true }],
   ["malformed streamed response", generated(), { malformedChunk: true }],
+  ["repeated zero-length stream chunks", generated(), {
+    chunks: [
+      new Uint8Array(),
+      new Uint8Array(),
+      new Uint8Array(Buffer.from(generated())),
+    ],
+  }],
+  ["excessive one-byte stream chunks", generated(), {
+    chunks: Array.from(
+      Buffer.from(generated()),
+      (byte) => Uint8Array.of(byte),
+    ),
+  }],
   ["malformed envelope", "{}", {}],
   ["wrong key ID", (() => {
     const envelope = JSON.parse(generated());

@@ -1,6 +1,7 @@
 "use strict";
 
 const MAX_ENVELOPE_BYTES = 1024 * 1024;
+const MAX_STREAM_CHUNKS = 4096;
 const MAX_TARGETS = 500;
 const policy = globalThis.overcrowMarketplacePolicy;
 const fixedPolicies = {
@@ -177,7 +178,9 @@ function locales(manifest, listing) {
   const localized = listing.localizations;
   if (!Array.isArray(available) || available.length === 0 || available.length > 32) return false;
   if (!available.every(locale) || new Set(available).size !== available.length) return false;
-  if (manifest.defaultLocale !== "en" || !available.includes("en")) return false;
+  if (!locale(manifest.defaultLocale)
+      || !available.includes(manifest.defaultLocale)
+      || !available.includes("en")) return false;
   if (!Array.isArray(localized) || localized.length !== available.length) return false;
   const listed = new Set();
   for (const entry of localized) {
@@ -307,7 +310,7 @@ function validate(text) {
 
 function localized(item) {
   return item.listing.localizations.find((text) => text.locale === state.locale)
-    || item.listing.localizations.find((text) => text.locale === item.manifest.defaultLocale);
+    || item.listing.localizations.find((text) => text.locale === "en");
 }
 
 function dependencyClosure(item) {
@@ -417,23 +420,28 @@ function unavailable() {
 async function readBounded(response) {
   if (!response.body || typeof response.body.getReader !== "function") throw new Error("stream");
   const reader = response.body.getReader();
-  const chunks = [];
+  if (!reader || typeof reader.read !== "function") throw new Error("stream");
+  const bytes = new Uint8Array(MAX_ENVELOPE_BYTES);
+  let chunkCount = 0;
   let total = 0;
   for (;;) {
     const part = await reader.read();
-    if (!part || typeof part.done !== "boolean") throw new Error("stream");
-    if (part.done) break;
-    if (!(part.value instanceof Uint8Array)
-        || (total += part.value.length) > MAX_ENVELOPE_BYTES) throw new Error("stream");
-    chunks.push(part.value);
+    if (!part || typeof part !== "object" || typeof part.done !== "boolean") {
+      throw new Error("stream");
+    }
+    if (part.done) {
+      if (part.value !== undefined) throw new Error("stream");
+      break;
+    }
+    chunkCount += 1;
+    if (chunkCount > MAX_STREAM_CHUNKS
+        || !(part.value instanceof Uint8Array)
+        || part.value.length === 0
+        || part.value.length > MAX_ENVELOPE_BYTES - total) throw new Error("stream");
+    bytes.set(part.value, total);
+    total += part.value.length;
   }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return new TextDecoder().decode(bytes);
+  return new TextDecoder().decode(bytes.subarray(0, total));
 }
 
 language.addEventListener("change", () => {
