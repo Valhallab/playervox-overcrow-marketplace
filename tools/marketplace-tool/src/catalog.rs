@@ -4,14 +4,14 @@ use std::{
     fs::File,
     io::{Read as _, Write as _},
     os::unix::{ffi::OsStrExt as _, fs::MetadataExt as _, fs::PermissionsExt as _},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use ring::signature::{ED25519, Ed25519KeyPair, UnparsedPublicKey};
+use ring::signature::{ED25519, Ed25519KeyPair, KeyPair as _, UnparsedPublicKey};
 use rustix::fs::{
-    AtFlags, CWD, FlockOperation, Mode, OFlags, ResolveFlags, flock, fsync, openat, openat2,
-    renameat, unlinkat,
+    AtFlags, CWD, FlockOperation, Mode, OFlags, ResolveFlags, fchmod, flock, fsync, openat,
+    openat2, renameat, unlinkat,
 };
 use serde::{Deserialize, Serialize};
 
@@ -21,12 +21,14 @@ use crate::{
 };
 
 pub(crate) const DEVELOPMENT_KEY_ID: &str = "overcrow-development-2026";
+pub(crate) const PRODUCTION_KEY_ID: &str = "overcrow-production-2026-01";
 pub(crate) const DEV_SEED: [u8; 32] = [
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
     0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
 ];
 const MAX_PAYLOAD_BYTES: usize = 700 * 1024;
 const MAX_ENVELOPE_BYTES: usize = 1024 * 1024;
+const MAX_BROWSER_SEQUENCE: u64 = 9_007_199_254_740_991;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CatalogCode {
@@ -249,6 +251,7 @@ impl SequenceState {
 
 pub(crate) struct PublisherState {
     directory: File,
+    directory_path: PathBuf,
     file_name: OsString,
     private: bool,
 }
@@ -297,6 +300,7 @@ impl PublisherState {
             .map_err(|_| CatalogCode::State)?;
         let state = Self {
             directory,
+            directory_path: parent.to_owned(),
             file_name,
             private,
         };
@@ -313,6 +317,62 @@ impl PublisherState {
             None => SequenceState::new(sequence, digest)?,
         };
         self.write(&next)
+    }
+
+    pub(crate) fn advance_counter(
+        &self,
+        sequence_file: &Path,
+        sequence: u64,
+        digest: [u8; 32],
+    ) -> Result<(), CatalogCode> {
+        if !self.private || !normalized_absolute(sequence_file) {
+            return Err(CatalogCode::State);
+        }
+        let accepted = self.read()?.ok_or(CatalogCode::State)?;
+        accepted.validate()?;
+        if accepted.sequence != sequence || accepted.payload_sha256 != crate::lower_hex(&digest) {
+            return Err(CatalogCode::SequenceConflict);
+        }
+        let parent = sequence_file.parent().ok_or(CatalogCode::State)?;
+        let name = sequence_file
+            .file_name()
+            .filter(|name| {
+                !name.is_empty() && *name != OsStr::new(".") && *name != OsStr::new("..")
+            })
+            .ok_or(CatalogCode::State)?;
+        let separate_directory;
+        let directory = if parent == self.directory_path {
+            &self.directory
+        } else {
+            separate_directory = File::from(
+                openat2(
+                    CWD,
+                    parent,
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                    Mode::empty(),
+                    ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS,
+                )
+                .map_err(|_| CatalogCode::State)?,
+            );
+            if !crate::owned_directory_is_safe(&separate_directory, true) {
+                return Err(CatalogCode::State);
+            }
+            flock(
+                &separate_directory,
+                FlockOperation::NonBlockingLockExclusive,
+            )
+            .map_err(|_| CatalogCode::State)?;
+            &separate_directory
+        };
+        let counter = read_private_at(directory, name, 32)?;
+        if parse_counter(&counter)? != sequence {
+            return Err(CatalogCode::SequenceConflict);
+        }
+        let next = sequence
+            .checked_add(1)
+            .filter(|next| *next <= MAX_BROWSER_SEQUENCE)
+            .ok_or(CatalogCode::Counter)?;
+        write_private_at(directory, name, format!("{next}\n").as_bytes())
     }
 
     fn read(&self) -> Result<Option<SequenceState>, CatalogCode> {
@@ -378,6 +438,62 @@ impl PublisherState {
         }
         result
     }
+}
+
+fn read_private_at(directory: &File, name: &OsStr, maximum: usize) -> Result<Vec<u8>, CatalogCode> {
+    let descriptor = openat(
+        directory,
+        name,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        Mode::empty(),
+    )
+    .map_err(|_| CatalogCode::State)?;
+    let file = File::from(descriptor);
+    validate_state_file(&file, true)?;
+    let expected = usize::try_from(file.metadata().map_err(|_| CatalogCode::State)?.len())
+        .ok()
+        .filter(|length| *length <= maximum)
+        .ok_or(CatalogCode::State)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(expected)
+        .map_err(|_| CatalogCode::State)?;
+    file.take(maximum.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| CatalogCode::State)?;
+    if bytes.len() == expected {
+        Ok(bytes)
+    } else {
+        Err(CatalogCode::State)
+    }
+}
+
+fn write_private_at(directory: &File, name: &OsStr, bytes: &[u8]) -> Result<(), CatalogCode> {
+    if bytes.is_empty() || bytes.len() > 32 {
+        return Err(CatalogCode::Counter);
+    }
+    let temporary_name = OsString::from(format!(".sequence-counter.{}.tmp", std::process::id()));
+    let descriptor = openat(
+        directory,
+        &temporary_name,
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::RUSR | Mode::WUSR,
+    )
+    .map_err(|_| CatalogCode::State)?;
+    let mut temporary = File::from(descriptor);
+    let result = (|| {
+        validate_state_file(&temporary, true)?;
+        temporary
+            .write_all(bytes)
+            .and_then(|()| temporary.sync_all())
+            .map_err(|_| CatalogCode::State)?;
+        renameat(directory, &temporary_name, directory, name).map_err(|_| CatalogCode::State)?;
+        fsync(directory).map_err(|_| CatalogCode::State)
+    })();
+    if result.is_err() {
+        let _ = unlinkat(directory, &temporary_name, AtFlags::empty());
+    }
+    result
 }
 
 fn validate_state_file(file: &File, private: bool) -> Result<(), CatalogCode> {
@@ -482,12 +598,20 @@ pub(crate) fn build_catalog(
     key_id: &str,
     seed: &[u8; 32],
 ) -> Result<CatalogBuild, CatalogCode> {
-    if sequence == 0 || inputs.len() > 500 {
+    if sequence == 0
+        || (matches!(origin, CatalogOrigin::Production) && sequence > MAX_BROWSER_SEQUENCE)
+        || inputs.len() > 500
+    {
         return Err(CatalogCode::Target);
     }
     let generated = parse_time(generated_at)?;
     let expires = parse_time(expires_at)?;
     if expires <= generated {
+        return Err(CatalogCode::Time);
+    }
+    if matches!(origin, CatalogOrigin::Production)
+        && expires.signed_duration_since(generated) != chrono::TimeDelta::days(30)
+    {
         return Err(CatalogCode::Time);
     }
     let mut inputs: Vec<_> = inputs.iter().collect();
@@ -672,6 +796,16 @@ pub(crate) fn verify_catalog(
     origin: CatalogOrigin,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), CatalogCode> {
+    verify_catalog_payload(bytes, expected_key_id, public_key, origin, now).map(|_| ())
+}
+
+fn verify_catalog_payload(
+    bytes: &[u8],
+    expected_key_id: &str,
+    public_key: &[u8; 32],
+    origin: CatalogOrigin,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<VerifiedPayload, CatalogCode> {
     if matches!(origin, CatalogOrigin::Production)
         && (expected_key_id == DEVELOPMENT_KEY_ID || public_key == &development_public_key()?)
     {
@@ -684,6 +818,8 @@ pub(crate) fn verify_catalog(
     let expires = parse_time(&payload.expires_at)?;
     if expires <= generated
         || expires <= now
+        || (matches!(origin, CatalogOrigin::Production)
+            && expires.signed_duration_since(generated) != chrono::TimeDelta::days(30))
         || generated
             > now
                 .checked_add_signed(chrono::TimeDelta::minutes(5))
@@ -691,11 +827,15 @@ pub(crate) fn verify_catalog(
     {
         return Err(CatalogCode::Time);
     }
-    if payload.schema_version != 1 || payload.sequence == 0 || payload.targets.len() > 500 {
+    if payload.schema_version != 1
+        || payload.sequence == 0
+        || (matches!(origin, CatalogOrigin::Production) && payload.sequence > MAX_BROWSER_SEQUENCE)
+        || payload.targets.len() > 500
+    {
         return Err(CatalogCode::Payload);
     }
     let mut previous = None;
-    for target in payload.targets {
+    for target in &payload.targets {
         let manifest_bytes =
             serde_json::to_vec(&target.manifest).map_err(|_| CatalogCode::Payload)?;
         let listing_bytes =
@@ -728,7 +868,7 @@ pub(crate) fn verify_catalog(
             return Err(CatalogCode::Target);
         }
         let _status = target.status;
-        if let Some(preview) = target.preview
+        if let Some(preview) = &target.preview
             && (manifest.kind() == PackageKind::Provider
                 || preview.size == 0
                 || preview.size > 256 * 1024
@@ -743,6 +883,282 @@ pub(crate) fn verify_catalog(
                         preview.sha256
                     ))
         {
+            return Err(CatalogCode::Target);
+        }
+    }
+    Ok(payload)
+}
+
+pub(crate) fn accepted_catalog_identity(bytes: &[u8]) -> Result<(u64, [u8; 32]), CatalogCode> {
+    if bytes.len() > MAX_ENVELOPE_BYTES {
+        return Err(CatalogCode::Envelope);
+    }
+    let envelope: SignedEnvelope =
+        serde_json::from_slice(bytes).map_err(|_| CatalogCode::Envelope)?;
+    if envelope.schema_version != 1 || envelope.key_id != PRODUCTION_KEY_ID {
+        return Err(CatalogCode::Envelope);
+    }
+    let payload = decode_canonical(&envelope.payload, MAX_PAYLOAD_BYTES)?;
+    let decoded: VerifiedPayload =
+        serde_json::from_slice(&payload).map_err(|_| CatalogCode::Payload)?;
+    if decoded.schema_version != 1 || decoded.sequence == 0 {
+        return Err(CatalogCode::Payload);
+    }
+    Ok((decoded.sequence, crate::sha256(&payload)))
+}
+
+pub(crate) fn derive_public_key(
+    repository: &Path,
+    signing_key: &Path,
+    key_id: &str,
+    output: &Path,
+) -> Result<(), CatalogCode> {
+    if key_id != PRODUCTION_KEY_ID || !normalized_absolute(output) {
+        return Err(CatalogCode::State);
+    }
+    let seed = read_private_input(repository, signing_key, 65)?;
+    let seed = decode_hex_seed(&seed)?;
+    if seed == DEV_SEED {
+        return Err(CatalogCode::Signature);
+    }
+    let pair = Ed25519KeyPair::from_seed_unchecked(&seed).map_err(|_| CatalogCode::Signature)?;
+    let bytes = format!("{}\n", crate::lower_hex(pair.public_key().as_ref()));
+    write_public_output(output, bytes.as_bytes())
+}
+
+fn decode_hex_seed(bytes: &[u8]) -> Result<[u8; 32], CatalogCode> {
+    let value = bytes.strip_suffix(b"\n").ok_or(CatalogCode::Signature)?;
+    if value.len() != 64 {
+        return Err(CatalogCode::Signature);
+    }
+    let mut decoded = [0; 32];
+    for (index, pair) in value.as_chunks::<2>().0.iter().enumerate() {
+        let digit = |byte| match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            _ => None,
+        };
+        decoded[index] = (digit(pair[0]).ok_or(CatalogCode::Signature)? << 4)
+            | digit(pair[1]).ok_or(CatalogCode::Signature)?;
+    }
+    Ok(decoded)
+}
+
+fn write_public_output(path: &Path, bytes: &[u8]) -> Result<(), CatalogCode> {
+    let parent = path.parent().ok_or(CatalogCode::State)?;
+    let name = path.file_name().ok_or(CatalogCode::State)?;
+    let directory = File::from(
+        openat2(
+            CWD,
+            parent,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS,
+        )
+        .map_err(|_| CatalogCode::State)?,
+    );
+    if !crate::owned_directory_is_safe(&directory, false) {
+        return Err(CatalogCode::State);
+    }
+    let descriptor = openat(
+        &directory,
+        name,
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::ROTH,
+    )
+    .map_err(|_| CatalogCode::State)?;
+    let mut file = File::from(descriptor);
+    let result = (|| {
+        fchmod(&file, Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::ROTH)
+            .map_err(|_| CatalogCode::State)?;
+        let metadata = file.metadata().map_err(|_| CatalogCode::State)?;
+        if !metadata.is_file()
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.nlink() != 1
+            || metadata.permissions().mode() & 0o7777 != 0o644
+        {
+            return Err(CatalogCode::State);
+        }
+        file.write_all(bytes).map_err(|_| CatalogCode::State)?;
+        file.sync_all().map_err(|_| CatalogCode::State)?;
+        fsync(&directory).map_err(|_| CatalogCode::State)
+    })();
+    if result.is_err() {
+        let _ = unlinkat(&directory, name, AtFlags::empty());
+    }
+    result
+}
+
+pub(crate) fn verify_published_tree(
+    repository: &Path,
+    tree: &Path,
+    catalog_bytes: &[u8],
+    key_id: &str,
+    public_key: &[u8; 32],
+) -> Result<(), CatalogCode> {
+    if key_id != PRODUCTION_KEY_ID || !safe_tree_location(repository, tree) {
+        return Err(CatalogCode::Target);
+    }
+    let payload = verify_catalog_payload(
+        catalog_bytes,
+        key_id,
+        public_key,
+        CatalogOrigin::Production,
+        chrono::Utc::now(),
+    )?;
+    let mut expected = BTreeMap::new();
+    for target in &payload.targets {
+        let package = format!(
+            "marketplace/v1/packages/{}/{}/{}.ocpkg",
+            target.manifest.id(),
+            target.manifest.version(),
+            target.package_sha256
+        );
+        if expected
+            .insert(
+                package,
+                (target.package_size, target.package_sha256.as_str()),
+            )
+            .is_some()
+        {
+            return Err(CatalogCode::Target);
+        }
+        if let Some(preview) = &target.preview {
+            let path = format!(
+                "marketplace/v1/previews/{}/{}/{}.png",
+                target.manifest.id(),
+                target.manifest.version(),
+                preview.sha256
+            );
+            if expected
+                .insert(path, (preview.size, preview.sha256.as_str()))
+                .is_some()
+            {
+                return Err(CatalogCode::Target);
+            }
+        }
+    }
+    let mut object_files = BTreeSet::new();
+    walk_public_tree(tree, tree, &mut object_files, 0, &mut 0_u64)?;
+    if object_files != expected.keys().cloned().collect() {
+        return Err(CatalogCode::Target);
+    }
+    for (relative, (size, digest)) in expected {
+        let maximum = if relative.ends_with(".png") {
+            256 * 1024
+        } else {
+            16 * 1024 * 1024
+        };
+        let bytes = crate::package::read_source_file(tree, &relative, maximum)
+            .map_err(|_| CatalogCode::Target)?;
+        if bytes.len() as u64 != size || crate::lower_hex(&crate::sha256(&bytes)) != digest {
+            return Err(CatalogCode::Target);
+        }
+    }
+    Ok(())
+}
+
+fn safe_tree_location(repository: &Path, tree: &Path) -> bool {
+    if !normalized_absolute(repository) || !normalized_absolute(tree) {
+        return false;
+    }
+    let Ok(repository_canonical) = std::fs::canonicalize(repository) else {
+        return false;
+    };
+    let Ok(tree_canonical) = std::fs::canonicalize(tree) else {
+        return false;
+    };
+    if repository_canonical != repository || tree_canonical != tree {
+        return false;
+    }
+    if File::from(
+        match openat2(
+            CWD,
+            tree,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS,
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(_) => return false,
+        },
+    )
+    .metadata()
+    .is_err()
+    {
+        return false;
+    }
+    if tree == repository.join("published") {
+        return true;
+    }
+    let Ok(relative) = tree.strip_prefix(repository) else {
+        return false;
+    };
+    let components: Vec<_> = relative.iter().collect();
+    components.len() == 3
+        && components[0]
+            .to_str()
+            .is_some_and(|value| value.starts_with(".build-production.") && value.len() <= 64)
+        && components[1] == OsStr::new("repository")
+        && components[2] == OsStr::new("public")
+}
+
+fn walk_public_tree(
+    root: &Path,
+    directory: &Path,
+    objects: &mut BTreeSet<String>,
+    depth: usize,
+    aggregate: &mut u64,
+) -> Result<(), CatalogCode> {
+    if depth > 16 || objects.len() > 1_000 {
+        return Err(CatalogCode::Target);
+    }
+    let metadata = std::fs::symlink_metadata(directory).map_err(|_| CatalogCode::Target)?;
+    let mode = metadata.permissions().mode() & 0o7777;
+    if !metadata.is_dir()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || !matches!(mode, 0o700 | 0o755)
+    {
+        return Err(CatalogCode::Target);
+    }
+    for entry in std::fs::read_dir(directory).map_err(|_| CatalogCode::Target)? {
+        let entry = entry.map_err(|_| CatalogCode::Target)?;
+        let path = entry.path();
+        let relative = path.strip_prefix(root).map_err(|_| CatalogCode::Target)?;
+        let relative = relative.to_str().ok_or(CatalogCode::Target)?;
+        if relative.is_empty()
+            || relative.len() > 240
+            || !relative.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'/')
+            })
+            || relative
+                .split('/')
+                .any(|component| component.is_empty() || matches!(component, "." | ".."))
+        {
+            return Err(CatalogCode::Target);
+        }
+        let metadata = std::fs::symlink_metadata(&path).map_err(|_| CatalogCode::Target)?;
+        if metadata.is_dir() {
+            walk_public_tree(root, &path, objects, depth + 1, aggregate)?;
+        } else if metadata.is_file() {
+            if metadata.uid() != rustix::process::geteuid().as_raw()
+                || metadata.nlink() != 1
+                || metadata.permissions().mode() & 0o7777 != 0o644
+                || metadata.len() > 16 * 1024 * 1024
+            {
+                return Err(CatalogCode::Target);
+            }
+            *aggregate = aggregate
+                .checked_add(metadata.len())
+                .filter(|total| *total <= 128 * 1024 * 1024)
+                .ok_or(CatalogCode::Target)?;
+            if (relative.starts_with("marketplace/v1/packages/")
+                || relative.starts_with("marketplace/v1/previews/"))
+                && !objects.insert(relative.to_owned())
+            {
+                return Err(CatalogCode::Target);
+            }
+        } else {
             return Err(CatalogCode::Target);
         }
     }
@@ -865,6 +1281,7 @@ mod tests {
 
     #[test]
     fn production_state_requires_private_files_outside_repository() {
+        const BROWSER_SAFE_MAXIMUM: u64 = 9_007_199_254_740_991;
         let repository = tempfile::tempdir().expect("repository");
         let secrets = tempfile::tempdir().expect("secrets");
         std::fs::set_permissions(secrets.path(), Permissions::from_mode(0o700))
@@ -886,6 +1303,19 @@ mod tests {
             read_private_input(repository.path(), &input_path, 32).expect("private input"),
             b"1\n"
         );
+        let digest = [7; 32];
+        let mut state = PublisherState::production(repository.path(), &state_path)
+            .expect("private state at browser-safe sequence boundary");
+        state
+            .accept(BROWSER_SAFE_MAXIMUM, digest)
+            .expect("accept browser-safe maximum");
+        std::fs::write(&input_path, format!("{BROWSER_SAFE_MAXIMUM}\n"))
+            .expect("maximum browser-safe input");
+        assert_eq!(
+            state.advance_counter(&input_path, BROWSER_SAFE_MAXIMUM, digest),
+            Err(CatalogCode::Counter)
+        );
+        drop(state);
 
         std::fs::set_permissions(secrets.path(), Permissions::from_mode(0o770))
             .expect("unsafe secrets directory");
@@ -1065,7 +1495,7 @@ mod tests {
             &targets,
             10,
             "2026-08-25T00:00:00Z",
-            "2036-08-25T00:00:00Z",
+            "2026-09-24T00:00:00Z",
             CatalogOrigin::Production,
             "production-alias",
             &DEV_SEED,

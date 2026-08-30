@@ -1,10 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+import { resolve } from "node:path";
 
-const html = await readFile(new URL("../../web/landing/index.html", import.meta.url), "utf8");
+const sourceRoot = process.argv[2]
+  ? pathToFileURL(`${resolve(process.argv[2])}/`)
+  : new URL("../../web/landing/", import.meta.url);
+const html = await readFile(new URL("index.html", sourceRoot), "utf8");
 const css = await readFile(
-  new URL("../../web/landing/styles-5428c51a.css", import.meta.url),
+  new URL("styles-5428c51a.css", sourceRoot),
   "utf8",
 );
 

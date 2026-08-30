@@ -50,7 +50,9 @@ class Element {
   }
 }
 
-const catalogPath = process.argv[2] || "tests/fixtures/development-catalog.json";
+const catalogPath = process.env.MARKETPLACE_CATALOG_PATH
+  || process.argv[2]
+  || "tests/fixtures/development-catalog.json";
 
 function generated() {
   return fs.readFileSync(catalogPath, "utf8");

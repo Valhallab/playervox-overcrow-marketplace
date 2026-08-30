@@ -21,18 +21,19 @@ case "$staged_public" in
     *) printf '%s\n' 'error: unsafe staged publication path' >&2; exit 1 ;;
 esac
 case "$public" in
-    /*/public) ;;
+    /*/public | /*/published) ;;
     *) printf '%s\n' 'error: unsafe public path' >&2; exit 1 ;;
 esac
 
 live_parent=$(/usr/bin/dirname -- "$public")
 staged_parent=$(/usr/bin/dirname -- "$staged_public")
+live_name=${public##*/}
 case "$next_public" in
-    "$live_parent"/.public-next.?*) ;;
+    "$live_parent"/."$live_name"-next.?*) ;;
     *) printf '%s\n' 'error: unsafe next publication path' >&2; exit 1 ;;
 esac
 case "$previous_public" in
-    "$live_parent"/.public-previous.?*) ;;
+    "$live_parent"/."$live_name"-previous.?*) ;;
     *) printf '%s\n' 'error: unsafe previous publication path' >&2; exit 1 ;;
 esac
 

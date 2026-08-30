@@ -11,6 +11,8 @@ use serde_json::Value;
 
 const FIXED_GENERATED: &str = "2026-08-25T00:00:00Z";
 const FIXED_EXPIRES: &str = "2036-08-25T00:00:00Z";
+const PRODUCTION_EXPIRES: &str = "2026-09-24T00:00:00Z";
+const PRODUCTION_KEY_ID: &str = "overcrow-production-2026-01";
 
 #[test]
 fn snapshot_plan_accepts_only_a_bounded_regular_reviewed_tree() {
@@ -679,7 +681,7 @@ fn cli_build_is_reproducible_and_verifies_its_complete_source() {
             "--generated-at",
             FIXED_GENERATED,
             "--expires-at",
-            FIXED_EXPIRES,
+            PRODUCTION_EXPIRES,
             "--production",
             "--sequence-file",
             counter.to_str().expect("counter path"),
@@ -688,7 +690,7 @@ fn cli_build_is_reproducible_and_verifies_its_complete_source() {
             "--signing-key",
             signing_key.to_str().expect("key path"),
             "--key-id",
-            "overcrow-production-test",
+            PRODUCTION_KEY_ID,
         ])
         .status()
         .expect("production build");
@@ -707,10 +709,376 @@ fn cli_build_is_reproducible_and_verifies_its_complete_source() {
         .arg("--public-key")
         .arg(&public_key)
         .arg("--key-id")
-        .arg("overcrow-production-test")
+        .arg(PRODUCTION_KEY_ID)
         .status()
         .expect("verify production catalog");
     assert!(verified.success(), "production catalog verification");
+}
+
+#[test]
+fn production_authority_commands_are_private_atomic_and_payload_bound() {
+    let repository = tempfile::tempdir().expect("repository");
+    let target = tempfile::tempdir().expect("isolated cargo target");
+    let status = Command::new(env!("CARGO"))
+        .args([
+            "build",
+            "--release",
+            "--locked",
+            "--target",
+            "wasm32-wasip2",
+            "-p",
+            "hello-widget",
+            "--target-dir",
+        ])
+        .arg(target.path())
+        .status()
+        .expect("build hello fixture");
+    assert!(status.success(), "hello fixture must build");
+    prepare_fixture(
+        repository.path(),
+        &target
+            .path()
+            .join("wasm32-wasip2/release/hello_widget.wasm"),
+    );
+
+    let secrets = tempfile::tempdir().expect("external production secrets");
+    fs::set_permissions(secrets.path(), Permissions::from_mode(0o700))
+        .expect("private secrets directory");
+    let sequence = secrets.path().join("sequence.txt");
+    let state = secrets.path().join("state.json");
+    let signing_key = secrets.path().join("signing.key");
+    let public_key = secrets.path().join("signing.pub");
+    let seed = [42; 32];
+    write_private(&sequence, b"1\n");
+    write_private(&signing_key, format!("{}\n", lower_hex(&seed)).as_bytes());
+
+    let derived = tool()
+        .args(["derive-public-key", "--repository"])
+        .arg(repository.path())
+        .arg("--signing-key")
+        .arg(&signing_key)
+        .arg("--key-id")
+        .arg(PRODUCTION_KEY_ID)
+        .arg("--output")
+        .arg(&public_key)
+        .output()
+        .expect("derive fixture public key");
+    assert!(derived.status.success(), "public derivation succeeds");
+    assert_eq!(derived.stdout, b"public-key=derived\n");
+    assert!(derived.stderr.is_empty());
+    assert_eq!(
+        fs::metadata(&public_key)
+            .expect("public key output")
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o644
+    );
+    let key_bytes = fs::read(&public_key).expect("public key bytes");
+    assert!(
+        !derived
+            .stdout
+            .windows(16)
+            .any(|window| key_bytes.windows(16).any(|key| key == window))
+    );
+
+    let development_seed = secrets.path().join("development.key");
+    write_private(
+        &development_seed,
+        b"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\n",
+    );
+    for (key, key_id) in [
+        (&development_seed, PRODUCTION_KEY_ID),
+        (&signing_key, "overcrow-development-2026"),
+    ] {
+        let rejected_output = secrets.path().join(format!("rejected-{}", key_id));
+        let rejected = tool()
+            .args(["derive-public-key", "--repository"])
+            .arg(repository.path())
+            .arg("--signing-key")
+            .arg(key)
+            .arg("--key-id")
+            .arg(key_id)
+            .arg("--output")
+            .arg(&rejected_output)
+            .output()
+            .expect("reject development authority");
+        assert!(!rejected.status.success());
+        assert!(!rejected_output.exists());
+        assert!(
+            !String::from_utf8_lossy(&rejected.stderr)
+                .contains(secrets.path().to_string_lossy().as_ref())
+        );
+    }
+
+    let built = production_build(
+        repository.path(),
+        &sequence,
+        &state,
+        &signing_key,
+        FIXED_GENERATED,
+        PRODUCTION_EXPIRES,
+    );
+    assert!(built.status.success(), "production signer fixture");
+    let catalog = repository.path().join("public/marketplace/v1/catalog.json");
+    let advanced = tool()
+        .args(["advance-sequence", "--repository"])
+        .arg(repository.path())
+        .arg("--sequence-file")
+        .arg(&sequence)
+        .arg("--sequence-state")
+        .arg(&state)
+        .arg("--catalog")
+        .arg(&catalog)
+        .output()
+        .expect("advance accepted sequence");
+    assert!(advanced.status.success(), "accepted payload advances");
+    assert_eq!(advanced.stdout, b"sequence=advanced\n");
+    assert!(advanced.stderr.is_empty());
+    assert_eq!(fs::read(&sequence).expect("advanced counter"), b"2\n");
+    assert_eq!(
+        fs::metadata(&sequence)
+            .expect("counter metadata")
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o600
+    );
+
+    let before = fs::read(&sequence).expect("counter before rejected retry");
+    let rejected = tool()
+        .args(["advance-sequence", "--repository"])
+        .arg(repository.path())
+        .arg("--sequence-file")
+        .arg(&sequence)
+        .arg("--sequence-state")
+        .arg(&state)
+        .arg("--catalog")
+        .arg(&catalog)
+        .output()
+        .expect("reject stale accepted payload");
+    assert!(!rejected.status.success());
+    assert_eq!(fs::read(&sequence).expect("unchanged counter"), before);
+    assert!(
+        !String::from_utf8_lossy(&rejected.stderr)
+            .contains(secrets.path().to_string_lossy().as_ref())
+    );
+}
+
+#[test]
+fn verify_tree_accepts_only_the_exact_public_key_bound_object_tree() {
+    let repository = tempfile::tempdir().expect("repository");
+    let target = tempfile::tempdir().expect("isolated cargo target");
+    let status = Command::new(env!("CARGO"))
+        .args([
+            "build",
+            "--release",
+            "--locked",
+            "--target",
+            "wasm32-wasip2",
+            "-p",
+            "hello-widget",
+            "--target-dir",
+        ])
+        .arg(target.path())
+        .status()
+        .expect("build hello fixture");
+    assert!(status.success(), "hello fixture must build");
+    prepare_fixture(
+        repository.path(),
+        &target
+            .path()
+            .join("wasm32-wasip2/release/hello_widget.wasm"),
+    );
+    let secrets = tempfile::tempdir().expect("external production secrets");
+    fs::set_permissions(secrets.path(), Permissions::from_mode(0o700))
+        .expect("private secrets directory");
+    let sequence = secrets.path().join("sequence.txt");
+    let state = secrets.path().join("state.json");
+    let signing_key = secrets.path().join("signing.key");
+    let public_key = secrets.path().join("signing.pub");
+    write_private(&sequence, b"1\n");
+    write_private(
+        &signing_key,
+        format!("{}\n", lower_hex(&[42; 32])).as_bytes(),
+    );
+    let pair = Ed25519KeyPair::from_seed_unchecked(&[42; 32]).expect("fixture key");
+    fs::write(
+        &public_key,
+        format!("{}\n", lower_hex(pair.public_key().as_ref())),
+    )
+    .expect("public key fixture");
+    fs::set_permissions(&public_key, Permissions::from_mode(0o644)).expect("public key mode");
+    assert!(
+        production_build(
+            repository.path(),
+            &sequence,
+            &state,
+            &signing_key,
+            FIXED_GENERATED,
+            PRODUCTION_EXPIRES,
+        )
+        .status
+        .success()
+    );
+    let staged_parent = repository
+        .path()
+        .join(".build-production.fixture/repository");
+    fs::create_dir_all(&staged_parent).expect("allowed staging parent");
+    let tree = staged_parent.join("public");
+    assert!(
+        Command::new("/usr/bin/cp")
+            .args(["-R", "--"])
+            .arg(repository.path().join("public"))
+            .arg(&tree)
+            .status()
+            .expect("copy signed tree")
+            .success()
+    );
+
+    let verify = |candidate: &Path| {
+        tool()
+            .args(["verify-tree", "--repository"])
+            .arg(repository.path())
+            .arg("--tree")
+            .arg(candidate)
+            .arg("--public-key")
+            .arg(&public_key)
+            .arg("--key-id")
+            .arg(PRODUCTION_KEY_ID)
+            .output()
+            .expect("verify public tree")
+    };
+    let accepted = verify(&tree);
+    assert!(accepted.status.success(), "exact signed tree accepted");
+    assert_eq!(accepted.stdout, b"tree=verified\n");
+    assert!(accepted.stderr.is_empty());
+
+    let package = fs::read_dir(
+        tree.join("marketplace/v1/packages/com.playervox.overcrow.example.hello/0.1.0"),
+    )
+    .expect("package directory")
+    .next()
+    .expect("package object")
+    .expect("package entry")
+    .path();
+    let original = fs::read(&package).expect("package bytes");
+    fs::write(&package, b"tampered").expect("tamper package");
+    assert!(!verify(&tree).status.success(), "digest mismatch rejected");
+    fs::write(&package, &original).expect("restore package");
+    fs::set_permissions(&package, Permissions::from_mode(0o664)).expect("unsafe object mode");
+    assert!(
+        !verify(&tree).status.success(),
+        "unsafe object mode rejected"
+    );
+    fs::set_permissions(&package, Permissions::from_mode(0o644)).expect("restore object mode");
+    let extra = package.with_file_name(format!("{}.ocpkg", "f".repeat(64)));
+    fs::write(&extra, b"extra").expect("extra package");
+    assert!(
+        !verify(&tree).status.success(),
+        "extra content-addressed object rejected"
+    );
+    fs::remove_file(extra).expect("remove extra package");
+
+    let outside = tempfile::tempdir().expect("outside tree");
+    assert!(
+        !verify(outside.path()).status.success(),
+        "outside tree rejected"
+    );
+    let tree_link = repository
+        .path()
+        .join(".build-production.fixture/tree-link");
+    symlink(&tree, &tree_link).expect("tree symlink");
+    assert!(
+        !verify(&tree_link).status.success(),
+        "symlinked tree rejected"
+    );
+}
+
+#[test]
+fn production_build_requires_the_exact_key_and_thirty_day_window() {
+    let repository = tempfile::tempdir().expect("repository");
+    let target = tempfile::tempdir().expect("isolated cargo target");
+    assert!(
+        Command::new(env!("CARGO"))
+            .args([
+                "build",
+                "--release",
+                "--locked",
+                "--target",
+                "wasm32-wasip2",
+                "-p",
+                "hello-widget",
+                "--target-dir",
+            ])
+            .arg(target.path())
+            .status()
+            .expect("build hello fixture")
+            .success()
+    );
+    prepare_fixture(
+        repository.path(),
+        &target
+            .path()
+            .join("wasm32-wasip2/release/hello_widget.wasm"),
+    );
+    let secrets = tempfile::tempdir().expect("production secrets");
+    fs::set_permissions(secrets.path(), Permissions::from_mode(0o700)).expect("private directory");
+    let sequence = secrets.path().join("sequence.txt");
+    let state = secrets.path().join("state.json");
+    let signing_key = secrets.path().join("signing.key");
+    write_private(&sequence, b"1\n");
+    write_private(
+        &signing_key,
+        format!("{}\n", lower_hex(&[42; 32])).as_bytes(),
+    );
+
+    let wrong_expiry = production_build(
+        repository.path(),
+        &sequence,
+        &state,
+        &signing_key,
+        FIXED_GENERATED,
+        "2026-09-23T23:59:59Z",
+    );
+    assert!(!wrong_expiry.status.success(), "non-30-day expiry rejected");
+    assert!(!repository.path().join("public").exists());
+
+    let wrong_key = tool()
+        .args(["build", "--repository"])
+        .arg(repository.path())
+        .args([
+            "--generated-at",
+            FIXED_GENERATED,
+            "--expires-at",
+            PRODUCTION_EXPIRES,
+            "--production",
+            "--sequence-file",
+        ])
+        .arg(&sequence)
+        .arg("--sequence-state")
+        .arg(&state)
+        .arg("--signing-key")
+        .arg(&signing_key)
+        .args(["--key-id", "overcrow-production-test"])
+        .output()
+        .expect("reject wrong production key ID");
+    assert!(!wrong_key.status.success());
+    assert!(!repository.path().join("public").exists());
+
+    write_private(&sequence, b"9007199254740992\n");
+    let browser_unsafe_sequence = production_build(
+        repository.path(),
+        &sequence,
+        &state,
+        &signing_key,
+        FIXED_GENERATED,
+        PRODUCTION_EXPIRES,
+    );
+    assert!(
+        !browser_unsafe_sequence.status.success(),
+        "production sequence must remain an exact JavaScript integer"
+    );
 }
 
 fn tool() -> Command {
@@ -917,6 +1285,35 @@ fn development_build(repository: &Path) -> std::process::ExitStatus {
         ])
         .status()
         .expect("run marketplace build")
+}
+
+fn production_build(
+    repository: &Path,
+    sequence: &Path,
+    state: &Path,
+    signing_key: &Path,
+    generated_at: &str,
+    expires_at: &str,
+) -> Output {
+    tool()
+        .args(["build", "--repository"])
+        .arg(repository)
+        .args([
+            "--generated-at",
+            generated_at,
+            "--expires-at",
+            expires_at,
+            "--production",
+            "--sequence-file",
+        ])
+        .arg(sequence)
+        .arg("--sequence-state")
+        .arg(state)
+        .arg("--signing-key")
+        .arg(signing_key)
+        .args(["--key-id", PRODUCTION_KEY_ID])
+        .output()
+        .expect("run production marketplace build")
 }
 
 fn add_large_png_assets(repository: &Path, original: &[u8]) {

@@ -16,8 +16,9 @@ use std::{
 
 use crate::{
     catalog::{
-        CatalogOrigin, DEV_SEED, DEVELOPMENT_KEY_ID, PreparedTarget, PublisherState, build_catalog,
-        parse_counter, read_private_input, verify_catalog,
+        CatalogOrigin, DEV_SEED, DEVELOPMENT_KEY_ID, PRODUCTION_KEY_ID, PreparedTarget,
+        PublisherState, accepted_catalog_identity, build_catalog, derive_public_key, parse_counter,
+        read_private_input, verify_catalog, verify_published_tree,
     },
     metadata::{
         TargetSpec, bind_manifest_digests, inspect_component, validate_build_bindings,
@@ -119,6 +120,9 @@ fn run(arguments: Vec<OsString>) -> Result<(), AppError> {
         Some("build-plan") => build_plan(&arguments),
         Some("bind-build") => bind_build(&arguments),
         Some("snapshot-plan") => snapshot_plan(&arguments),
+        Some("derive-public-key") => derive_public(&arguments),
+        Some("advance-sequence") => advance_sequence(&arguments),
+        Some("verify-tree") => verify_tree(&arguments),
         _ => Err(AppError::Arguments),
     }
 }
@@ -200,7 +204,7 @@ fn build(options: BuildOptions) -> Result<(), AppError> {
             signing_key,
             key_id,
         } => {
-            if key_id == DEVELOPMENT_KEY_ID
+            if key_id != PRODUCTION_KEY_ID
                 || sequence_file == sequence_state
                 || sequence_file == signing_key
                 || sequence_state == signing_key
@@ -277,6 +281,78 @@ fn verify(arguments: &[String]) -> Result<(), AppError> {
     };
     verify_catalog(&bytes, key_id, &public_key, origin, chrono::Utc::now())
         .map_err(|_| AppError::Verification)
+}
+
+fn derive_public(arguments: &[String]) -> Result<(), AppError> {
+    if arguments.len() != 9
+        || arguments[1] != "--repository"
+        || arguments[3] != "--signing-key"
+        || arguments[5] != "--key-id"
+        || arguments[7] != "--output"
+    {
+        return Err(AppError::Arguments);
+    }
+    derive_public_key(
+        Path::new(&arguments[2]),
+        Path::new(&arguments[4]),
+        &arguments[6],
+        Path::new(&arguments[8]),
+    )
+    .map_err(|_| AppError::State)?;
+    std::io::stdout()
+        .write_all(b"public-key=derived\n")
+        .map_err(|_| AppError::Output)
+}
+
+fn advance_sequence(arguments: &[String]) -> Result<(), AppError> {
+    if arguments.len() != 9
+        || arguments[1] != "--repository"
+        || arguments[3] != "--sequence-file"
+        || arguments[5] != "--sequence-state"
+        || arguments[7] != "--catalog"
+    {
+        return Err(AppError::Arguments);
+    }
+    let repository = Path::new(&arguments[2]);
+    let sequence_file = Path::new(&arguments[4]);
+    let sequence_state = Path::new(&arguments[6]);
+    let catalog = Path::new(&arguments[8]);
+    if sequence_file == sequence_state || !catalog.is_absolute() {
+        return Err(AppError::Arguments);
+    }
+    let bytes = read_cli_file(catalog, 1024 * 1024).map_err(|_| AppError::Input)?;
+    let (sequence, digest) = accepted_catalog_identity(&bytes).map_err(|_| AppError::State)?;
+    let state =
+        PublisherState::production(repository, sequence_state).map_err(|_| AppError::State)?;
+    state
+        .advance_counter(sequence_file, sequence, digest)
+        .map_err(|_| AppError::State)?;
+    std::io::stdout()
+        .write_all(b"sequence=advanced\n")
+        .map_err(|_| AppError::Output)
+}
+
+fn verify_tree(arguments: &[String]) -> Result<(), AppError> {
+    if arguments.len() != 9
+        || arguments[1] != "--repository"
+        || arguments[3] != "--tree"
+        || arguments[5] != "--public-key"
+        || arguments[7] != "--key-id"
+    {
+        return Err(AppError::Arguments);
+    }
+    let repository = Path::new(&arguments[2]);
+    let tree = Path::new(&arguments[4]);
+    let public_key = read_cli_file(Path::new(&arguments[6]), 65)
+        .map_err(|_| AppError::Input)
+        .and_then(|bytes| decode_hex_32(&bytes).ok_or(AppError::Input))?;
+    let catalog = read_source_file(tree, "marketplace/v1/catalog.json", 1024 * 1024)
+        .map_err(|_| AppError::Input)?;
+    verify_published_tree(repository, tree, &catalog, &arguments[8], &public_key)
+        .map_err(|_| AppError::Verification)?;
+    std::io::stdout()
+        .write_all(b"tree=verified\n")
+        .map_err(|_| AppError::Output)
 }
 
 fn inspect(arguments: &[String]) -> Result<(), AppError> {

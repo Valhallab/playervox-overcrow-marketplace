@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+import { resolve } from "node:path";
 
-import * as siteModule from "../../web/landing/site-7ef11cd4.js";
+const sourceRoot = process.argv[2]
+  ? pathToFileURL(`${resolve(process.argv[2])}/`)
+  : new URL("../../web/landing/", import.meta.url);
+const siteModule = await import(new URL("site-7ef11cd4.js", sourceRoot));
 
 const { getCanvasSize, selectEffectsMode } = siteModule;
 

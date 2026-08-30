@@ -314,46 +314,10 @@ EOF
 }
 
 prepare_trusted_marketplace_tool() {
-    resolved_toolchain=$(sh "$script_dir/resolve-pinned-rust.sh" "$repo_root") \
-        || return 1
-    tab=$(printf '\t')
-    IFS="$tab" read -r toolchain_root cargo_path rustc_path \
-        cargo_index cargo_cache cargo_sources <<EOF
-$resolved_toolchain
-EOF
-    test -n "$cargo_sources" || return 1
-    tool_home="$work/trusted-home"
-    tool_cargo_home="$work/trusted-cargo-home"
-    tool_rustup_home="$work/trusted-rustup-home"
-    tool_target="$work/trusted-tool-target"
-    /usr/bin/install -d -m 0700 \
-        "$tool_home" "$tool_cargo_home/registry" "$tool_rustup_home" "$tool_target" \
-        || return 1
-    /usr/bin/ln -s -- "$cargo_index" "$tool_cargo_home/registry/index" || return 1
-    /usr/bin/ln -s -- "$cargo_cache" "$tool_cargo_home/registry/cache" || return 1
-    /usr/bin/ln -s -- "$cargo_sources" "$tool_cargo_home/registry/src" || return 1
-    if ! (CDPATH='' cd / && \
-            /usr/bin/env -i \
-                PATH="$toolchain_root/bin:/usr/bin:/bin" \
-                HOME="$tool_home" CARGO_HOME="$tool_cargo_home" \
-                RUSTUP_HOME="$tool_rustup_home" RUSTC="$rustc_path" \
-                CARGO_NET_OFFLINE=true CARGO_INCREMENTAL=0 \
-                CARGO_TARGET_DIR="$tool_target" LC_ALL=C.UTF-8 LANG=C.UTF-8 \
-                /usr/bin/timeout --signal=TERM --kill-after=5 180 \
-                /usr/bin/prlimit --cpu=120 --as=4294967296 --nproc=4096 \
-                    --nofile=256 --fsize=268435456 -- \
-                "$cargo_path" build \
-                    --manifest-path "$repo_root/tools/marketplace-tool/Cargo.toml" \
-                    --package marketplace-tool --release --locked --offline --quiet); then
-        return 1
-    fi
-    built_tool="$tool_target/release/marketplace-tool"
-    test -f "$built_tool" && test ! -L "$built_tool" || return 1
-    trusted_tool_binary="$work/trusted-marketplace-tool"
-    /usr/bin/install -m 0700 -- "$built_tool" "$trusted_tool_binary" || return 1
-    test -f "$trusted_tool_binary" && test ! -L "$trusted_tool_binary" \
-        && test "$(/usr/bin/stat -c '%u:%a:%h' "$trusted_tool_binary")" \
-            = "$(/usr/bin/id -u):700:1"
+    tool_work="$work/trusted-tool"
+    /usr/bin/install -d -m 0700 "$tool_work" || return 1
+    trusted_tool_binary=$(sh "$script_dir/prepare-marketplace-tool.sh" \
+        "$repo_root" "$tool_work") || return 1
 }
 
 /usr/bin/install -d -m 0700 "$source_root" "$target_root"

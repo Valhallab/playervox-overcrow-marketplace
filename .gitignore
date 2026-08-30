@@ -1,6 +1,8 @@
 /target/
 /public/
 /.build-production.*
+/.published-next.*
+/.published-previous.*
 /.worktrees/
 .env*
 *.key
