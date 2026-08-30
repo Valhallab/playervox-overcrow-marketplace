@@ -97,8 +97,31 @@ done
 /usr/bin/git init --quiet "$production_fixture"
 /usr/bin/git -C "$production_fixture" config user.name 'Marketplace Tests'
 /usr/bin/git -C "$production_fixture" config user.email 'marketplace-tests@invalid.example'
+printf '%s\n' '$Format:%<(17)%h$' >"$production_fixture/export-subst.txt"
+printf '%s\n' 'FILTER-RAW' >"$production_fixture/filter-target.txt"
 /usr/bin/git -C "$production_fixture" add --all
 /usr/bin/git -C "$production_fixture" commit --quiet -m 'reviewed production fixture'
+
+git_hook_marker="$scratch/git-hook-ran"
+fsmonitor_hook="$scratch/fsmonitor-hook"
+printf '%s\n' \
+    '#!/bin/sh' \
+    "printf '%s\\n' ran >'$git_hook_marker'" \
+    'exit 1' >"$fsmonitor_hook"
+/usr/bin/chmod 0700 "$fsmonitor_hook"
+filter_hook="$scratch/filter-hook"
+printf '%s\n' \
+    '#!/bin/sh' \
+    "printf '%s\\n' ran >'$git_hook_marker'" \
+    '/usr/bin/cat' >"$filter_hook"
+/usr/bin/chmod 0700 "$filter_hook"
+/usr/bin/git -C "$production_fixture" config core.fsmonitor "$fsmonitor_hook"
+/usr/bin/git -C "$production_fixture" config filter.host-marker.clean "$filter_hook"
+/usr/bin/git -C "$production_fixture" config filter.host-marker.smudge "$filter_hook"
+printf '%s\n' \
+    'export-subst.txt export-subst' \
+    'filter-target.txt filter=host-marker' \
+    >"$production_fixture/.git/info/attributes"
 
 printf '%s\n' 'ignored environment secret' \
     >"$production_fixture/widgets/warframe-status/.env"
@@ -106,9 +129,24 @@ printf '%s\n' 'ignored signing key' \
     >"$production_fixture/widgets/warframe-status/ambient.key"
 printf '%s\n' 'ignored temporary payload' \
     >"$production_fixture/widgets/warframe-status/ambient.tmp"
+fake_path="$scratch/fake-path"
+/usr/bin/install -d -m 0700 "$fake_path"
+fake_cargo_marker="$scratch/fake-cargo-ran"
+printf '%s\n' \
+    '#!/bin/sh' \
+    "printf '%s\\n' ran >'$fake_cargo_marker'" \
+    'exit 99' >"$fake_path/cargo"
+/usr/bin/chmod 0700 "$fake_path/cargo"
 production_stage="$scratch/production-stage"
-sh "$production_fixture/scripts/stage-catalog-repository.sh" \
-    --mode production "$production_stage"
+PATH="$fake_path:/usr/bin:/bin" \
+    sh "$production_fixture/scripts/stage-catalog-repository.sh" \
+        --mode production "$production_stage"
+test ! -e "$fake_cargo_marker" && test ! -L "$fake_cargo_marker"
+test ! -e "$git_hook_marker" && test ! -L "$git_hook_marker"
+/usr/bin/cmp -s -- "$production_fixture/export-subst.txt" \
+    "$production_stage/export-subst.txt"
+/usr/bin/cmp -s -- "$production_fixture/filter-target.txt" \
+    "$production_stage/filter-target.txt"
 for relative in \
         widgets/warframe-status/.env \
         widgets/warframe-status/ambient.key \
@@ -155,5 +193,35 @@ if wait "$stage_pid"; then
 fi
 stage_pid=''
 test ! -e "$race_stage" && test ! -L "$race_stage"
+
+source_race_stage="$scratch/source-race-production-stage"
+sh "$production_fixture/scripts/stage-catalog-repository.sh" \
+    --mode production "$source_race_stage" &
+stage_pid=$!
+attempt=0
+source_race_file=''
+while test -z "$source_race_file"; do
+    source_race_file=$(
+        /usr/bin/find "$scratch" \
+            -path "${source_race_stage}.build.*/repository/web/landing/index.html" \
+            -print -quit
+    )
+    attempt=$((attempt + 1))
+    if test "$attempt" -ge 600; then
+        printf '%s\n' 'error: source-integrity race did not reach its snapshot' >&2
+        exit 1
+    fi
+    /usr/bin/sleep 0.05
+done
+source_race_size=$(/usr/bin/stat -c '%s' "$source_race_file")
+/usr/bin/dd if=/dev/zero bs=1 count="$source_race_size" 2>/dev/null \
+    | /usr/bin/tr '\000' X >"$source_race_file"
+if wait "$stage_pid"; then
+    stage_pid=''
+    printf '%s\n' 'error: modified staged source was accepted' >&2
+    exit 1
+fi
+stage_pid=''
+test ! -e "$source_race_stage" && test ! -L "$source_race_stage"
 
 printf '%s\n' 'Catalog staging smoke tests passed'

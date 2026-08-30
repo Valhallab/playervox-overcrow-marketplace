@@ -89,118 +89,46 @@ if test ! -f "$bwrap_path" || test -L "$bwrap_path" \
     printf '%s\n' 'error: Bubblewrap is unavailable or unsafe' >&2
     exit 1
 fi
-for program in /usr/bin/timeout /usr/bin/prlimit /usr/bin/tar /usr/bin/env; do
+for program in \
+        /usr/bin/timeout /usr/bin/prlimit /usr/bin/tar /usr/bin/env \
+        /usr/bin/systemd-run /usr/bin/gcc /usr/bin/setpriv; do
     if test ! -f "$program" || test -L "$program" \
             || test "$(/usr/bin/stat -c '%u:%a' "$program")" != 0:755; then
         printf '%s\n' 'error: required resource control is unavailable' >&2
         exit 1
     fi
 done
+runtime_directory="/run/user/$invoking_uid"
+session_bus="$runtime_directory/bus"
+if test ! -d "$runtime_directory" || test -L "$runtime_directory" \
+        || test "$(/usr/bin/stat -c '%u:%a' "$runtime_directory")" \
+            != "$invoking_uid:700" \
+        || test ! -S "$session_bus" || test -L "$session_bus" \
+        || test "$(/usr/bin/stat -c '%u' "$session_bus")" != "$invoking_uid"; then
+    printf '%s\n' 'error: delegated build resource scope is unavailable' >&2
+    exit 1
+fi
 
-pin_file="$source_root/rust-toolchain.toml"
-if test ! -f "$pin_file" || test -L "$pin_file" \
-        || test "$(/usr/bin/stat -c '%u:%h' "$pin_file")" != "$invoking_uid:1" \
-        || test "$(/usr/bin/stat -c '%s' "$pin_file")" -gt 4096 \
-        || /usr/bin/find "$pin_file" -perm /0022 -print -quit | /usr/bin/grep . >/dev/null; then
+script_dir=$(CDPATH='' cd -- "$(/usr/bin/dirname -- "$0")" && pwd -P)
+resolved_toolchain=$(sh "$script_dir/resolve-pinned-rust.sh" "$source_root") || exit 1
+tab=$(printf '\t')
+IFS="$tab" read -r toolchain_root cargo_path rustc_path \
+    cargo_index cargo_cache cargo_sources <<EOF
+$resolved_toolchain
+EOF
+if test -z "$cargo_sources"; then
     printf '%s\n' 'error: pinned Rust toolchain is unavailable' >&2
     exit 1
 fi
-pinned_release=$(
-    /usr/bin/awk '
-        /^[[:space:]]*\[/ {
-            in_toolchain = ($0 ~ /^[[:space:]]*\[toolchain\][[:space:]]*$/)
-            next
-        }
-        /^[[:space:]]*channel[[:space:]]*=/ {
-            count += 1
-            if (!in_toolchain || $0 !~ /^[[:space:]]*channel[[:space:]]*=[[:space:]]*"1[.]98[.]0"[[:space:]]*$/) {
-                exit 1
-            }
-        }
-        END {
-            if (count != 1) exit 1
-            print "1.98.0"
-        }
-    ' "$pin_file"
-) || {
-    printf '%s\n' 'error: pinned Rust toolchain is unavailable' >&2
-    exit 1
-}
-if test "$pinned_release" != 1.98.0; then
-    printf '%s\n' 'error: pinned Rust toolchain is unavailable' >&2
-    exit 1
-fi
-case "$(/usr/bin/uname -m)" in
-    x86_64) rust_host=x86_64-unknown-linux-gnu ;;
-    aarch64) rust_host=aarch64-unknown-linux-gnu ;;
-    *) printf '%s\n' 'error: pinned Rust toolchain is unavailable' >&2; exit 1 ;;
-esac
-user_root=$(/usr/bin/getent passwd "$invoking_uid" | /usr/bin/cut -d : -f 6)
-case "$user_root" in
-    /*) ;;
-    *) printf '%s\n' 'error: pinned Rust toolchain is unavailable' >&2; exit 1 ;;
-esac
-if test "$user_root" = / || test ! -d "$user_root" || test -L "$user_root" \
-        || test "$(CDPATH='' cd -- "$user_root" && pwd -P)" != "$user_root" \
-        || test "$(/usr/bin/stat -c '%u' "$user_root")" != "$invoking_uid" \
-        || /usr/bin/find "$user_root" -maxdepth 0 -perm /0022 -print -quit \
-            | /usr/bin/grep . >/dev/null; then
-    printf '%s\n' 'error: pinned Rust toolchain is unavailable' >&2
-    exit 1
-fi
-toolchain_root="$user_root/.rustup/toolchains/$pinned_release-$rust_host"
-toolchain_bin="$toolchain_root/bin"
-cargo_path="$toolchain_bin/cargo"
-rustc_path="$toolchain_bin/rustc"
-caller_cargo=$(command -v cargo 2>/dev/null || true)
-caller_cargo=$(/usr/bin/readlink -f -- "$caller_cargo" 2>/dev/null || true)
-if test "$caller_cargo" != "$cargo_path" \
-        || test ! -d "$toolchain_root" || test -L "$toolchain_root" \
-        || test "$(/usr/bin/readlink -f -- "$toolchain_root")" != "$toolchain_root" \
-        || test "$(/usr/bin/stat -c '%u' "$toolchain_root")" != "$invoking_uid"; then
-    printf '%s\n' 'error: pinned Rust toolchain is unavailable' >&2
-    exit 1
-fi
-cargo_home="$user_root/.cargo"
-cargo_index="$cargo_home/registry/index"
-cargo_cache="$cargo_home/registry/cache"
-cargo_sources="$cargo_home/registry/src"
-for required in \
-        "$cargo_path" "$rustc_path" \
-        "$toolchain_root/lib/rustlib/wasm32-wasip2" \
-        "$cargo_index" "$cargo_cache" "$cargo_sources"; do
-    if test ! -e "$required" || test -L "$required"; then
-        printf '%s\n' 'error: required read-only build input is unavailable' >&2
-        exit 1
-    fi
-done
-for directory in \
-        "$toolchain_root" "$toolchain_root/lib/rustlib/wasm32-wasip2" \
-        "$cargo_index" "$cargo_cache" "$cargo_sources"; do
-    if test ! -d "$directory" || test -L "$directory" \
-            || test "$(/usr/bin/readlink -f -- "$directory")" != "$directory" \
-            || test "$(/usr/bin/stat -c '%u' "$directory")" != "$invoking_uid" \
-            || /usr/bin/find "$directory" -maxdepth 0 -perm /0022 -print -quit \
-                | /usr/bin/grep . >/dev/null; then
-        printf '%s\n' 'error: required read-only build input is unavailable' >&2
-        exit 1
-    fi
-done
-for binary in "$cargo_path" "$rustc_path"; do
-    if test ! -f "$binary" || test -L "$binary" \
-            || test "$(/usr/bin/stat -c '%u:%a:%h' "$binary")" != "$invoking_uid:755:1"; then
-        printf '%s\n' 'error: pinned Rust toolchain is unavailable' >&2
-        exit 1
-    fi
-done
-version_file=$(/usr/bin/mktemp /tmp/marketplace-rustc-version.XXXXXXXXXX) || exit 1
 artifact_archive="$target_root/.component-artifacts.tar"
 artifact_directory="$target_root/artifacts"
+supervisor_directory=$(/usr/bin/mktemp -d /tmp/marketplace-supervisor.XXXXXXXXXX) || exit 1
+supervisor="$supervisor_directory/sandbox-supervisor"
 cleanup_version() {
     status=$?
     trap - EXIT HUP INT TERM
-    /usr/bin/rm -f -- "$version_file"
     /usr/bin/rm -f -- "$artifact_archive"
+    /usr/bin/rm -rf -- "$supervisor_directory"
     if test "$status" -ne 0 && test -n "$artifact_directory"; then
         /usr/bin/rm -rf -- "$artifact_directory"
     fi
@@ -208,86 +136,127 @@ cleanup_version() {
 }
 trap cleanup_version EXIT HUP INT TERM
 if ! /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
-        /usr/bin/timeout --signal=KILL 5 \
-        /usr/bin/prlimit --cpu=5 --as=1073741824 --nofile=64 --fsize=4096 -- \
-        "$rustc_path" --version --verbose >"$version_file" 2>/dev/null; then
-    printf '%s\n' 'error: pinned Rust toolchain is unavailable' >&2
+        /usr/bin/timeout --signal=KILL 10 \
+        /usr/bin/prlimit --cpu=5 --as=536870912 --nproc=4096 \
+            --nofile=64 --fsize=1048576 -- \
+        /usr/bin/gcc -std=c11 -O2 -Wall -Wextra -Werror \
+            "$script_dir/sandbox-supervisor.c" -o "$supervisor" \
+            >/dev/null 2>&1 \
+        || test ! -f "$supervisor" || test -L "$supervisor" \
+        || test "$(/usr/bin/stat -c '%u:%a:%h' "$supervisor")" \
+            != "$invoking_uid:700:1" \
+        || test "$(/usr/bin/stat -c '%s' "$supervisor")" -gt 1048576; then
+    printf '%s\n' 'error: trusted sandbox supervisor is unavailable' >&2
     exit 1
 fi
-release_count=$(/usr/bin/grep -c '^release: 1[.]98[.]0$' "$version_file" || :)
-banner_count=$(/usr/bin/grep -c '^rustc 1[.]98[.]0 ' "$version_file" || :)
-if test "$release_count" != 1 || test "$banner_count" != 1; then
-    printf '%s\n' 'error: pinned Rust toolchain is unavailable' >&2
-    exit 1
-fi
+: >"$artifact_archive"
+/usr/bin/chmod 0600 "$artifact_archive"
 
-if ! /usr/bin/timeout --signal=TERM --kill-after=5 120 \
+run_sandboxed_build() {
+    /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
+        XDG_RUNTIME_DIR="$runtime_directory" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=$session_bus" \
+        /usr/bin/systemd-run --user --scope --quiet --collect \
+        --property=MemoryMax=1073741824 \
+        --property=MemorySwapMax=0 \
+        --property=TasksMax=256 \
+        --property=CPUQuota=200% \
+        --property=RuntimeMaxSec=120 \
+        /usr/bin/timeout --signal=TERM --kill-after=5 120 \
         /usr/bin/prlimit --cpu=20 --as=4294967296 --nproc=4096 \
             --nofile=256 --fsize=33554432 -- \
         "$bwrap_path" \
-        --unshare-all \
-        --unshare-net \
-        --die-with-parent \
-        --new-session \
-        --cap-drop ALL \
-        --clearenv \
-        --ro-bind /usr /usr \
-        --symlink usr/bin /bin \
-        --symlink usr/lib /lib \
-        --symlink usr/lib /lib64 \
-        --proc /proc \
-        --dev /dev \
-        --tmpfs /tmp \
-        --size 268435456 \
-        --tmpfs /output \
-        --dir /home \
-        --dir /home/build \
-        --dir /cargo-home \
-        --dir /cargo-home/registry \
-        --ro-bind "$cargo_index" /cargo-home/registry/index \
-        --ro-bind "$cargo_cache" /cargo-home/registry/cache \
-        --ro-bind "$cargo_sources" /cargo-home/registry/src \
-        --ro-bind "$toolchain_root" /rust-toolchain \
-        --dir /rustup-home \
-        --ro-bind "$source_root" /source \
-        --ro-bind "$build_plan" /build-plan.tsv \
-        --chdir /source \
-        --setenv PATH /rust-toolchain/bin:/usr/bin:/bin \
-        --setenv HOME /home/build \
-        --setenv CARGO_HOME /cargo-home \
-        --setenv RUSTUP_HOME /rustup-home \
-        --setenv RUSTC /rust-toolchain/bin/rustc \
-        --setenv CARGO_NET_OFFLINE true \
-        --setenv CARGO_TARGET_DIR /output/target \
-        --setenv CARGO_INCREMENTAL 0 \
-        --setenv CARGO_BUILD_JOBS 2 \
-        --setenv LC_ALL C.UTF-8 \
-        --setenv LANG C.UTF-8 \
-        --setenv SOURCE_DATE_EPOCH 0 \
-        --setenv RUSTFLAGS '--remap-path-prefix=/source=/usr/src/overcrow' \
-        /bin/sh -c '
-            if IFS= read -r inherited_input; then
-                exit 1
-            fi
-            tab=$(printf "\t")
-            set --
-            while IFS="$tab" read -r package artifact source; do
-                set -- "$@" -p "$package"
-            done </build-plan.tsv
-            /rust-toolchain/bin/cargo build \
-                --manifest-path /source/Cargo.toml \
-                --release \
-                --target wasm32-wasip2 \
-                --locked \
-                --offline \
-                --lib "$@" >/dev/null 2>&1 || exit 1
-            set --
-            while IFS="$tab" read -r package artifact source; do
-                set -- "$@" "$artifact.wasm"
-            done </build-plan.tsv
-            cd /output/target/wasm32-wasip2/release || exit 1
-            /usr/bin/tar --create --file=- -- "$@"
-        ' </dev/null >"$artifact_archive" 2>/dev/null; then
+            --unshare-all --unshare-net --die-with-parent --new-session \
+            --cap-drop ALL --clearenv \
+            --ro-bind /usr /usr \
+            --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib /lib64 \
+            --dir /proc --proc /proc --dir /dev --dev /dev \
+            --dir /build --size 268435456 --tmpfs /build \
+            --dir /build/output --dir /build/tmp \
+            --dir /build/home --dir /build/cargo-home \
+            --dir /build/cargo-home/registry --dir /build/rustup-home \
+            --dir /home --symlink ../build/home /home/build \
+            --symlink build/tmp /tmp --symlink build/output /output \
+            --symlink build/cargo-home /cargo-home \
+            --symlink build/rustup-home /rustup-home \
+            --ro-bind "$cargo_index" /build/cargo-home/registry/index \
+            --ro-bind "$cargo_cache" /build/cargo-home/registry/cache \
+            --ro-bind "$cargo_sources" /build/cargo-home/registry/src \
+            --ro-bind "$toolchain_root" /rust-toolchain \
+            --ro-bind "$supervisor" /sandbox-supervisor \
+            --ro-bind "$source_root" /source \
+            --ro-bind "$build_plan" /build-plan.tsv \
+            --bind "$artifact_archive" /artifact-export \
+            --chdir / --setenv PATH /usr/bin:/bin --setenv LC_ALL C.UTF-8 \
+            /sandbox-supervisor /bin/sh -c '
+                /usr/bin/cp -- /build-plan.tsv /build/compile-plan.tsv || exit 1
+                /usr/bin/chmod 0444 /build/compile-plan.tsv || exit 1
+                /usr/bin/setsid /usr/bin/setpriv \
+                    --landlock-access fs:execute,write-file,read-file,read-dir,remove-dir,remove-file,make-dir,make-reg,make-sock,make-fifo,make-sym,refer,truncate \
+                    --landlock-rule path-beneath:execute,read-file,read-dir:/usr \
+                    --landlock-rule path-beneath:execute,read-file,read-dir:/rust-toolchain \
+                    --landlock-rule path-beneath:read-file,read-dir:/source \
+                    --landlock-rule path-beneath:read-file:/build/compile-plan.tsv \
+                    --landlock-rule path-beneath:execute,write-file,read-file,read-dir,remove-dir,remove-file,make-dir,make-reg,make-sock,make-fifo,make-sym,refer,truncate:/build \
+                    --landlock-rule path-beneath:read-file,read-dir:/proc \
+                    --landlock-rule path-beneath:write-file,read-file,read-dir:/dev \
+                    --no-new-privs /usr/bin/env -i \
+                    PATH=/rust-toolchain/bin:/usr/bin:/bin \
+                    HOME=/home/build TMPDIR=/tmp \
+                    CARGO_HOME=/cargo-home RUSTUP_HOME=/rustup-home \
+                    RUSTC=/rust-toolchain/bin/rustc CARGO_NET_OFFLINE=true \
+                    CARGO_TARGET_DIR=/output/target CARGO_INCREMENTAL=0 \
+                    CARGO_BUILD_JOBS=2 LC_ALL=C.UTF-8 LANG=C.UTF-8 \
+                    SOURCE_DATE_EPOCH=0 \
+                    RUSTFLAGS="--remap-path-prefix=/source=/usr/src/overcrow" \
+                    /bin/sh -c '\''
+                        tab=$(printf "\t")
+                        set --
+                        while IFS="$tab" read -r package artifact source; do
+                            set -- "$@" -p "$package"
+                        done </build/compile-plan.tsv
+                        /rust-toolchain/bin/cargo build \
+                            --manifest-path /source/Cargo.toml \
+                            --release --target wasm32-wasip2 \
+                            --locked --offline --lib "$@"
+                    '\'' </dev/null >/dev/null 2>/dev/null || exit 1
+                self_id=$(/bin/sh -c '\''printf "%s\n" "$PPID"'\'')
+                for pass in 1 2 3; do
+                    for process in /proc/[0-9]*; do
+                        process_id=$(/usr/bin/basename -- "$process")
+                        case "$process_id" in
+                            1 | "$self_id") continue ;;
+                        esac
+                        /bin/kill -STOP "$process_id" 2>/dev/null || :
+                        /bin/kill -KILL "$process_id" 2>/dev/null || :
+                    done
+                done
+                for process in /proc/[0-9]*; do
+                    process_id=$(/usr/bin/basename -- "$process")
+                    case "$process_id" in
+                        1 | "$self_id") continue ;;
+                    esac
+                    test ! -e "$process" || exit 1
+                done
+                tab=$(printf "\t")
+                set --
+                expected=0
+                while IFS="$tab" read -r package artifact source; do
+                    file="/build/output/target/wasm32-wasip2/release/$artifact.wasm"
+                    test -f "$file" && test ! -L "$file" \
+                        && test "$(/usr/bin/stat -c "%u" "$file")" \
+                            = "$(/usr/bin/id -u)" \
+                        && test "$(/usr/bin/stat -c "%s" "$file")" -le 4194304 \
+                        || exit 1
+                    set -- "$@" "$artifact.wasm"
+                    expected=$((expected + 1))
+                done </build-plan.tsv
+                test "$expected" -gt 0 || exit 1
+                cd /build/output/target/wasm32-wasip2/release || exit 1
+                /usr/bin/tar --create --format=ustar --file=/artifact-export -- "$@"
+            '
+}
+if ! run_sandboxed_build </dev/null >/dev/null 2>/dev/null; then
     printf '%s\n' 'error: sandboxed component build failed' >&2
     exit 1
 fi
@@ -298,33 +267,8 @@ if test ! -f "$artifact_archive" || test -L "$artifact_archive" \
     printf '%s\n' 'error: sandboxed component artifacts are unsafe' >&2
     exit 1
 fi
-/usr/bin/install -d -m 0700 "$artifact_directory"
-if ! /usr/bin/tar --extract --file="$artifact_archive" \
-        --directory="$artifact_directory" --no-same-owner --no-same-permissions \
-        --no-xattrs --no-acls --no-selinux; then
-    printf '%s\n' 'error: sandboxed component artifacts are unsafe' >&2
-    exit 1
-fi
-artifact_count=0
-while IFS="$tab" read -r cargo_package component_artifact source_directory; do
-    artifact="$artifact_directory/$component_artifact.wasm"
-    if test ! -f "$artifact" || test -L "$artifact" \
-            || test "$(/usr/bin/stat -c '%u:%a:%h' "$artifact")" \
-                != "$invoking_uid:600:1" \
-            || test "$(/usr/bin/stat -c '%s' "$artifact")" -gt 4194304; then
-        printf '%s\n' 'error: sandboxed component artifacts are unsafe' >&2
-        exit 1
-    fi
-    artifact_count=$((artifact_count + 1))
-done <"$build_plan"
-actual_artifacts=$(
-    /usr/bin/find "$artifact_directory" -mindepth 1 -maxdepth 1 -type f -printf . \
-        | /usr/bin/wc -c
-)
-if test "$artifact_count" -ne "$package_count" \
-        || test "$actual_artifacts" -ne "$package_count" \
-        || test -n "$(/usr/bin/find "$artifact_directory" -mindepth 1 ! -type f -print -quit)"; then
-    printf '%s\n' 'error: sandboxed component artifacts are unsafe' >&2
+if ! sh "$script_dir/extract-component-artifacts.sh" \
+        "$artifact_archive" "$build_plan" "$artifact_directory"; then
     exit 1
 fi
 /usr/bin/rm -f -- "$artifact_archive"

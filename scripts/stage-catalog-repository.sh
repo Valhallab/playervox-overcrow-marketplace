@@ -35,7 +35,10 @@ source_root="$work/repository"
 target_root="$work/component-output"
 provider_root="$work/provider-repository"
 plan="$work/build-plan.tsv"
-snapshot_archive="$work/reviewed-tree.tar"
+snapshot_plan_file="$work/snapshot-plan.tsv"
+mutable_snapshot_paths="$work/mutable-snapshot-paths"
+expected_final_paths="$work/expected-final-paths"
+trusted_tool_binary=''
 production_revision=''
 production_tree=''
 cleanup() {
@@ -47,8 +50,12 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 marketplace_tool() {
-    cargo run --manifest-path "$repo_root/tools/marketplace-tool/Cargo.toml" \
-        --locked --quiet -- "$@"
+    if test "$mode" = production; then
+        "$trusted_tool_binary" "$@"
+    else
+        cargo run --manifest-path "$repo_root/tools/marketplace-tool/Cargo.toml" \
+            --locked --quiet -- "$@"
+    fi
 }
 
 trusted_program() {
@@ -63,21 +70,164 @@ trusted_git() {
         GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 \
         /usr/bin/timeout --signal=KILL 10 \
         /usr/bin/prlimit --cpu=5 --as=536870912 --nofile=128 -- \
-        /usr/bin/git --no-replace-objects -C "$repo_root" "$@"
+        /usr/bin/git --no-replace-objects \
+            -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+            -c core.attributesFile=/dev/null -c core.excludesFile=/dev/null \
+            -c diff.external= -C "$repo_root" "$@"
 }
 
 git_candidate_is_clean() {
     revision=$1
     test "$(trusted_git rev-parse --show-toplevel 2>/dev/null)" = "$repo_root" \
         && test "$(trusted_git rev-parse --verify 'HEAD^{commit}' 2>/dev/null)" = "$revision" \
-        && trusted_git diff --quiet --no-ext-diff "$revision" -- \
-        && trusted_git diff --cached --quiet --no-ext-diff "$revision" -- \
-        && trusted_git status --porcelain=v1 --untracked-files=all --ignored=no \
-            >/dev/null 2>&1 \
-        && ! trusted_git status --porcelain=v1 --untracked-files=all --ignored=no \
+        && trusted_git diff-index --cached --quiet --no-ext-diff "$revision" -- \
+        && ! trusted_git ls-files --others --exclude-per-directory=.gitignore \
             2>/dev/null | /usr/bin/grep -q . \
-        && trusted_git status --porcelain=v1 --untracked-files=all --ignored=no \
-            >/dev/null 2>&1
+        && snapshot_matches_root "$repo_root"
+}
+
+snapshot_path_is_mutable() {
+    relative=$1
+    test -s "$mutable_snapshot_paths" \
+        && /usr/bin/grep -F -x -- "$relative" "$mutable_snapshot_paths" >/dev/null
+}
+
+snapshot_matches_root() {
+    root=$1
+    allow_mutable=${2:-no}
+    tab=$(printf '\t')
+    checked_entries=0
+    checked_bytes=0
+    while IFS="$tab" read -r expected_mode expected_size expected_oid relative; do
+        case "$expected_mode:$expected_size:$expected_oid:$relative" in
+            100644:* | 100755:*) ;;
+            *) return 1 ;;
+        esac
+        file="$root/$relative"
+        test -f "$file" && test ! -L "$file" || return 1
+        is_mutable=no
+        if test "$allow_mutable" = yes && snapshot_path_is_mutable "$relative"; then
+            is_mutable=yes
+            test "$(/usr/bin/stat -c '%u:%h' "$file")" \
+                = "$(/usr/bin/id -u):1" || return 1
+        else
+            test "$(/usr/bin/stat -c '%u:%h:%s' "$file")" \
+                = "$(/usr/bin/id -u):1:$expected_size" || return 1
+        fi
+        if test "$expected_mode" = 100644; then
+            test -z "$(/usr/bin/find "$file" -maxdepth 0 -perm /0111 -print -quit)" \
+                || return 1
+        else
+            test -n "$(/usr/bin/find "$file" -maxdepth 0 -perm /0100 -print -quit)" \
+                || return 1
+        fi
+        if test "$is_mutable" = no; then
+            actual_oid=$(trusted_git hash-object --no-filters -- "$file" 2>/dev/null) \
+                || return 1
+            test "$actual_oid" = "$expected_oid" || return 1
+        fi
+        checked_entries=$((checked_entries + 1))
+        checked_bytes=$((checked_bytes + expected_size))
+        test "$checked_entries" -le 1000 && test "$checked_bytes" -le 16777216 \
+            || return 1
+    done <"$snapshot_plan_file"
+    test "$checked_entries" -gt 0
+}
+
+materialize_snapshot() {
+    tab=$(printf '\t')
+    materialized_entries=0
+    materialized_bytes=0
+    while IFS="$tab" read -r expected_mode expected_size expected_oid relative; do
+        case "$expected_mode:$expected_size:$expected_oid:$relative" in
+            100644:* | 100755:*) ;;
+            *) return 1 ;;
+        esac
+        destination="$source_root/$relative"
+        parent=$(/usr/bin/dirname -- "$destination") || return 1
+        /usr/bin/install -d -m 0700 -- "$parent" || return 1
+        test ! -e "$destination" && test ! -L "$destination" || return 1
+        if ! trusted_git cat-file blob "$expected_oid" >"$destination" 2>/dev/null; then
+            return 1
+        fi
+        test "$(/usr/bin/stat -c '%s' "$destination")" = "$expected_size" \
+            || return 1
+        if test "$expected_mode" = 100755; then
+            /usr/bin/chmod 0700 -- "$destination" || return 1
+        else
+            /usr/bin/chmod 0600 -- "$destination" || return 1
+        fi
+        materialized_entries=$((materialized_entries + 1))
+        materialized_bytes=$((materialized_bytes + expected_size))
+        test "$materialized_entries" -le 1000 \
+            && test "$materialized_bytes" -le 16777216 || return 1
+    done <"$snapshot_plan_file"
+    test "$materialized_entries" -gt 0 \
+        && test "$(/usr/bin/find "$source_root" -xdev -type f -printf . \
+            | /usr/bin/wc -c)" = "$materialized_entries" \
+        && test -z "$(/usr/bin/find "$source_root" -xdev ! -type d ! -type f -print -quit)" \
+        && test -z "$(/usr/bin/find "$source_root" -xdev ! -user "$(/usr/bin/id -u)" -print -quit)" \
+        && test -z "$(/usr/bin/find "$source_root" -xdev -perm /0022 -print -quit)" \
+        && snapshot_matches_root "$source_root"
+}
+
+final_source_tree_is_expected() {
+    test -z "$(/usr/bin/find "$source_root" -xdev ! -type d ! -type f -print -quit)" \
+        && test -z "$(/usr/bin/find "$source_root" -xdev ! -user "$(/usr/bin/id -u)" -print -quit)" \
+        && test -z "$(/usr/bin/find "$source_root" -xdev -perm /0022 -print -quit)" \
+        || return 1
+    actual_entries=0
+    while IFS= read -r actual_path; do
+        /usr/bin/grep -F -x -- "$actual_path" "$expected_final_paths" >/dev/null \
+            || return 1
+        actual_entries=$((actual_entries + 1))
+    done <<EOF
+$(/usr/bin/find "$source_root" -xdev -type f -printf '%P\n')
+EOF
+    test "$actual_entries" = "$(/usr/bin/wc -l <"$expected_final_paths")"
+}
+
+prepare_trusted_marketplace_tool() {
+    resolved_toolchain=$(sh "$script_dir/resolve-pinned-rust.sh" "$repo_root") \
+        || return 1
+    tab=$(printf '\t')
+    IFS="$tab" read -r toolchain_root cargo_path rustc_path \
+        cargo_index cargo_cache cargo_sources <<EOF
+$resolved_toolchain
+EOF
+    test -n "$cargo_sources" || return 1
+    tool_home="$work/trusted-home"
+    tool_cargo_home="$work/trusted-cargo-home"
+    tool_rustup_home="$work/trusted-rustup-home"
+    tool_target="$work/trusted-tool-target"
+    /usr/bin/install -d -m 0700 \
+        "$tool_home" "$tool_cargo_home/registry" "$tool_rustup_home" "$tool_target" \
+        || return 1
+    /usr/bin/ln -s -- "$cargo_index" "$tool_cargo_home/registry/index" || return 1
+    /usr/bin/ln -s -- "$cargo_cache" "$tool_cargo_home/registry/cache" || return 1
+    /usr/bin/ln -s -- "$cargo_sources" "$tool_cargo_home/registry/src" || return 1
+    if ! (CDPATH='' cd / && \
+            /usr/bin/env -i \
+                PATH="$toolchain_root/bin:/usr/bin:/bin" \
+                HOME="$tool_home" CARGO_HOME="$tool_cargo_home" \
+                RUSTUP_HOME="$tool_rustup_home" RUSTC="$rustc_path" \
+                CARGO_NET_OFFLINE=true CARGO_INCREMENTAL=0 \
+                CARGO_TARGET_DIR="$tool_target" LC_ALL=C.UTF-8 LANG=C.UTF-8 \
+                /usr/bin/timeout --signal=TERM --kill-after=5 180 \
+                /usr/bin/prlimit --cpu=120 --as=4294967296 --nproc=4096 \
+                    --nofile=256 --fsize=268435456 -- \
+                "$cargo_path" build \
+                    --manifest-path "$repo_root/tools/marketplace-tool/Cargo.toml" \
+                    --package marketplace-tool --release --locked --offline --quiet); then
+        return 1
+    fi
+    built_tool="$tool_target/release/marketplace-tool"
+    test -f "$built_tool" && test ! -L "$built_tool" || return 1
+    trusted_tool_binary="$work/trusted-marketplace-tool"
+    /usr/bin/install -m 0700 -- "$built_tool" "$trusted_tool_binary" || return 1
+    test -f "$trusted_tool_binary" && test ! -L "$trusted_tool_binary" \
+        && test "$(/usr/bin/stat -c '%u:%a:%h' "$trusted_tool_binary")" \
+            = "$(/usr/bin/id -u):700:1"
 }
 
 /usr/bin/install -d -m 0700 "$source_root" "$target_root"
@@ -93,12 +243,16 @@ case "$mode" in
         done
         ;;
     production)
-        for program in /usr/bin/env /usr/bin/git /usr/bin/tar /usr/bin/timeout /usr/bin/prlimit; do
+        for program in /usr/bin/env /usr/bin/git /usr/bin/timeout /usr/bin/prlimit; do
             if ! trusted_program "$program"; then
                 printf '%s\n' 'error: trusted snapshot tool is unavailable' >&2
                 exit 1
             fi
         done
+        if ! prepare_trusted_marketplace_tool; then
+            printf '%s\n' 'error: trusted marketplace tool is unavailable' >&2
+            exit 1
+        fi
         production_revision=$(
             trusted_git rev-parse --verify 'HEAD^{commit}' 2>/dev/null
         ) || {
@@ -115,68 +269,26 @@ case "$mode" in
             printf '%s\n' 'error: reviewed Git revision is invalid' >&2
             exit 1
         fi
-        if ! git_candidate_is_clean "$production_revision"; then
-            printf '%s\n' 'error: production candidate provenance changed' >&2
-            exit 1
-        fi
         production_tree=$(
             trusted_git rev-parse --verify "$production_revision^{tree}" 2>/dev/null
         ) || {
             printf '%s\n' 'error: reviewed Git tree is unavailable' >&2
             exit 1
         }
-        snapshot_stats=$(
-            marketplace_tool snapshot-plan \
-                --repository "$repo_root" --revision "$production_revision"
-        ) || {
+        if ! marketplace_tool snapshot-plan \
+                --repository "$repo_root" --revision "$production_revision" \
+                >"$snapshot_plan_file"; then
             printf '%s\n' 'error: reviewed Git tree is unsafe' >&2
             exit 1
-        }
-        tab=$(printf '\t')
-        IFS="$tab" read -r snapshot_entries snapshot_bytes <<EOF
-$snapshot_stats
-EOF
-        case "$snapshot_entries:$snapshot_bytes" in
-            *[!0-9:]* | :* | *:)
-                printf '%s\n' 'error: reviewed Git tree bounds are invalid' >&2
-                exit 1
-                ;;
-        esac
-        if ! /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
-                GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
-                GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 \
-                /usr/bin/timeout --signal=KILL 30 \
-                /usr/bin/prlimit --cpu=20 --as=536870912 --nproc=32 \
-                    --nofile=128 --fsize=33554432 -- \
-                /usr/bin/git --no-replace-objects -C "$repo_root" archive \
-                    --format=tar --output="$snapshot_archive" "$production_revision" \
-                    >/dev/null 2>&1; then
+        fi
+        /usr/bin/chmod 0600 -- "$snapshot_plan_file"
+        : >"$mutable_snapshot_paths"
+        if ! git_candidate_is_clean "$production_revision"; then
+            printf '%s\n' 'error: production candidate provenance changed' >&2
+            exit 1
+        fi
+        if ! materialize_snapshot; then
             printf '%s\n' 'error: reviewed Git tree materialization failed' >&2
-            exit 1
-        fi
-        if test ! -f "$snapshot_archive" || test -L "$snapshot_archive" \
-                || test "$(/usr/bin/stat -c '%u:%a:%h' "$snapshot_archive")" \
-                    != "$(/usr/bin/id -u):600:1" \
-                || test "$(/usr/bin/stat -c '%s' "$snapshot_archive")" -gt 33554432 \
-                || ! /usr/bin/tar --extract --file="$snapshot_archive" \
-                    --directory="$source_root" --no-same-owner --no-same-permissions \
-                    --no-xattrs --no-acls --no-selinux; then
-            printf '%s\n' 'error: reviewed Git tree extraction failed' >&2
-            exit 1
-        fi
-        extracted_entries=$(
-            /usr/bin/find "$source_root" -xdev -type f -printf . | /usr/bin/wc -c
-        )
-        extracted_bytes=$(
-            /usr/bin/find "$source_root" -xdev -type f -printf '%s\n' \
-                | /usr/bin/awk '{ total += $1 } END { printf "%.0f", total }'
-        )
-        if test "$extracted_entries" != "$snapshot_entries" \
-                || test "$extracted_bytes" != "$snapshot_bytes" \
-                || test -n "$(/usr/bin/find "$source_root" -xdev ! -type d ! -type f -print -quit)" \
-                || test -n "$(/usr/bin/find "$source_root" -xdev ! -user "$(/usr/bin/id -u)" -print -quit)" \
-                || test -n "$(/usr/bin/find "$source_root" -xdev -perm /0022 -print -quit)"; then
-            printf '%s\n' 'error: reviewed Git tree extraction is unsafe' >&2
             exit 1
         fi
         marketplace_tool build-plan --repository "$source_root" >"$plan"
@@ -185,6 +297,12 @@ esac
 
 tab=$(printf '\t')
 target_count=0
+: >"$mutable_snapshot_paths"
+if test "$mode" = production; then
+    while IFS="$tab" read -r snapshot_mode snapshot_size snapshot_oid snapshot_relative; do
+        printf '%s\n' "$snapshot_relative" >>"$expected_final_paths"
+    done <"$snapshot_plan_file"
+fi
 while IFS="$tab" read -r cargo_package component_artifact source_directory; do
     if test -z "$cargo_package" || test -z "$component_artifact" || test -z "$source_directory"; then
         printf '%s\n' 'error: invalid validated build plan' >&2
@@ -195,11 +313,23 @@ while IFS="$tab" read -r cargo_package component_artifact source_directory; do
         printf '%s\n' 'error: source component destination already exists' >&2
         exit 1
     fi
+    if test "$mode" = production; then
+        printf '%s\n' "$source_directory/manifest.json" >>"$mutable_snapshot_paths"
+        printf '%s\n' "$source_directory/component.wasm" >>"$expected_final_paths"
+    fi
     target_count=$((target_count + 1))
 done <"$plan"
 if test "$target_count" -eq 0 || test "$target_count" -gt 500; then
     printf '%s\n' 'error: invalid validated build plan' >&2
     exit 1
+fi
+if test "$mode" = production; then
+    printf '%s\n' '.build-bindings.json' >>"$expected_final_paths"
+    if test "$(/usr/bin/sort -u "$expected_final_paths" | /usr/bin/wc -l)" \
+            != "$(/usr/bin/wc -l <"$expected_final_paths")"; then
+        printf '%s\n' 'error: invalid validated build plan' >&2
+        exit 1
+    fi
 fi
 
 case "$mode" in
@@ -333,7 +463,9 @@ if test "$mode" = production; then
         trusted_git rev-parse --verify "$production_revision^{tree}" 2>/dev/null
     ) || current_tree=''
     if test "$current_tree" != "$production_tree" \
-            || ! git_candidate_is_clean "$production_revision"; then
+            || ! git_candidate_is_clean "$production_revision" \
+            || ! snapshot_matches_root "$source_root" yes \
+            || ! final_source_tree_is_expected; then
         printf '%s\n' 'error: production candidate provenance changed' >&2
         exit 1
     fi

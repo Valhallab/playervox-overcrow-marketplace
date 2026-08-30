@@ -90,7 +90,7 @@ printf '%s\n' \
     'profile = "minimal"' >"$source_root/rust-toolchain.toml"
 printf '%s\n' '#[unsafe(no_mangle)] pub extern "C" fn canary() {}' >"$source_root/src/lib.rs"
 printf '%s\n' \
-    'use std::{env, fs, io::Read, net::TcpStream};' \
+    'use std::{env, fs, io::{Read, Write}, net::TcpStream, process::Command};' \
     'fn main() {' \
     '    let mut inherited = Vec::new();' \
     '    let _ = std::io::stdin().read_to_end(&mut inherited);' \
@@ -109,17 +109,37 @@ printf '%s\n' \
     "            if fs::read(path).is_ok_and(|bytes| bytes.windows(${#private_argument}).any(|window| window == \"$private_argument\".as_bytes())) { panic!(\"process leak\"); }" \
     '        }' \
     '    }' \
+    '    if let Ok(processes) = fs::read_dir("/proc") {' \
+    '        for process in processes.flatten() {' \
+    '            if let Ok(entries) = fs::read_dir(process.path().join("fd")) {' \
+    '                for entry in entries.flatten() {' \
+    '                    if let Ok(mut file) = fs::OpenOptions::new().write(true).open(entry.path()) {' \
+    '                        let _ = file.write_all(b"ANCESTOR-FD-INJECTION");' \
+    '                    }' \
+    '                }' \
+    '            }' \
+    '        }' \
+    '    }' \
+    '    let _ = Command::new("/bin/sh").arg("-c").arg("sleep 1; printf MALICIOUS > /output/target/wasm32-wasip2/release/sandbox_canary.wasm").spawn();' \
     '}' >"$source_root/build.rs"
 write_build_plan "$target_root" sandbox-canary sandbox_canary
 
 /usr/bin/cp -a -- "$source_root" "$scratch/source-before"
-printf '%s\n' 'INHERITED-PIPE-CANARY' \
-    | OVERCROW_PRIVATE_ARGUMENT="$private_argument" \
-        sh "$helper" "$source_root" "$target_root"
+ancestor_fd="$scratch/ancestor-fd"
+(
+    exec 9>"$ancestor_fd"
+    printf '%s\n' 'INHERITED-PIPE-CANARY' \
+        | OVERCROW_PRIVATE_ARGUMENT="$private_argument" \
+            sh "$helper" "$source_root" "$target_root"
+)
+test ! -s "$ancestor_fd"
 /usr/bin/diff --recursive --no-dereference "$scratch/source-before" "$source_root"
 test ! -e "$source_root/source-write-canary" \
     && test ! -L "$source_root/source-write-canary"
 test -f "$target_root/artifacts/sandbox_canary.wasm"
+printf '\000asm' >"$scratch/wasm-magic"
+/usr/bin/head -c 4 "$target_root/artifacts/sandbox_canary.wasm" \
+    | /usr/bin/cmp -s -- "$scratch/wasm-magic" -
 for leak in canary-leak network-leak environment-leak home-leak host-home-leak process-leak; do
     test ! -e "$target_root/$leak" && test ! -L "$target_root/$leak"
 done
@@ -178,12 +198,29 @@ printf '%s\n' '#!/bin/sh' \
 fake_target="$scratch/fake-toolchain-output"
 /usr/bin/install -d -m 0700 "$fake_target"
 write_build_plan "$fake_target" sandbox-canary sandbox_canary
-if env PATH="$fake_toolchain/bin:/usr/bin:/bin" \
-        sh "$helper" "$source_root" "$fake_target"; then
-    printf '%s\n' 'error: mismatched Rust toolchain was accepted' >&2
+fake_cargo_marker="$scratch/fake-sandbox-cargo-ran"
+printf '%s\n' '#!/bin/sh' \
+    "printf '%s\\n' ran >'$fake_cargo_marker'" \
+    'exit 99' >"$fake_toolchain/bin/cargo"
+/usr/bin/chmod 0755 "$fake_toolchain/bin/cargo"
+env PATH="$fake_toolchain/bin:/usr/bin:/bin" \
+    sh "$helper" "$source_root" "$fake_target"
+test ! -e "$fake_cargo_marker" && test ! -L "$fake_cargo_marker"
+test -f "$fake_target/artifacts/sandbox_canary.wasm"
+
+mismatched_source="$scratch/mismatched-source"
+mismatched_target="$scratch/mismatched-output"
+/usr/bin/cp -a -- "$source_root" "$mismatched_source"
+/usr/bin/install -d -m 0700 "$mismatched_target"
+/usr/bin/sed -i 's/channel = "1[.]98[.]0"/channel = "9.99.9"/' \
+    "$mismatched_source/rust-toolchain.toml"
+write_build_plan "$mismatched_target" sandbox-canary sandbox_canary
+if sh "$helper" "$mismatched_source" "$mismatched_target"; then
+    printf '%s\n' 'error: mismatched Rust toolchain pin was accepted' >&2
     exit 1
 fi
-test "$(/usr/bin/find "$fake_target" -mindepth 1 -maxdepth 1 -printf '%f\n')" = build-plan.tsv
+test "$(/usr/bin/find "$mismatched_target" -mindepth 1 -maxdepth 1 -printf '%f\n')" \
+    = build-plan.tsv
 
 fill_source="$scratch/fill-source"
 fill_target="$scratch/fill-output"
@@ -227,6 +264,70 @@ if sh "$helper" "$fill_source" "$fill_target"; then
 fi
 fill_target_kib=$(/usr/bin/du -sk "$fill_target" | /usr/bin/cut -f 1)
 test "$fill_target_kib" -lt 4096
+
+aggregate_source="$scratch/aggregate-source"
+aggregate_target="$scratch/aggregate-output"
+/usr/bin/cp -a -- "$fill_source" "$aggregate_source"
+/usr/bin/install -d -m 0700 "$aggregate_target"
+/usr/bin/sed -i 's/output-fill-canary/aggregate-fill-canary/g' \
+    "$aggregate_source/Cargo.toml" "$aggregate_source/Cargo.lock"
+printf '%s\n' \
+    'use std::{env, fs::OpenOptions};' \
+    'fn main() {' \
+    '    let roots = [env::temp_dir(), env::var("HOME").unwrap().into(), env::var("CARGO_HOME").unwrap().into()];' \
+    '    for (index, root) in roots.into_iter().enumerate() {' \
+    '        let file = OpenOptions::new().create(true).write(true).open(root.join(format!("aggregate-{index}"))).unwrap();' \
+    '        file.set_len(100 * 1024 * 1024).unwrap();' \
+    '    }' \
+    '}' >"$aggregate_source/build.rs"
+write_build_plan "$aggregate_target" aggregate-fill-canary aggregate_fill_canary
+if sh "$helper" "$aggregate_source" "$aggregate_target"; then
+    printf '%s\n' 'error: aggregate writable-path filling build was accepted' >&2
+    exit 1
+fi
+test "$(/usr/bin/du -sk "$aggregate_target" | /usr/bin/cut -f 1)" -lt 4096
+
+fork_source="$scratch/fork-source"
+fork_target="$scratch/fork-output"
+/usr/bin/cp -a -- "$fill_source" "$fork_source"
+/usr/bin/install -d -m 0700 "$fork_target"
+/usr/bin/sed -i 's/output-fill-canary/fork-canary/g' \
+    "$fork_source/Cargo.toml" "$fork_source/Cargo.lock"
+printf '%s\n' \
+    'use std::process::Command;' \
+    'fn main() {' \
+    '    let mut children = Vec::new();' \
+    '    for _ in 0..300 {' \
+    '        children.push(Command::new("/bin/sleep").arg("30").spawn().unwrap());' \
+    '    }' \
+    '}' >"$fork_source/build.rs"
+write_build_plan "$fork_target" fork-canary fork_canary
+if sh "$helper" "$fork_source" "$fork_target"; then
+    printf '%s\n' 'error: aggregate process bomb was accepted' >&2
+    exit 1
+fi
+test "$(/usr/bin/du -sk "$fork_target" | /usr/bin/cut -f 1)" -lt 4096
+
+memory_source="$scratch/memory-source"
+memory_target="$scratch/memory-output"
+/usr/bin/cp -a -- "$fill_source" "$memory_source"
+/usr/bin/install -d -m 0700 "$memory_target"
+/usr/bin/sed -i 's/output-fill-canary/memory-canary/g' \
+    "$memory_source/Cargo.toml" "$memory_source/Cargo.lock"
+printf '%s\n' \
+    'fn main() {' \
+    '    let mut memory = Vec::new();' \
+    '    for _ in 0..16 {' \
+    '        memory.push(vec![0xa5u8; 100 * 1024 * 1024]);' \
+    '    }' \
+    '    std::hint::black_box(memory);' \
+    '}' >"$memory_source/build.rs"
+write_build_plan "$memory_target" memory-canary memory_canary
+if sh "$helper" "$memory_source" "$memory_target"; then
+    printf '%s\n' 'error: aggregate memory bomb was accepted' >&2
+    exit 1
+fi
+test "$(/usr/bin/du -sk "$memory_target" | /usr/bin/cut -f 1)" -lt 4096
 
 hang_source="$scratch/hang-source"
 hang_target="$scratch/hang-output"
@@ -276,6 +377,73 @@ case "$hang_status" in
 esac
 hang_target_kib=$(/usr/bin/du -sk "$hang_target" | /usr/bin/cut -f 1)
 test "$hang_target_kib" -lt 4096
+
+extractor="$repo_root/scripts/extract-component-artifacts.sh"
+archive_fixture="$scratch/archive-fixture"
+/usr/bin/install -d -m 0700 "$archive_fixture/input"
+printf '%s\n' 'validated artifact bytes' \
+    >"$archive_fixture/input/archive_canary.wasm"
+printf '%s\t%s\t%s\n' archive-canary archive_canary fixture \
+    >"$archive_fixture/build-plan.tsv"
+/usr/bin/chmod 0600 "$archive_fixture/build-plan.tsv"
+(
+    CDPATH='' cd -- "$archive_fixture/input"
+    /usr/bin/tar --create --format=ustar \
+        --file="$archive_fixture/valid.tar" -- archive_canary.wasm
+)
+/usr/bin/chmod 0600 "$archive_fixture/valid.tar"
+sh "$extractor" "$archive_fixture/valid.tar" \
+    "$archive_fixture/build-plan.tsv" "$archive_fixture/valid-output"
+test -f "$archive_fixture/valid-output/archive_canary.wasm"
+
+/usr/bin/cp -- "$archive_fixture/valid.tar" "$archive_fixture/duplicate.tar"
+(
+    CDPATH='' cd -- "$archive_fixture/input"
+    /usr/bin/tar --append --file="$archive_fixture/duplicate.tar" \
+        -- archive_canary.wasm
+)
+/usr/bin/ln -s target "$archive_fixture/input/link_canary.wasm"
+(
+    CDPATH='' cd -- "$archive_fixture/input"
+    /usr/bin/tar --create --format=ustar \
+        --file="$archive_fixture/link.tar" -- link_canary.wasm
+)
+printf '%s\t%s\t%s\n' link-canary link_canary fixture \
+    >"$archive_fixture/link-plan.tsv"
+/usr/bin/chmod 0600 "$archive_fixture/link-plan.tsv"
+printf '%s\n' 'traversal bytes' >"$archive_fixture/input/traversal_canary.wasm"
+(
+    CDPATH='' cd -- "$archive_fixture/input"
+    /usr/bin/tar --create --format=ustar \
+        --transform='s|^|../|' --file="$archive_fixture/traversal.tar" \
+        -- traversal_canary.wasm
+)
+printf '%s\t%s\t%s\n' traversal-canary traversal_canary fixture \
+    >"$archive_fixture/traversal-plan.tsv"
+/usr/bin/chmod 0600 "$archive_fixture/traversal-plan.tsv"
+/usr/bin/truncate -s 5242880 "$archive_fixture/input/oversize_canary.wasm"
+(
+    CDPATH='' cd -- "$archive_fixture/input"
+    /usr/bin/tar --create --sparse --format=gnu \
+        --file="$archive_fixture/oversize.tar" -- oversize_canary.wasm
+)
+printf '%s\t%s\t%s\n' oversize-canary oversize_canary fixture \
+    >"$archive_fixture/oversize-plan.tsv"
+/usr/bin/chmod 0600 "$archive_fixture/oversize-plan.tsv"
+for archive_case in duplicate link traversal oversize; do
+    /usr/bin/chmod 0600 "$archive_fixture/$archive_case.tar"
+    plan_case="$archive_fixture/build-plan.tsv"
+    case "$archive_case" in
+        link | traversal | oversize) plan_case="$archive_fixture/$archive_case-plan.tsv" ;;
+    esac
+    if sh "$extractor" "$archive_fixture/$archive_case.tar" "$plan_case" \
+            "$archive_fixture/$archive_case-output"; then
+        printf '%s\n' 'error: unsafe artifact archive was accepted' >&2
+        exit 1
+    fi
+    test ! -e "$archive_fixture/$archive_case-output" \
+        && test ! -L "$archive_fixture/$archive_case-output"
+done
 
 missing_target="$scratch/missing-bwrap-output"
 /usr/bin/install -d -m 0700 "$missing_target"

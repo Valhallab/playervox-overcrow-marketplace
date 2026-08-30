@@ -26,7 +26,10 @@ fn snapshot_plan_accepts_only_a_bounded_regular_reviewed_tree() {
     let revision = commit_git_fixture(fixture.path(), "regular tree");
     let output = snapshot_plan(fixture.path(), &revision);
     assert!(output.status.success());
-    assert_eq!(output.stdout, b"2\t23\n");
+    assert_eq!(
+        output.stdout,
+        b"100644\t6\t4a58007052a65fbc2fc3f910f2855f45a4058e74\talpha.txt\n100755\t17\t039e4d0069c5c26909f86c505b9de66182e6d1f3\tbuild.sh\n"
+    );
     assert!(output.stderr.is_empty());
 
     let fixture = tempfile::tempdir().expect("symlink repository");
@@ -90,6 +93,76 @@ fn build_plan_emits_only_validated_fixed_fields() {
         !fixture.path().join("build-script-ran").exists(),
         "metadata discovery must not execute creator code"
     );
+}
+
+#[test]
+fn build_plan_treats_rustc_wrappers_and_cargo_config_as_inert_data() {
+    let fixture = tempfile::tempdir().expect("wrapper fixture repository");
+    prepare_build_plan_fixture(fixture.path());
+    let marker = fixture.path().join("wrapper-ran");
+    let original_workspace = fs::read(fixture.path().join("Cargo.toml")).expect("workspace bytes");
+    let wrapper = fixture.path().join("creator-wrapper");
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' ran >'{}'\nprintf '%s\\n' overwritten >'{}'\nexit 1\n",
+            marker.display(),
+            fixture.path().join("Cargo.toml").display()
+        ),
+    )
+    .expect("creator wrapper");
+    fs::set_permissions(&wrapper, Permissions::from_mode(0o700)).expect("wrapper mode");
+    let output = tool()
+        .env("RUSTC", &wrapper)
+        .env("RUSTC_WRAPPER", &wrapper)
+        .args(["build-plan", "--repository"])
+        .arg(fixture.path())
+        .output()
+        .expect("build plan with inherited wrappers");
+    assert!(!marker.exists(), "inherited wrapper must not execute");
+    assert_eq!(
+        fs::read(fixture.path().join("Cargo.toml")).expect("workspace after wrapper"),
+        original_workspace,
+        "inherited wrapper must not overwrite the snapshot"
+    );
+    assert!(output.status.success(), "inherited wrappers are ignored");
+
+    let ambient = tempfile::tempdir().expect("ambient config fixture");
+    let repository = ambient.path().join("repository");
+    fs::create_dir_all(ambient.path().join(".cargo")).expect("ambient Cargo config directory");
+    prepare_build_plan_fixture(&repository);
+    let marker = ambient.path().join("ambient-wrapper-ran");
+    let wrapper = ambient.path().join("ambient-wrapper");
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' ran >'{}'\nexit 1\n",
+            marker.display()
+        ),
+    )
+    .expect("ambient wrapper");
+    fs::set_permissions(&wrapper, Permissions::from_mode(0o700)).expect("ambient wrapper mode");
+    fs::write(
+        ambient.path().join(".cargo/config.toml"),
+        format!("[build]\nrustc-wrapper = {:?}\n", wrapper),
+    )
+    .expect("ambient Cargo config");
+    let output = build_plan(&repository);
+    assert!(output.status.success(), "ancestor config is ignored");
+    assert!(!marker.exists(), "ambient config wrapper must not execute");
+
+    fs::create_dir_all(repository.join(".cargo")).expect("tracked Cargo config directory");
+    fs::write(
+        repository.join(".cargo/config.toml"),
+        format!("[build]\nrustc-wrapper = {:?}\n", wrapper),
+    )
+    .expect("tracked Cargo config");
+    let output = build_plan(&repository);
+    assert!(
+        !output.status.success(),
+        "repository Cargo config is rejected"
+    );
+    assert!(!marker.exists(), "rejected config wrapper must not execute");
 }
 
 #[test]
@@ -257,6 +330,26 @@ fn build_plan_rejects_git_custom_registry_and_unlocked_dependencies() {
         )
         .expect("dependency manifest");
         assert!(!build_plan(fixture.path()).status.success(), "{dependency}");
+    }
+}
+
+#[test]
+fn build_plan_rejects_build_target_and_unsupported_manifest_sections() {
+    for section in [
+        "[build-dependencies]\n",
+        "[target.'cfg(target_arch = \"wasm32\")'.dependencies]\n",
+        "[features]\ndefault = []\n",
+    ] {
+        let fixture = tempfile::tempdir().expect("unsupported manifest fixture");
+        prepare_build_plan_fixture(fixture.path());
+        let manifest = fixture.path().join("examples/hello-widget/Cargo.toml");
+        let mut bytes = fs::read(&manifest).expect("package manifest");
+        bytes.extend_from_slice(section.as_bytes());
+        fs::write(&manifest, bytes).expect("unsupported package manifest");
+        assert!(
+            !build_plan(fixture.path()).status.success(),
+            "unsupported section must be rejected: {section}"
+        );
     }
 }
 

@@ -1,3 +1,4 @@
+mod cargo_manifest;
 mod catalog;
 mod metadata;
 mod package;
@@ -13,9 +14,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use ring::signature::{Ed25519KeyPair, KeyPair as _};
-use serde::Deserialize;
-
 use crate::{
     catalog::{
         CatalogOrigin, DEV_SEED, DEVELOPMENT_KEY_ID, PreparedTarget, PublisherState, build_catalog,
@@ -23,17 +21,14 @@ use crate::{
     },
     metadata::{
         TargetSpec, bind_manifest_digests, inspect_component, validate_build_bindings,
-        validate_metadata, validate_targets,
+        validate_metadata,
     },
     package::{
         PublisherOutput, build_package, read_private_file, read_source_file, replace_source_file,
-        validate_source_directory,
     },
 };
+use ring::signature::{Ed25519KeyPair, KeyPair as _};
 
-const MAX_CARGO_METADATA_BYTES: usize = 16 * 1024 * 1024;
-const CARGO_METADATA_TIMEOUT: Duration = Duration::from_secs(30);
-const CRATES_IO_SOURCE: &str = "registry+https://github.com/rust-lang/crates.io-index";
 const MAX_SNAPSHOT_PLAN_BYTES: usize = 1024 * 1024;
 const MAX_SNAPSHOT_ENTRIES: usize = 1_000;
 const MAX_SNAPSHOT_FILE_BYTES: u64 = 8 * 1024 * 1024;
@@ -384,16 +379,33 @@ fn snapshot_plan(arguments: &[String]) -> Result<(), AppError> {
     if !status.success() || bytes.len() > MAX_SNAPSHOT_PLAN_BYTES {
         return Err(AppError::Policy);
     }
-    let (entries, aggregate) = validate_snapshot_plan(&bytes)?;
-    let output = format!("{entries}\t{aggregate}\n");
+    let entries = validate_snapshot_plan(&bytes)?;
+    let mut output = String::new();
+    for entry in entries {
+        use std::fmt::Write as _;
+        writeln!(
+            output,
+            "{}\t{}\t{}\t{}",
+            entry.mode, entry.size, entry.object, entry.path
+        )
+        .map_err(|_| AppError::Output)?;
+    }
     std::io::stdout()
         .write_all(output.as_bytes())
         .map_err(|_| AppError::Output)
 }
 
-fn validate_snapshot_plan(bytes: &[u8]) -> Result<(usize, u64), AppError> {
+struct SnapshotEntry {
+    mode: String,
+    size: u64,
+    object: String,
+    path: String,
+}
+
+fn validate_snapshot_plan(bytes: &[u8]) -> Result<Vec<SnapshotEntry>, AppError> {
     let mut paths = BTreeSet::new();
     let mut aggregate = 0_u64;
+    let mut entries = Vec::new();
     for record in bytes
         .split(|byte| *byte == 0)
         .filter(|record| !record.is_empty())
@@ -430,11 +442,17 @@ fn validate_snapshot_plan(bytes: &[u8]) -> Result<(usize, u64), AppError> {
         if aggregate > MAX_SNAPSHOT_AGGREGATE_BYTES {
             return Err(AppError::Policy);
         }
+        entries.push(SnapshotEntry {
+            mode: mode.to_owned(),
+            size,
+            object: object.to_owned(),
+            path: path.to_owned(),
+        });
     }
-    if paths.is_empty() {
+    if entries.is_empty() {
         return Err(AppError::Policy);
     }
-    Ok((paths.len(), aggregate))
+    Ok(entries)
 }
 
 fn valid_object_id(value: &str) -> bool {
@@ -542,141 +560,8 @@ fn bind_build(arguments: &[String]) -> Result<(), AppError> {
     Ok(())
 }
 
-#[derive(Deserialize)]
-struct CargoMetadata {
-    packages: Vec<CargoPackage>,
-    workspace_members: Vec<String>,
-    workspace_root: String,
-}
-
-#[derive(Deserialize)]
-struct CargoPackage {
-    name: String,
-    id: String,
-    source: Option<String>,
-    manifest_path: String,
-    targets: Vec<CargoTarget>,
-}
-
-#[derive(Deserialize)]
-struct CargoTarget {
-    kind: Vec<String>,
-    crate_types: Vec<String>,
-    name: String,
-}
-
 fn load_build_plan(repository: &Path) -> Result<Vec<TargetSpec>, AppError> {
-    read_source_file(repository, "Cargo.toml", 256 * 1024).map_err(|_| AppError::Input)?;
-    read_source_file(repository, "Cargo.lock", 4 * 1024 * 1024).map_err(|_| AppError::Input)?;
-    let targets_bytes = read_source_file(repository, "marketplace/targets.json", 128 * 1024)
-        .map_err(|_| AppError::Input)?;
-    let targets = validate_targets(&targets_bytes).map_err(|_| AppError::Policy)?;
-    for target in &targets {
-        validate_source_directory(repository, target.source_directory())
-            .map_err(|_| AppError::Policy)?;
-    }
-    let metadata = cargo_metadata(repository)?;
-    let repository_text = repository.to_str().ok_or(AppError::Input)?;
-    if metadata.workspace_root != repository_text {
-        return Err(AppError::Policy);
-    }
-    for package in &metadata.packages {
-        match package.source.as_deref() {
-            Some(CRATES_IO_SOURCE) => {}
-            Some(_) => return Err(AppError::Policy),
-            None => {
-                let manifest = Path::new(&package.manifest_path);
-                let relative = manifest
-                    .strip_prefix(repository)
-                    .ok()
-                    .and_then(Path::to_str)
-                    .ok_or(AppError::Policy)?;
-                read_source_file(repository, relative, 256 * 1024).map_err(|_| AppError::Policy)?;
-            }
-        }
-    }
-    let workspace_members: BTreeSet<_> = metadata.workspace_members.iter().collect();
-    for target in &targets {
-        let mut matches = metadata.packages.iter().filter(|package| {
-            package.name == target.cargo_package() && workspace_members.contains(&package.id)
-        });
-        let package = matches.next().ok_or(AppError::Policy)?;
-        if matches.next().is_some() || package.source.is_some() {
-            return Err(AppError::Policy);
-        }
-        let expected_manifest = repository
-            .join(target.source_directory())
-            .join("Cargo.toml");
-        if Path::new(&package.manifest_path) != expected_manifest {
-            return Err(AppError::Policy);
-        }
-        let cdylib_targets: Vec<_> = package
-            .targets
-            .iter()
-            .filter(|candidate| candidate.crate_types.iter().any(|kind| kind == "cdylib"))
-            .collect();
-        if cdylib_targets.len() != 1
-            || cdylib_targets[0].name != target.component_artifact()
-            || package.targets.iter().any(|candidate| {
-                candidate
-                    .kind
-                    .iter()
-                    .any(|kind| matches!(kind.as_str(), "custom-build" | "proc-macro"))
-            })
-        {
-            return Err(AppError::Policy);
-        }
-    }
-    Ok(targets)
-}
-
-fn cargo_metadata(repository: &Path) -> Result<CargoMetadata, AppError> {
-    let mut child = Command::new(env!("CARGO"))
-        .args([
-            "metadata",
-            "--format-version",
-            "1",
-            "--locked",
-            "--offline",
-            "--manifest-path",
-        ])
-        .arg(repository.join("Cargo.toml"))
-        .current_dir(repository)
-        .env("CARGO_NET_OFFLINE", "true")
-        .env("CARGO_TERM_COLOR", "never")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|_| AppError::Policy)?;
-    let stdout = child.stdout.take().ok_or(AppError::Policy)?;
-    let reader = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stdout
-            .take((MAX_CARGO_METADATA_BYTES + 1) as u64)
-            .read_to_end(&mut bytes)
-            .map(|_| bytes)
-    });
-    let deadline = Instant::now() + CARGO_METADATA_TIMEOUT;
-    let status = loop {
-        if let Some(status) = child.try_wait().map_err(|_| AppError::Policy)? {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(AppError::Policy);
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
-    let bytes = reader
-        .join()
-        .map_err(|_| AppError::Policy)?
-        .map_err(|_| AppError::Policy)?;
-    if !status.success() || bytes.len() > MAX_CARGO_METADATA_BYTES {
-        return Err(AppError::Policy);
-    }
-    serde_json::from_slice(&bytes).map_err(|_| AppError::Policy)
+    cargo_manifest::load(repository).map_err(|_| AppError::Policy)
 }
 
 fn read_cli_file(path: &Path, maximum: usize) -> Result<Vec<u8>, ()> {
