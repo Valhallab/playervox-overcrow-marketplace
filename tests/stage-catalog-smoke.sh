@@ -9,14 +9,108 @@ fi
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 scratch=$(/usr/bin/mktemp -d /tmp/marketplace-stage.XXXXXXXXXX)
 stage_pid=''
+mutation_pid=''
 cleanup() {
+    if test -n "$mutation_pid"; then
+        /usr/bin/kill "$mutation_pid" 2>/dev/null || true
+        wait "$mutation_pid" 2>/dev/null || true
+    fi
     if test -n "$stage_pid"; then
+        /usr/bin/kill -CONT "$stage_pid" 2>/dev/null || true
         /usr/bin/kill "$stage_pid" 2>/dev/null || true
         wait "$stage_pid" 2>/dev/null || true
     fi
     /usr/bin/rm -rf -- "$scratch"
 }
 trap cleanup EXIT HUP INT TERM
+
+mutate_after_final_bind() {
+    controlled_pid=$1
+    race_output=$2
+    relative=$3
+    private_repository=''
+    attempt=0
+    while test -z "$private_repository"; do
+        manifest=$(
+            /usr/bin/find "$scratch" \
+                -path "${race_output}.build.*/repository/widgets/warframe-status/manifest.json" \
+                -print -quit 2>/dev/null || :
+        )
+        if test -n "$manifest"; then
+            private_repository=${manifest%/widgets/warframe-status/manifest.json}
+            original_inode=$(/usr/bin/stat -c '%i' "$manifest")
+        fi
+        attempt=$((attempt + 1))
+        if test "$attempt" -ge 1200 || ! /usr/bin/kill -0 "$controlled_pid" 2>/dev/null; then
+            return 1
+        fi
+        /usr/bin/sleep 0.05
+    done
+    attempt=0
+    while test "$original_inode" = "$(/usr/bin/stat -c '%i' "$manifest" 2>/dev/null || :)"; do
+        attempt=$((attempt + 1))
+        if test "$attempt" -ge 12000 || ! /usr/bin/kill -0 "$controlled_pid" 2>/dev/null; then
+            return 1
+        fi
+        /usr/bin/sleep 0.005
+    done
+    final_ledger="${private_repository%/repository}/final-file-ledger.tsv"
+    if test -f "$final_ledger" && test ! -L "$final_ledger"; then
+        attempt=0
+        while test "$(/usr/bin/wc -l <"$final_ledger")" -ne 13; do
+            attempt=$((attempt + 1))
+            if test "$attempt" -ge 12000 \
+                    || ! /usr/bin/kill -0 "$controlled_pid" 2>/dev/null; then
+                return 1
+            fi
+            /usr/bin/sleep 0.005
+        done
+    fi
+    /usr/bin/kill -STOP "$controlled_pid"
+    /usr/bin/sleep 0.05
+    mutation="$private_repository/$relative"
+    mutation_size=$(/usr/bin/stat -c '%s' "$mutation")
+    test "$mutation_size" -gt 0
+    /usr/bin/dd if=/dev/zero of="$mutation" bs="$mutation_size" count=1 \
+        conv=fsync 2>/dev/null
+    /usr/bin/kill -CONT "$controlled_pid"
+}
+
+run_final_file_race() {
+    label=$1
+    relative=$2
+    race_output=$3
+    sh "$production_fixture/scripts/stage-catalog-repository.sh" \
+        --mode production "$race_output" &
+    stage_pid=$!
+    mutate_after_final_bind "$stage_pid" "$race_output" "$relative" &
+    mutation_pid=$!
+    set +e
+    wait "$stage_pid"
+    stage_status=$?
+    stage_pid=''
+    wait "$mutation_pid"
+    mutation_status=$?
+    mutation_pid=''
+    set -e
+    if test "$mutation_status" -ne 0; then
+        printf '%s\n' "error: $label race fixture did not reach the final bind" >&2
+        exit 1
+    fi
+    if test "$stage_status" -eq 0; then
+        printf '%s\n' "error: post-validation $label mutation was accepted" >&2
+        final_race_failures=$((final_race_failures + 1))
+    else
+        test ! -e "$race_output" && test ! -L "$race_output"
+    fi
+    test "$production_manifest_before" = \
+        "$(/usr/bin/sha256sum "$production_fixture/widgets/warframe-status/manifest.json")"
+    test ! -e "$production_fixture/widgets/warframe-status/component.wasm" \
+        && test ! -L "$production_fixture/widgets/warframe-status/component.wasm"
+    test ! -e "$production_fixture/.build-bindings.json" \
+        && test ! -L "$production_fixture/.build-bindings.json"
+}
+
 fixture="$scratch/repository"
 /usr/bin/install -d -m 0700 "$fixture"
 for path in Cargo.toml Cargo.lock rust-toolchain.toml marketplace fixtures providers widgets sdk wit examples tools web scripts; do
@@ -175,7 +269,7 @@ sh "$production_fixture/scripts/stage-catalog-repository.sh" \
     --mode production "$race_stage" &
 stage_pid=$!
 attempt=0
-while test -z "$(/usr/bin/find "$scratch" -path "${race_stage}.build.*/repository/Cargo.toml" -print -quit)"; do
+while test -z "$(/usr/bin/find "$scratch" -path "${race_stage}.build.*/repository/Cargo.toml" -print -quit 2>/dev/null || :)"; do
     attempt=$((attempt + 1))
     if test "$attempt" -ge 600; then
         printf '%s\n' 'error: production race fixture did not reach its snapshot' >&2
@@ -204,7 +298,7 @@ while test -z "$source_race_file"; do
     source_race_file=$(
         /usr/bin/find "$scratch" \
             -path "${source_race_stage}.build.*/repository/web/landing/index.html" \
-            -print -quit
+            -print -quit 2>/dev/null || :
     )
     attempt=$((attempt + 1))
     if test "$attempt" -ge 600; then
@@ -223,5 +317,22 @@ if wait "$stage_pid"; then
 fi
 stage_pid=''
 test ! -e "$source_race_stage" && test ! -L "$source_race_stage"
+
+production_manifest_before=$(
+    /usr/bin/sha256sum "$production_fixture/widgets/warframe-status/manifest.json"
+)
+final_race_failures=0
+run_final_file_race component \
+    widgets/warframe-status/component.wasm \
+    "$scratch/component-race-production-stage"
+run_final_file_race manifest \
+    widgets/warframe-status/manifest.json \
+    "$scratch/manifest-race-production-stage"
+run_final_file_race bindings \
+    .build-bindings.json \
+    "$scratch/bindings-race-production-stage"
+if test "$final_race_failures" -ne 0; then
+    exit 1
+fi
 
 printf '%s\n' 'Catalog staging smoke tests passed'

@@ -36,7 +36,7 @@ target_root="$work/component-output"
 provider_root="$work/provider-repository"
 plan="$work/build-plan.tsv"
 snapshot_plan_file="$work/snapshot-plan.tsv"
-mutable_snapshot_paths="$work/mutable-snapshot-paths"
+final_file_ledger="$work/final-file-ledger.tsv"
 expected_final_paths="$work/expected-final-paths"
 trusted_tool_binary=''
 production_revision=''
@@ -48,6 +48,8 @@ cleanup() {
     exit "$status"
 }
 trap cleanup EXIT HUP INT TERM
+: >"$final_file_ledger"
+/usr/bin/chmod 0600 -- "$final_file_ledger"
 
 marketplace_tool() {
     if test "$mode" = production; then
@@ -86,15 +88,21 @@ git_candidate_is_clean() {
         && snapshot_matches_root "$repo_root"
 }
 
-snapshot_path_is_mutable() {
+final_ledger_contains_path() {
     relative=$1
-    test -s "$mutable_snapshot_paths" \
-        && /usr/bin/grep -F -x -- "$relative" "$mutable_snapshot_paths" >/dev/null
+    tab=$(printf '\t')
+    while IFS="$tab" read -r ledger_path ledger_mode ledger_owner \
+            ledger_links ledger_size ledger_digest ledger_extra; do
+        if test "$ledger_path" = "$relative"; then
+            return 0
+        fi
+    done <"$final_file_ledger"
+    return 1
 }
 
 snapshot_matches_root() {
     root=$1
-    allow_mutable=${2:-no}
+    allow_generated=${2:-no}
     tab=$(printf '\t')
     checked_entries=0
     checked_bytes=0
@@ -105,9 +113,9 @@ snapshot_matches_root() {
         esac
         file="$root/$relative"
         test -f "$file" && test ! -L "$file" || return 1
-        is_mutable=no
-        if test "$allow_mutable" = yes && snapshot_path_is_mutable "$relative"; then
-            is_mutable=yes
+        is_generated=no
+        if test "$allow_generated" = yes && final_ledger_contains_path "$relative"; then
+            is_generated=yes
             test "$(/usr/bin/stat -c '%u:%h' "$file")" \
                 = "$(/usr/bin/id -u):1" || return 1
         else
@@ -121,7 +129,7 @@ snapshot_matches_root() {
             test -n "$(/usr/bin/find "$file" -maxdepth 0 -perm /0100 -print -quit)" \
                 || return 1
         fi
-        if test "$is_mutable" = no; then
+        if test "$is_generated" = no; then
             actual_oid=$(trusted_git hash-object --no-filters -- "$file" 2>/dev/null) \
                 || return 1
             test "$actual_oid" = "$expected_oid" || return 1
@@ -132,6 +140,124 @@ snapshot_matches_root() {
             || return 1
     done <"$snapshot_plan_file"
     test "$checked_entries" -gt 0
+}
+
+record_final_file() {
+    relative=$1
+    expected_mode=$2
+    maximum_size=$3
+    test "$mode" = production || return 0
+    case "$relative" in
+        '' | /* | */ | *[!A-Za-z0-9._/-]* | *//* | */../* | ../* | */.. | */./* | ./* | */.)
+            return 1
+            ;;
+    esac
+    test "${#relative}" -le 240 || return 1
+    case "$expected_mode" in
+        600 | 644) ;;
+        *) return 1 ;;
+    esac
+    case "$maximum_size" in
+        '' | *[!0-9]*) return 1 ;;
+    esac
+    ledger_entries=$(/usr/bin/wc -l <"$final_file_ledger") || return 1
+    test "$ledger_entries" -lt 1001 || return 1
+    if final_ledger_contains_path "$relative"; then
+        return 1
+    fi
+    file="$source_root/$relative"
+    test -f "$file" && test ! -L "$file" || return 1
+    owner=$(/usr/bin/id -u) || return 1
+    properties=$(/usr/bin/stat -c '%u:%a:%h:%s' "$file") || return 1
+    size=$(/usr/bin/stat -c '%s' "$file") || return 1
+    test "$properties" = "$owner:$expected_mode:1:$size" \
+        && test "$size" -gt 0 && test "$size" -le "$maximum_size" \
+        && test "$size" -le 8388608 || return 1
+    digest=$(/usr/bin/sha256sum "$file" | /usr/bin/cut -d ' ' -f 1) || return 1
+    case "$digest" in
+        *[!0-9a-f]* | '') return 1 ;;
+    esac
+    test "${#digest}" -eq 64 || return 1
+    printf '%s\t%s\t%s\t1\t%s\t%s\n' \
+        "$relative" "$expected_mode" "$owner" "$size" "$digest" \
+        >>"$final_file_ledger" || return 1
+    test "$(/usr/bin/stat -c '%u:%a:%h' "$final_file_ledger")" \
+        = "$owner:600:1" \
+        && test "$(/usr/bin/stat -c '%s' "$final_file_ledger")" -le 524288
+}
+
+validate_final_file_ledger() {
+    owner=$(/usr/bin/id -u) || return 1
+    test -f "$final_file_ledger" && test ! -L "$final_file_ledger" \
+        && test "$(/usr/bin/stat -c '%u:%a:%h' "$final_file_ledger")" \
+            = "$owner:600:1" \
+        && test "$(/usr/bin/stat -c '%s' "$final_file_ledger")" -le 524288 \
+        || return 1
+    ledger_digest_before=$(
+        /usr/bin/sha256sum "$final_file_ledger" | /usr/bin/cut -d ' ' -f 1
+    ) || return 1
+    expected_entries=1
+    final_ledger_contains_path .build-bindings.json || return 1
+    tab=$(printf '\t')
+    while IFS="$tab" read -r cargo_package component_artifact source_directory; do
+        final_ledger_contains_path "$source_directory/component.wasm" || return 1
+        final_ledger_contains_path "$source_directory/manifest.json" || return 1
+        expected_entries=$((expected_entries + 2))
+        test "$expected_entries" -le 1001 || return 1
+    done <"$plan"
+    test "$(/usr/bin/wc -l <"$final_file_ledger")" = "$expected_entries" \
+        || return 1
+
+    validated_entries=0
+    validated_bytes=0
+    validated_paths=''
+    while IFS="$tab" read -r relative expected_mode expected_owner \
+            expected_links expected_size expected_digest extra; do
+        test -z "$extra" || return 1
+        case "$relative:$expected_mode" in
+            .build-bindings.json:600 | */manifest.json:644 | */component.wasm:644) ;;
+            *) return 1 ;;
+        esac
+        case "$relative" in
+            '' | /* | */ | *[!A-Za-z0-9._/-]* | *//* | */../* | ../* | */.. | */./* | ./* | */.)
+                return 1
+                ;;
+        esac
+        test "${#relative}" -le 240 \
+            && test "$expected_owner" = "$owner" \
+            && test "$expected_links" = 1 || return 1
+        case "$expected_size" in
+            '' | *[!0-9]*) return 1 ;;
+        esac
+        case "$expected_digest" in
+            *[!0-9a-f]* | '') return 1 ;;
+        esac
+        test "${#expected_digest}" -eq 64 \
+            && test "$expected_size" -gt 0 \
+            && test "$expected_size" -le 8388608 || return 1
+        case "
+$validated_paths
+" in
+            *"
+$relative
+"*) return 1 ;;
+        esac
+        validated_paths="$validated_paths
+$relative"
+        file="$source_root/$relative"
+        test -f "$file" && test ! -L "$file" \
+            && test "$(/usr/bin/stat -c '%u:%a:%h:%s' "$file")" \
+                = "$expected_owner:$expected_mode:$expected_links:$expected_size" \
+            && test "$(/usr/bin/sha256sum "$file" | /usr/bin/cut -d ' ' -f 1)" \
+                = "$expected_digest" || return 1
+        validated_entries=$((validated_entries + 1))
+        validated_bytes=$((validated_bytes + expected_size))
+        test "$validated_entries" -le 1001 \
+            && test "$validated_bytes" -le 268435456 || return 1
+    done <"$final_file_ledger"
+    test "$validated_entries" = "$expected_entries" \
+        && test "$ledger_digest_before" = \
+            "$(/usr/bin/sha256sum "$final_file_ledger" | /usr/bin/cut -d ' ' -f 1)"
 }
 
 materialize_snapshot() {
@@ -243,7 +369,9 @@ case "$mode" in
         done
         ;;
     production)
-        for program in /usr/bin/env /usr/bin/git /usr/bin/timeout /usr/bin/prlimit; do
+        for program in \
+                /usr/bin/env /usr/bin/git /usr/bin/timeout /usr/bin/prlimit \
+                /usr/bin/sha256sum; do
             if ! trusted_program "$program"; then
                 printf '%s\n' 'error: trusted snapshot tool is unavailable' >&2
                 exit 1
@@ -282,7 +410,6 @@ case "$mode" in
             exit 1
         fi
         /usr/bin/chmod 0600 -- "$snapshot_plan_file"
-        : >"$mutable_snapshot_paths"
         if ! git_candidate_is_clean "$production_revision"; then
             printf '%s\n' 'error: production candidate provenance changed' >&2
             exit 1
@@ -297,7 +424,6 @@ esac
 
 tab=$(printf '\t')
 target_count=0
-: >"$mutable_snapshot_paths"
 if test "$mode" = production; then
     while IFS="$tab" read -r snapshot_mode snapshot_size snapshot_oid snapshot_relative; do
         printf '%s\n' "$snapshot_relative" >>"$expected_final_paths"
@@ -314,7 +440,6 @@ while IFS="$tab" read -r cargo_package component_artifact source_directory; do
         exit 1
     fi
     if test "$mode" = production; then
-        printf '%s\n' "$source_directory/manifest.json" >>"$mutable_snapshot_paths"
         printf '%s\n' "$source_directory/component.wasm" >>"$expected_final_paths"
     fi
     target_count=$((target_count + 1))
@@ -371,6 +496,10 @@ while IFS="$tab" read -r cargo_package component_artifact source_directory; do
     /usr/bin/install -m 0644 -- "$built" "$destination"
     marketplace_tool inspect-component "$destination"
     digest=$(/usr/bin/sha256sum "$destination" | /usr/bin/cut -d ' ' -f 1)
+    if ! record_final_file "$source_directory/component.wasm" 644 4194304; then
+        printf '%s\n' 'error: generated source ledger failed' >&2
+        exit 1
+    fi
     printf '%s{"sourceDirectory":"%s","sha256":"%s"}' \
         "$separator" "$source_directory" "$digest" >>"$components_json"
     separator=,
@@ -456,8 +585,24 @@ printf '    {"id":"%s","version":"%s","sha256":"%s"}\n' \
 printf '%s\n' '  ]' '}' >>"$bindings"
 /usr/bin/chmod 0600 "$bindings"
 marketplace_tool bind-build --repository "$source_root" --bindings "$bindings"
+if test "$mode" = production; then
+    if ! record_final_file .build-bindings.json 600 131072; then
+        printf '%s\n' 'error: generated source ledger failed' >&2
+        exit 1
+    fi
+    while IFS="$tab" read -r cargo_package component_artifact source_directory; do
+        if ! record_final_file "$source_directory/manifest.json" 644 65536; then
+            printf '%s\n' 'error: generated source ledger failed' >&2
+            exit 1
+        fi
+    done <"$plan"
+fi
 
 marketplace_tool build-plan --repository "$source_root" >/dev/null
+if test -e "$output_repository" || test -L "$output_repository"; then
+    printf '%s\n' 'error: staging destination appeared during the build' >&2
+    exit 1
+fi
 if test "$mode" = production; then
     current_tree=$(
         trusted_git rev-parse --verify "$production_revision^{tree}" 2>/dev/null
@@ -465,13 +610,10 @@ if test "$mode" = production; then
     if test "$current_tree" != "$production_tree" \
             || ! git_candidate_is_clean "$production_revision" \
             || ! snapshot_matches_root "$source_root" yes \
-            || ! final_source_tree_is_expected; then
+            || ! final_source_tree_is_expected \
+            || ! validate_final_file_ledger; then
         printf '%s\n' 'error: production candidate provenance changed' >&2
         exit 1
     fi
-fi
-if test -e "$output_repository" || test -L "$output_repository"; then
-    printf '%s\n' 'error: staging destination appeared during the build' >&2
-    exit 1
 fi
 /usr/bin/mv -T -- "$source_root" "$output_repository"

@@ -265,22 +265,52 @@ fi
 fill_target_kib=$(/usr/bin/du -sk "$fill_target" | /usr/bin/cut -f 1)
 test "$fill_target_kib" -lt 4096
 
+write_aggregate_build_script() {
+    aggregate_build_script=$1
+    aggregate_file_count=$2
+    printf '%s\n' \
+        'use std::{env, fs::OpenOptions, io::Write, path::PathBuf};' \
+        'fn main() {' \
+        "    const FILE_COUNT: usize = $aggregate_file_count;" \
+        '    const FILE_MIB: usize = 24;' \
+        '    let roots = [' \
+        '        env::temp_dir(),' \
+        '        PathBuf::from(env::var("HOME").unwrap()),' \
+        '        PathBuf::from(env::var("CARGO_HOME").unwrap()),' \
+        '        PathBuf::from("/output"),' \
+        '    ];' \
+        '    let chunk = vec![0x5au8; 1024 * 1024];' \
+        '    for index in 0..FILE_COUNT {' \
+        '        let path = roots[index % roots.len()].join(format!("aggregate-{index}"));' \
+        '        let mut file = OpenOptions::new().create_new(true).write(true).open(path).unwrap();' \
+        '        for _ in 0..FILE_MIB { file.write_all(&chunk).unwrap(); }' \
+        '        file.sync_all().unwrap();' \
+        '        assert_eq!(file.metadata().unwrap().len(), (FILE_MIB * 1024 * 1024) as u64);' \
+        '    }' \
+        '}' >"$aggregate_build_script"
+}
+
+aggregate_control_source="$scratch/aggregate-control-source"
+aggregate_control_target="$scratch/aggregate-control-output"
+/usr/bin/cp -a -- "$fill_source" "$aggregate_control_source"
+/usr/bin/install -d -m 0700 "$aggregate_control_target"
+/usr/bin/sed -i 's/output-fill-canary/aggregate-control-canary/g' \
+    "$aggregate_control_source/Cargo.toml" "$aggregate_control_source/Cargo.lock"
+write_aggregate_build_script "$aggregate_control_source/build.rs" 8
+write_build_plan "$aggregate_control_target" \
+    aggregate-control-canary aggregate_control_canary
+sh "$helper" "$aggregate_control_source" "$aggregate_control_target"
+test -f "$aggregate_control_target/artifacts/aggregate_control_canary.wasm"
+
 aggregate_source="$scratch/aggregate-source"
 aggregate_target="$scratch/aggregate-output"
-/usr/bin/cp -a -- "$fill_source" "$aggregate_source"
+/usr/bin/cp -a -- "$aggregate_control_source" "$aggregate_source"
 /usr/bin/install -d -m 0700 "$aggregate_target"
-/usr/bin/sed -i 's/output-fill-canary/aggregate-fill-canary/g' \
+/usr/bin/sed -i 's/aggregate-control-canary/aggregate-fill-canary/g' \
     "$aggregate_source/Cargo.toml" "$aggregate_source/Cargo.lock"
-printf '%s\n' \
-    'use std::{env, fs::OpenOptions};' \
-    'fn main() {' \
-    '    let roots = [env::temp_dir(), env::var("HOME").unwrap().into(), env::var("CARGO_HOME").unwrap().into()];' \
-    '    for (index, root) in roots.into_iter().enumerate() {' \
-    '        let file = OpenOptions::new().create(true).write(true).open(root.join(format!("aggregate-{index}"))).unwrap();' \
-    '        file.set_len(100 * 1024 * 1024).unwrap();' \
-    '    }' \
-    '}' >"$aggregate_source/build.rs"
-write_build_plan "$aggregate_target" aggregate-fill-canary aggregate_fill_canary
+write_aggregate_build_script "$aggregate_source/build.rs" 12
+write_build_plan "$aggregate_target" \
+    aggregate-fill-canary aggregate_fill_canary
 if sh "$helper" "$aggregate_source" "$aggregate_target"; then
     printf '%s\n' 'error: aggregate writable-path filling build was accepted' >&2
     exit 1
