@@ -2,11 +2,15 @@
 set -eu
 umask 077
 
-if test "$#" -ne 1; then
-    printf '%s\n' 'usage: resolve-pinned-rust.sh ABSOLUTE-SOURCE-ROOT' >&2
-    exit 2
-fi
-source_root=$1
+case "$#:${1:-}" in
+    1:*) mode=complete; source_root=$1 ;;
+    2:--fetch) mode=fetch; source_root=$2 ;;
+    *)
+        printf '%s\n' \
+            'usage: resolve-pinned-rust.sh [--fetch] ABSOLUTE-SOURCE-ROOT' >&2
+        exit 2
+        ;;
+esac
 case "$source_root" in
     /*) ;;
     *) printf '%s\n' 'error: pinned Rust toolchain is unavailable' >&2; exit 1 ;;
@@ -58,12 +62,12 @@ fi
 toolchain_root="$user_root/.rustup/toolchains/1.98.0-$rust_host"
 cargo_path="$toolchain_root/bin/cargo"
 rustc_path="$toolchain_root/bin/rustc"
+cargo_home="$user_root/.cargo"
 cargo_index="$user_root/.cargo/registry/index"
 cargo_cache="$user_root/.cargo/registry/cache"
 cargo_sources="$user_root/.cargo/registry/src"
 for directory in \
-        "$toolchain_root" "$toolchain_root/lib/rustlib/wasm32-wasip2" \
-        "$cargo_index" "$cargo_cache" "$cargo_sources"; do
+        "$toolchain_root" "$toolchain_root/lib/rustlib/wasm32-wasip2"; do
     if test ! -d "$directory" || test -L "$directory" \
             || test "$(/usr/bin/readlink -f -- "$directory")" != "$directory" \
             || test "$(/usr/bin/stat -c '%u' "$directory")" != "$invoking_uid" \
@@ -73,6 +77,27 @@ for directory in \
         exit 1
     fi
 done
+if test ! -d "$cargo_home" || test -L "$cargo_home" \
+        || test "$(/usr/bin/readlink -f -- "$cargo_home")" != "$cargo_home" \
+        || test "$(/usr/bin/stat -c '%u' "$cargo_home")" != "$invoking_uid" \
+        || /usr/bin/find "$cargo_home" -maxdepth 0 -perm /0022 -print -quit \
+            | /usr/bin/grep . >/dev/null; then
+    printf '%s\n' 'error: required read-only build input is unavailable' >&2
+    exit 1
+fi
+if test "$mode" = complete; then
+    for directory in "$cargo_index" "$cargo_cache" "$cargo_sources"; do
+        if test ! -d "$directory" || test -L "$directory" \
+                || test "$(/usr/bin/readlink -f -- "$directory")" != "$directory" \
+                || test "$(/usr/bin/stat -c '%u' "$directory")" \
+                    != "$invoking_uid" \
+                || /usr/bin/find "$directory" -maxdepth 0 -perm /0022 \
+                    -print -quit | /usr/bin/grep . >/dev/null; then
+            printf '%s\n' 'error: required read-only build input is unavailable' >&2
+            exit 1
+        fi
+    done
+fi
 for binary in "$cargo_path" "$rustc_path"; do
     if test ! -f "$binary" || test -L "$binary" \
             || test "$(/usr/bin/stat -c '%u:%a:%h' "$binary")" \
@@ -99,6 +124,11 @@ if ! /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
     printf '%s\n' 'error: pinned Rust toolchain is unavailable' >&2
     exit 1
 fi
-printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$toolchain_root" "$cargo_path" "$rustc_path" \
-    "$cargo_index" "$cargo_cache" "$cargo_sources"
+if test "$mode" = fetch; then
+    printf '%s\t%s\t%s\t%s\n' \
+        "$toolchain_root" "$cargo_path" "$rustc_path" "$cargo_home"
+else
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$toolchain_root" "$cargo_path" "$rustc_path" \
+        "$cargo_index" "$cargo_cache" "$cargo_sources"
+fi

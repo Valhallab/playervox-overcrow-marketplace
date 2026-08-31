@@ -97,10 +97,30 @@ sh "$bootstrap" --bootstrap "$repo_root" "$trust_sha" "$trusted_root"
 
 # Populate the shared Cargo cache only after the checkout and exact trusted
 # snapshot have been validated. Candidate manifests are never passed to Cargo.
+resolved_fetch=$(sh "$trusted_root/scripts/resolve-pinned-rust.sh" \
+    --fetch "$trusted_root") || exit 1
+tab=$(printf '\t')
+IFS="$tab" read -r toolchain_root cargo_path rustc_path cargo_home <<EOF
+$resolved_fetch
+EOF
+if test -z "$cargo_home"; then
+    printf '%s\n' 'error: trusted dependency bootstrap is unavailable' >&2
+    exit 1
+fi
+fetch_home="$private_root/fetch-home"
+fetch_rustup_home="$private_root/fetch-rustup-home"
+/usr/bin/install -d -m 0700 -- "$fetch_home" "$fetch_rustup_home"
 (
     CDPATH='' cd -- "$trusted_root"
-    /usr/bin/timeout --signal=TERM --kill-after=5 300 \
-        cargo fetch --locked \
+    /usr/bin/env -i \
+        PATH="$toolchain_root/bin:/usr/bin:/bin" \
+        HOME="$fetch_home" CARGO_HOME="$cargo_home" \
+        RUSTUP_HOME="$fetch_rustup_home" RUSTC="$rustc_path" \
+        CARGO_NET_RETRY=0 CARGO_HTTP_TIMEOUT=30 LC_ALL=C.UTF-8 LANG=C.UTF-8 \
+        /usr/bin/timeout --signal=TERM --kill-after=5 300 \
+        /usr/bin/prlimit --cpu=120 --as=4294967296 --nproc=4096 \
+            --nofile=256 --fsize=268435456 -- \
+        "$cargo_path" fetch --locked \
             --manifest-path tools/marketplace-tool/Cargo.toml
 )
 

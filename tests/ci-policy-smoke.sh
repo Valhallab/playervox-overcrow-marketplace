@@ -194,7 +194,7 @@ if ! /usr/bin/awk '
         /current_head=/ { head = NR }
         /status_size=/ { clean = NR }
         /sh "\$bootstrap" --bootstrap/ { materialized = NR }
-        /cargo fetch --locked/ { fetches += 1; fetch = NR }
+        /"\$cargo_path" fetch --locked/ { fetches += 1; fetch = NR }
         /sh "\$trusted_root\/scripts\/ci-verify[.]sh"/ { verify = NR }
         END {
             exit !(head > 0 && clean > head && materialized > clean \
@@ -203,6 +203,19 @@ if ! /usr/bin/awk '
     ' "$review_gate" \
         || /usr/bin/grep -F -- 'cargo fetch' "$testing_doc" >/dev/null; then
     printf '%s\n' 'error: maintainer dependency bootstrap precedes trust checks' >&2
+    exit 1
+fi
+if ! /usr/bin/grep -F -- \
+        'resolve-pinned-rust.sh"' \
+        "$review_gate" >/dev/null \
+        || ! /usr/bin/grep -F -x -- '    --fetch "$trusted_root") || exit 1' \
+            "$review_gate" >/dev/null \
+        || ! /usr/bin/grep -F -- '"$cargo_path" fetch --locked' \
+            "$review_gate" >/dev/null \
+        || /usr/bin/grep -E -- \
+            '^[[:space:]]*cargo[[:space:]]+fetch' \
+            "$review_gate" >/dev/null; then
+    printf '%s\n' 'error: maintainer dependency bootstrap uses an unpinned Cargo' >&2
     exit 1
 fi
 if ! /usr/bin/awk '
