@@ -7,7 +7,6 @@
 /published/ @Valhallab
 /tests/reject-published-change.sh @Valhallab
 /tests/reject-trusted-change.sh @Valhallab
-/tests/check-community-change.mjs @Valhallab
 /tests/community-submission-smoke.sh @Valhallab
 /tests/ci-trust-boundary-smoke.sh @Valhallab
 /tests/sandbox-review-checks-smoke.sh @Valhallab

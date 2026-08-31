@@ -72,8 +72,8 @@ at least every 14 days.
 Production verification also requires Bubblewrap, a user systemd manager for
 transient resource-limited services, and a canonical regular Node executable
 selected from `PATH`. The executable and every directory in its resolved path
-must be root-owned and not
-group- or world-writable; the executable must be single-link. A user-managed
+must be root-owned and not group- or world-writable; the executable must have
+mode `0755` and be single-link. A user-managed
 version-manager shim is intentionally rejected. The Node checks run without
 network and with a `/proc` view limited to their isolated PID namespace, under
 fixed CPU, task, virtual-address, resident memory, swap, file, and wall-time

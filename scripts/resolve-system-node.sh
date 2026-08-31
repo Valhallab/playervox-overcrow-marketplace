@@ -15,8 +15,8 @@ node_path=$(/usr/bin/readlink -f -- "$node_candidate" 2>/dev/null || :)
 if test -z "$node_path" || test "$node_candidate" != "$node_path" \
         || test ! -f "$node_path" || test -L "$node_path" \
         || test ! -x "$node_path" \
-        || test "$(/usr/bin/stat -c '%u:%h' "$node_path" 2>/dev/null || :)" \
-            != 0:1 \
+        || test "$(/usr/bin/stat -c '%u:%a:%h' "$node_path" 2>/dev/null || :)" \
+            != 0:755:1 \
         || test "$(/usr/bin/stat -c '%s' "$node_path" 2>/dev/null || :)" \
             -gt 268435456 \
         || /usr/bin/find "$node_path" -maxdepth 0 -perm /0022 -print -quit \

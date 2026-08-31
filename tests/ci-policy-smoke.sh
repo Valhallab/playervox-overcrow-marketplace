@@ -13,7 +13,6 @@ sandbox_driver="$repo_root/scripts/sandbox-review-checks.sh"
 component_sandbox="$repo_root/scripts/sandbox-component-build.sh"
 published_verifier="$repo_root/scripts/verify-published.sh"
 gate="$repo_root/tests/reject-published-change.sh"
-community_gate="$repo_root/tests/check-community-change.mjs"
 community_smoke="$repo_root/tests/community-submission-smoke.sh"
 trusted_gate="$repo_root/tests/reject-trusted-change.sh"
 trust_smoke="$repo_root/tests/ci-trust-boundary-smoke.sh"
@@ -26,7 +25,6 @@ testing_doc="$repo_root/docs/testing.md"
 for owned_path in \
         '/tests/reject-published-change.sh @Valhallab' \
         '/tests/reject-trusted-change.sh @Valhallab' \
-        '/tests/check-community-change.mjs @Valhallab' \
         '/tests/community-submission-smoke.sh @Valhallab' \
         '/tests/ci-trust-boundary-smoke.sh @Valhallab' \
         '/tests/sandbox-review-checks-smoke.sh @Valhallab' \
@@ -43,8 +41,7 @@ if ! test -x "$gate" || test -L "$gate" \
     printf '%s\n' 'error: published-change gate is missing or unsafe' >&2
     exit 1
 fi
-if ! test -f "$community_gate" || test -L "$community_gate" \
-        || ! test -x "$community_smoke" || test -L "$community_smoke" \
+if ! test -x "$community_smoke" || test -L "$community_smoke" \
         || ! test -x "$trust_smoke" || test -L "$trust_smoke" \
         || ! test -x "$sandbox_review_smoke" || test -L "$sandbox_review_smoke"; then
     printf '%s\n' 'error: community-change policy tests are missing or unsafe' >&2
@@ -142,8 +139,9 @@ require_line 'tests/sandbox-component-build-smoke.sh'
 require_line 'stage-catalog-repository.sh" --mode production'
 require_line '--mode production --trusted-tool "$trusted_tool"'
 require_line 'sh "$trusted_root/tests/ci-trust-boundary-smoke.sh" --trusted-root "$trusted_root" --trusted-tool "$trusted_tool"'
-require_line 'node_path=$(sh "$trusted_root/scripts/resolve-system-node.sh") || exit 1'
 require_line 'node_path=$(sh "$script_dir/resolve-system-node.sh") || exit 1'
+require_line 'build-plan --repository "$head_root"'
+require_line '--changed-paths "$changed_paths"'
 require_line '"$2" --test /source/tests/landing/*.test.mjs'
 require_line '&& "$2" /source/tests/site-runtime.test.js'
 require_line 'sandbox-review-checks.sh" workspace'
@@ -369,7 +367,7 @@ if /usr/bin/grep -F -- '/usr/bin/node' "$ci_driver" "$sandbox_driver" \
             'node_path=$(sh "$verification_repository/scripts/resolve-system-node.sh") || exit 1' \
             "$published_verifier" >/dev/null \
         || ! /usr/bin/grep -F -- \
-            'test "$(/usr/bin/stat -c '\''%u:%h'\'' "$node_path"' \
+            'test "$(/usr/bin/stat -c '\''%u:%a:%h'\'' "$node_path"' \
             "$node_resolver" >/dev/null; then
     printf '%s\n' 'error: Node execution does not use the trusted resolver' >&2
     exit 1

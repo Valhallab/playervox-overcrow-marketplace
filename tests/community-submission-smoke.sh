@@ -7,11 +7,6 @@ if test "$#" -ne 0; then
 fi
 
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
-gate="$repo_root/tests/check-community-change.mjs"
-if test ! -f "$gate" || test -L "$gate"; then
-    printf '%s\n' 'error: community-change gate is missing or unsafe' >&2
-    exit 1
-fi
 scratch=$(/usr/bin/mktemp -d /tmp/marketplace-community.XXXXXXXXXX)
 cleanup() {
     /usr/bin/rm -rf -- "$scratch"
@@ -23,12 +18,20 @@ marketplace_tool() {
         --locked --quiet -- "$@"
 }
 
+community_plan() {
+    repository=$1
+    changed=$2
+    marketplace_tool build-plan --repository "$repository" \
+        --changed-paths "$changed"
+}
+
 write_path() {
     printf '%s\000' "$1" >"$2"
+    /usr/bin/chmod 0600 "$2"
 }
 
 expect_gate_reject() {
-    if node "$gate" "$@" >/dev/null 2>&1; then
+    if community_plan "$@" >/dev/null 2>&1; then
         printf '%s\n' 'error: community-change gate accepted a forbidden fixture' >&2
         exit 1
     fi
@@ -85,8 +88,7 @@ printf '%s\n' \
 changed_paths="$scratch/changed-paths"
 write_path 'community/example/hello-widget/src/lib.rs' "$changed_paths"
 accepted_plan="$scratch/accepted-plan.tsv"
-marketplace_tool build-plan --repository "$fixture" >"$accepted_plan"
-node "$gate" "$fixture" "$accepted_plan" "$changed_paths"
+community_plan "$fixture" "$changed_paths" >"$accepted_plan"
 
 accepted_workspace="$scratch/accepted-workspace.toml"
 /usr/bin/cp -- "$fixture/Cargo.toml" "$accepted_workspace"
@@ -104,18 +106,20 @@ printf '%s\n' \
     '    "status": "verified"' \
     '  }' \
     ']' >"$fixture/marketplace/targets.json"
+unwired_targets="$scratch/unwired-targets.json"
+/usr/bin/cp -- "$fixture/marketplace/targets.json" "$unwired_targets"
 unwired_plan="$scratch/unwired-plan.tsv"
 marketplace_tool build-plan --repository "$fixture" >"$unwired_plan"
-expect_gate_reject "$fixture" "$unwired_plan" "$changed_paths"
+expect_gate_reject "$fixture" "$changed_paths"
 /usr/bin/cp -- "$accepted_targets" "$fixture/marketplace/targets.json"
 
 write_path 'community/example/BadWidget/src/lib.rs' "$changed_paths"
-expect_gate_reject "$fixture" "$accepted_plan" "$changed_paths"
+expect_gate_reject "$fixture" "$changed_paths"
 malformed_path=$(printf 'community/example/hello-widget/src/lib.rs\nother')
 write_path "$malformed_path" "$changed_paths"
-expect_gate_reject "$fixture" "$accepted_plan" "$changed_paths"
+expect_gate_reject "$fixture" "$changed_paths"
 write_path 'community/example/hello-widget/../other/src/lib.rs' "$changed_paths"
-expect_gate_reject "$fixture" "$accepted_plan" "$changed_paths"
+expect_gate_reject "$fixture" "$changed_paths"
 
 : >"$changed_paths"
 index=0
@@ -123,7 +127,7 @@ while test "$index" -lt 513; do
     printf 'docs/file-%s\000' "$index" >>"$changed_paths"
     index=$((index + 1))
 done
-expect_gate_reject "$fixture" "$accepted_plan" "$changed_paths"
+expect_gate_reject "$fixture" "$changed_paths"
 
 : >"$changed_paths"
 index=0
@@ -132,7 +136,7 @@ while test "$index" -lt 101; do
         >>"$changed_paths"
     index=$((index + 1))
 done
-expect_gate_reject "$fixture" "$accepted_plan" "$changed_paths"
+expect_gate_reject "$fixture" "$changed_paths"
 write_path 'community/example/hello-widget/src/lib.rs' "$changed_paths"
 
 creator_manifest="$fixture/community/example/hello-widget/Cargo.toml"
@@ -155,18 +159,32 @@ expect_plan_reject "$fixture"
 /usr/bin/cp -- "$accepted_manifest" "$creator_manifest"
 
 deleted_fixture="$scratch/deleted-repository"
-/usr/bin/install -d -m 0700 "$deleted_fixture/community/example"
-deleted_plan="$scratch/deleted-plan.tsv"
-printf '%s\t%s\t%s\n' \
-    warframe-worldstate-provider warframe_worldstate_provider \
-    providers/warframe-worldstate >"$deleted_plan"
-node "$gate" "$deleted_fixture" "$deleted_plan" "$changed_paths"
-printf '%s\t%s\t%s\n' hello-widget hello_widget \
-    community/example/hello-widget >>"$deleted_plan"
-expect_gate_reject "$deleted_fixture" "$deleted_plan" "$changed_paths"
-/usr/bin/install -d -m 0700 \
-    "$deleted_fixture/community/example/hello-widget"
-expect_gate_reject "$deleted_fixture" "$scratch/unwired-plan.tsv" "$changed_paths"
+/usr/bin/cp -R -- "$fixture" "$deleted_fixture"
+/usr/bin/cp -- "$unwired_targets" "$deleted_fixture/marketplace/targets.json"
+/usr/bin/sed -i '/"community\/example\/hello-widget",/d' \
+    "$deleted_fixture/Cargo.toml"
+/usr/bin/awk '
+    BEGIN { block = ""; drop = 0 }
+    /^\[\[package\]\]$/ {
+        if (block != "" && !drop) printf "%s", block
+        block = $0 ORS
+        drop = 0
+        next
+    }
+    {
+        block = block $0 ORS
+        if ($0 == "name = \"hello-widget\"") drop = 1
+    }
+    END { if (block != "" && !drop) printf "%s", block }
+' "$deleted_fixture/Cargo.lock" >"$deleted_fixture/Cargo.lock.next"
+/usr/bin/mv -- "$deleted_fixture/Cargo.lock.next" "$deleted_fixture/Cargo.lock"
+/usr/bin/rm -rf -- "$deleted_fixture/community/example/hello-widget"
+if ! community_plan "$deleted_fixture" "$changed_paths" >/dev/null; then
+    printf '%s\n' 'error: community-change gate rejected a clean deletion' >&2
+    exit 1
+fi
+/usr/bin/cp -- "$accepted_targets" "$deleted_fixture/marketplace/targets.json"
+expect_plan_reject "$deleted_fixture"
 
 /usr/bin/git init --quiet "$fixture"
 /usr/bin/git -C "$fixture" config user.name 'Marketplace Tests'

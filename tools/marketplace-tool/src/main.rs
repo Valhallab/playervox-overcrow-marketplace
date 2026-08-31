@@ -1,5 +1,6 @@
 mod cargo_manifest;
 mod catalog;
+mod community_change;
 mod metadata;
 mod package;
 mod transaction;
@@ -488,10 +489,18 @@ fn policy(arguments: &[String]) -> Result<(), AppError> {
 }
 
 fn build_plan(arguments: &[String]) -> Result<(), AppError> {
-    if arguments.len() != 3 || arguments[1] != "--repository" {
+    if !matches!(arguments.len(), 3 | 5)
+        || arguments[1] != "--repository"
+        || (arguments.len() == 5 && arguments[3] != "--changed-paths")
+    {
         return Err(AppError::Arguments);
     }
-    let targets = load_build_plan(Path::new(&arguments[2]))?;
+    let repository = Path::new(&arguments[2]);
+    let targets = load_build_plan(repository)?;
+    if arguments.len() == 5 {
+        community_change::validate(repository, Path::new(&arguments[4]), &targets)
+            .map_err(|()| AppError::Policy)?;
+    }
     let mut output = String::new();
     for target in &targets {
         let entry = target.build_plan_entry();

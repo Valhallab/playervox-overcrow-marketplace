@@ -61,9 +61,8 @@ for required in \
         scripts/materialize-git-snapshot.sh scripts/prepare-marketplace-tool.sh \
         scripts/ci-verify.sh scripts/sandbox-review-checks.sh \
         scripts/sandbox-component-build.sh scripts/sandbox-supervisor.c \
-        scripts/resolve-system-gcc.sh scripts/resolve-system-node.sh \
-        tests/reject-published-change.sh tests/reject-trusted-change.sh \
-        tests/check-community-change.mjs; do
+        scripts/resolve-system-gcc.sh \
+        tests/reject-published-change.sh tests/reject-trusted-change.sh; do
     if test ! -f "$trusted_root/$required" || test -L "$trusted_root/$required"; then
         printf '%s\n' 'error: trusted CI driver is incomplete' >&2
         exit 1
@@ -134,17 +133,21 @@ if test "$event_name" = pull_request; then
         sh "$trusted_root/tests/reject-trusted-change.sh" <"$changed_paths"
 fi
 
-if ! "$trusted_tool" build-plan --repository "$head_root" >"$build_plan" \
+build_plan_ok=false
+if test "$event_name" = pull_request; then
+    if "$trusted_tool" build-plan --repository "$head_root" \
+            --changed-paths "$changed_paths" >"$build_plan"; then
+        build_plan_ok=true
+    fi
+elif "$trusted_tool" build-plan --repository "$head_root" >"$build_plan"; then
+    build_plan_ok=true
+fi
+if test "$build_plan_ok" != true \
         || test "$(/usr/bin/stat -c '%u:%a:%h' "$build_plan")" \
             != "$invoking_uid:600:1" \
         || test "$(/usr/bin/stat -c '%s' "$build_plan")" -gt 131072; then
     printf '%s\n' 'error: pull-request source admission failed' >&2
     exit 1
-fi
-if test "$event_name" = pull_request; then
-    node_path=$(sh "$trusted_root/scripts/resolve-system-node.sh") || exit 1
-    "$node_path" "$trusted_root/tests/check-community-change.mjs" \
-        "$head_root" "$build_plan" "$changed_paths"
 fi
 
 # The candidate projection contains exact HEAD data, but all executable CI,
