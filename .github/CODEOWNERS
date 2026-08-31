@@ -1,18 +1,18 @@
-# Repository-owner fallback. Replace @Valhallab with a validated dedicated
+# Repository-administrator fallback. Replace @ypMrg with a validated dedicated
 # maintainer team when that team exists in the repository organization.
-/marketplace/ @Valhallab
-/scripts/ @Valhallab
-/tools/ @Valhallab
-/.github/ @Valhallab
-/published/ @Valhallab
-/tests/reject-published-change.sh @Valhallab
-/tests/reject-trusted-change.sh @Valhallab
-/tests/community-submission-smoke.sh @Valhallab
-/tests/ci-trust-boundary-smoke.sh @Valhallab
-/tests/sandbox-review-checks-smoke.sh @Valhallab
-/tests/ci-policy-smoke.sh @Valhallab
-/scripts/review-revision.sh @Valhallab
-/SECURITY.md @Valhallab
-/docs/permissions.md @Valhallab
-/docs/publishing.md @Valhallab
-/docs/review-policy.md @Valhallab
+/marketplace/ @ypMrg
+/scripts/ @ypMrg
+/tools/ @ypMrg
+/.github/ @ypMrg
+/published/ @ypMrg
+/tests/reject-published-change.sh @ypMrg
+/tests/reject-trusted-change.sh @ypMrg
+/tests/community-submission-smoke.sh @ypMrg
+/tests/ci-trust-boundary-smoke.sh @ypMrg
+/tests/sandbox-review-checks-smoke.sh @ypMrg
+/tests/ci-policy-smoke.sh @ypMrg
+/scripts/review-revision.sh @ypMrg
+/SECURITY.md @ypMrg
+/docs/permissions.md @ypMrg
+/docs/publishing.md @ypMrg
+/docs/review-policy.md @ypMrg

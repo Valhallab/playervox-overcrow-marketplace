@@ -24,13 +24,13 @@ testing_doc="$repo_root/docs/testing.md"
 publishing_doc="$repo_root/docs/publishing.md"
 
 for owned_path in \
-        '/tests/reject-published-change.sh @Valhallab' \
-        '/tests/reject-trusted-change.sh @Valhallab' \
-        '/tests/community-submission-smoke.sh @Valhallab' \
-        '/tests/ci-trust-boundary-smoke.sh @Valhallab' \
-        '/tests/sandbox-review-checks-smoke.sh @Valhallab' \
-        '/tests/ci-policy-smoke.sh @Valhallab' \
-        '/scripts/review-revision.sh @Valhallab'; do
+        '/tests/reject-published-change.sh @ypMrg' \
+        '/tests/reject-trusted-change.sh @ypMrg' \
+        '/tests/community-submission-smoke.sh @ypMrg' \
+        '/tests/ci-trust-boundary-smoke.sh @ypMrg' \
+        '/tests/sandbox-review-checks-smoke.sh @ypMrg' \
+        '/tests/ci-policy-smoke.sh @ypMrg' \
+        '/scripts/review-revision.sh @ypMrg'; do
     if ! /usr/bin/grep -F -x -- "$owned_path" "$codeowners" >/dev/null; then
         printf '%s\n' 'error: CI policy gates are not explicitly owned' >&2
         exit 1
