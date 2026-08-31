@@ -130,7 +130,7 @@ require_line 'sandbox-review-checks.sh" workspace'
 require_line 'sh "$trusted_root/scripts/sandbox-review-checks.sh" workspace "$projection" "$first_build/public"'
 require_line 'sandbox-review-checks.sh" site'
 require_line 'diff --recursive --no-dereference'
-require_line '--unshare-all --unshare-net'
+require_line '--unshare-all --share-net'
 require_line 'CARGO_NET_OFFLINE=true'
 require_line 'runner_uid=$(/usr/bin/id -u)'
 
@@ -158,6 +158,24 @@ for resource_limited_runner in \
                 '--quiet --expand-environment=no --service-type=exec' \
                 "$resource_limited_runner" >/dev/null; then
         printf '%s\n' 'error: resource limits do not use a transient user service' >&2
+        exit 1
+    fi
+    if /usr/bin/grep -F -- '--unshare-net' \
+            "$resource_limited_runner" >/dev/null \
+            || ! /usr/bin/grep -F -- '--cap-add CAP_SYS_ADMIN' \
+                "$resource_limited_runner" >/dev/null \
+            || ! /usr/bin/grep -F -- '--cap-add CAP_SETPCAP' \
+                "$resource_limited_runner" >/dev/null \
+            || ! /usr/bin/grep -F -- \
+                '/usr/bin/unshare --net /usr/bin/setpriv' \
+                "$resource_limited_runner" >/dev/null \
+            || ! /usr/bin/grep -F -- '--bounding-set=-all' \
+                "$resource_limited_runner" >/dev/null \
+            || ! /usr/bin/grep -F -- '--inh-caps=-all' \
+                "$resource_limited_runner" >/dev/null \
+            || ! /usr/bin/grep -F -- '--ambient-caps=-all' \
+                "$resource_limited_runner" >/dev/null; then
+        printf '%s\n' 'error: network sandbox does not drop setup capabilities' >&2
         exit 1
     fi
 done

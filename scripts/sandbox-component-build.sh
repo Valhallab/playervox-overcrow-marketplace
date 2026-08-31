@@ -92,7 +92,8 @@ if test ! -f "$bwrap_path" || test -L "$bwrap_path" \
 fi
 for program in \
         /usr/bin/timeout /usr/bin/prlimit /usr/bin/tar /usr/bin/env \
-        /usr/bin/systemd-run /usr/bin/readlink /usr/bin/setpriv; do
+        /usr/bin/systemd-run /usr/bin/readlink /usr/bin/setpriv \
+        /usr/bin/unshare; do
     if test ! -f "$program" || test -L "$program" \
             || test "$(/usr/bin/stat -c '%u:%a' "$program")" != 0:755; then
         printf '%s\n' 'error: required resource control is unavailable' >&2
@@ -168,8 +169,8 @@ run_sandboxed_build() {
         /usr/bin/prlimit --cpu=20 --as=4294967296 --nproc=4096 \
             --nofile=256 --fsize=33554432 -- \
         "$bwrap_path" \
-            --unshare-all --unshare-net --die-with-parent --new-session \
-            --cap-drop ALL --clearenv \
+            --unshare-all --share-net --die-with-parent --new-session \
+            --cap-add CAP_SYS_ADMIN --cap-add CAP_SETPCAP --clearenv \
             --ro-bind /usr /usr \
             --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib /lib64 \
             --dir /proc --proc /proc --dir /dev --dev /dev \
@@ -190,7 +191,9 @@ run_sandboxed_build() {
             --ro-bind "$build_plan" /build-plan.tsv \
             --bind "$artifact_archive" /artifact-export \
             --chdir / --setenv PATH /usr/bin:/bin --setenv LC_ALL C.UTF-8 \
-            /sandbox-supervisor /bin/sh -c '
+            /usr/bin/unshare --net /usr/bin/setpriv \
+            --bounding-set=-all --inh-caps=-all --ambient-caps=-all \
+            --no-new-privs /sandbox-supervisor /bin/sh -c '
                 /usr/bin/cp -- /build-plan.tsv /build/compile-plan.tsv || exit 1
                 /usr/bin/chmod 0444 /build/compile-plan.tsv || exit 1
                 /usr/bin/setsid /usr/bin/setpriv \

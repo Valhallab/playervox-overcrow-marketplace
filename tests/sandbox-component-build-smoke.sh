@@ -103,6 +103,8 @@ printf '%s\n' \
     "    if env::vars_os().any(|(key, value)| key == \"OVERCROW_PRIVATE_ARGUMENT\" || value == \"$private_argument\") { panic!(\"environment leak\"); }" \
     "    if env::var_os(\"HOME\").as_deref() != Some(std::ffi::OsStr::new(\"/home/build\")) { panic!(\"home leak\"); }" \
     "    if fs::read_dir(\"$parent_home\").is_ok() { panic!(\"host home leak\"); }" \
+    '    let status = fs::read_to_string("/proc/self/status").expect("process status");' \
+    '    if !status.contains("CapEff:\t0000000000000000") || !status.contains("CapBnd:\t0000000000000000") || !status.contains("NoNewPrivs:\t1") { panic!("capability leak"); }' \
     '    if let Ok(entries) = fs::read_dir("/proc") {' \
     '        for entry in entries.flatten() {' \
     '            let path = entry.path().join("cmdline");' \

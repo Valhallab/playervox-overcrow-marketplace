@@ -65,6 +65,9 @@ version-manager shim is intentionally rejected. The Node checks run without
 network or a process view and under fixed CPU, task, virtual-address, resident
 memory, swap, file, and wall-time limits. Release and CI hosts must provide
 that system Node installation or production verification fails closed.
+Bubblewrap exposes the host network only to the fixed trusted setup command;
+that command creates an empty network namespace, drops every capability, and
+sets `no_new_privs` before starting any reviewed package or site code.
 
 The deployment contract serves tracked production output at
 <https://overcrow.playervox.com/>, with the marketplace at

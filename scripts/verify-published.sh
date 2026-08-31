@@ -105,7 +105,7 @@ while :; do
     node_directory=$node_parent
 done
 for program in /usr/bin/env /usr/bin/prlimit /usr/bin/systemd-run \
-        /usr/bin/timeout; do
+        /usr/bin/setpriv /usr/bin/timeout /usr/bin/unshare; do
     if test ! -f "$program" || test -L "$program" \
             || test "$(/usr/bin/stat -c '%u:%a' "$program" 2>/dev/null || :)" != 0:755; then
         printf '%s\n' 'error: published tree rejected' >&2
@@ -140,8 +140,8 @@ run_node_sandbox() {
         /usr/bin/prlimit --cpu=15 --as=4294967296 --nproc=4096 \
             --nofile=64 --fsize=1048576 -- \
         "$bwrap_path" \
-            --unshare-all --unshare-net --die-with-parent --new-session \
-            --cap-drop ALL --clearenv \
+            --unshare-all --share-net --die-with-parent --new-session \
+            --cap-add CAP_SYS_ADMIN --cap-add CAP_SETPCAP --clearenv \
             --ro-bind /usr /usr \
             --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib /lib64 \
             --dev /dev --tmpfs /tmp --dir /home \
@@ -152,7 +152,9 @@ run_node_sandbox() {
             --ro-bind "$tree/marketplace" /workspace/web/marketplace \
             --chdir /workspace \
             --setenv PATH /usr/bin:/bin --setenv LC_ALL C.UTF-8 \
-            "$@"
+            /usr/bin/unshare --net /usr/bin/setpriv \
+                --bounding-set=-all --inh-caps=-all --ambient-caps=-all \
+                --no-new-privs "$@"
 }
 for landing_test in effects.test.mjs landing-content.test.mjs static-hygiene.test.mjs; do
     if ! run_node_sandbox /node "/workspace/tests/landing/$landing_test" /tree \
