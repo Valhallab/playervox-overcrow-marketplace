@@ -32,10 +32,12 @@ the user enables it.
 
 Reviewed community submissions are accepted under
 [`community/<publisher>/<widget-id>/`](community/README.md) through pull
-requests to `candidate`. Automated checks provide evidence and a maintainer
-reviews the exact source, capabilities, dependencies, license, and provenance.
-Merge acceptance is not publication; a later maintainer-owned offline release
-promotes an accepted revision without giving creators signing authority.
+requests to `candidate`. Hosted CI admits metadata and repository shape without
+executing submitted code. A maintainer then runs the complete sandboxed build
+and reviews the exact source, capabilities, dependencies, license, and
+provenance. Merge acceptance is not publication; a later maintainer-owned
+offline release promotes an accepted revision without giving creators signing
+authority.
 
 The public deployment contract uses <https://overcrow.playervox.com/> for the
 landing page, <https://overcrow.playervox.com/marketplace/> for browsing, and

@@ -18,6 +18,7 @@ community_smoke="$repo_root/tests/community-submission-smoke.sh"
 trusted_gate="$repo_root/tests/reject-trusted-change.sh"
 trust_smoke="$repo_root/tests/ci-trust-boundary-smoke.sh"
 sandbox_review_smoke="$repo_root/tests/sandbox-review-checks-smoke.sh"
+review_gate="$repo_root/scripts/review-revision.sh"
 codeowners="$repo_root/.github/CODEOWNERS"
 
 for owned_path in \
@@ -27,7 +28,8 @@ for owned_path in \
         '/tests/community-submission-smoke.sh @Valhallab' \
         '/tests/ci-trust-boundary-smoke.sh @Valhallab' \
         '/tests/sandbox-review-checks-smoke.sh @Valhallab' \
-        '/tests/ci-policy-smoke.sh @Valhallab'; do
+        '/tests/ci-policy-smoke.sh @Valhallab' \
+        '/scripts/review-revision.sh @Valhallab'; do
     if ! /usr/bin/grep -F -x -- "$owned_path" "$codeowners" >/dev/null; then
         printf '%s\n' 'error: CI policy gates are not explicitly owned' >&2
         exit 1
@@ -44,6 +46,10 @@ if ! test -f "$community_gate" || test -L "$community_gate" \
         || ! test -x "$trust_smoke" || test -L "$trust_smoke" \
         || ! test -x "$sandbox_review_smoke" || test -L "$sandbox_review_smoke"; then
     printf '%s\n' 'error: community-change policy tests are missing or unsafe' >&2
+    exit 1
+fi
+if ! test -x "$review_gate" || test -L "$review_gate"; then
+    printf '%s\n' 'error: maintainer review gate is missing or unsafe' >&2
     exit 1
 fi
 expect_accept() {
@@ -111,8 +117,6 @@ require_line 'branches: [master, candidate]'
 require_line 'contents: read'
 require_line 'persist-credentials: false'
 require_line 'rustup toolchain install 1.98.0'
-require_line 'bubblewrap'
-require_line 'shellcheck'
 require_line 'tests/reject-published-change.sh'
 require_line 'tests/reject-trusted-change.sh'
 require_line 'scripts/materialize-git-snapshot.sh'
@@ -132,7 +136,36 @@ require_line 'sandbox-review-checks.sh" site'
 require_line 'diff --recursive --no-dereference'
 require_line '--unshare-all --share-net'
 require_line 'CARGO_NET_OFFLINE=true'
-require_line 'runner_uid=$(/usr/bin/id -u)'
+
+if ! /usr/bin/grep -F -x -- \
+        '            "$private_root" admission' "$workflow" >/dev/null \
+        || ! /usr/bin/grep -F -x -- \
+            'verification_mode=${10:-full}' "$ci_driver" >/dev/null; then
+    printf '%s\n' 'error: hosted CI does not select static admission explicitly' >&2
+    exit 1
+fi
+if ! /usr/bin/grep -F -- \
+        'show "$trust_sha:scripts/materialize-git-snapshot.sh"' \
+        "$review_gate" >/dev/null \
+        || ! /usr/bin/grep -F -x -- \
+            '    "$private_root" full' "$review_gate" >/dev/null; then
+    printf '%s\n' 'error: maintainer gate does not bootstrap exact reviewed bytes' >&2
+    exit 1
+fi
+if /usr/bin/grep -E \
+        'apt-get|bubblewrap|shellcheck|systemctl|wasm32-wasip2' \
+        "$workflow" >/dev/null; then
+    printf '%s\n' 'error: hosted admission installs or starts sandbox tooling' >&2
+    exit 1
+fi
+if ! /usr/bin/awk '
+        /if test "\$verification_mode" = admission/ { admission = NR }
+        /stage-catalog-repository[.]sh" --mode production/ { stage = NR }
+        END { exit !(admission > 0 && stage > admission) }
+    ' "$ci_driver"; then
+    printf '%s\n' 'error: hosted admission does not exit before candidate execution' >&2
+    exit 1
+fi
 
 for sandbox in "$sandbox_driver" "$component_sandbox"; do
     if ! /usr/bin/grep -F -x \
@@ -183,23 +216,6 @@ done
 if ! /usr/bin/grep -F -- '--dir /proc --proc /proc' \
         "$published_verifier" >/dev/null; then
     printf '%s\n' 'error: published verifier does not expose isolated process status' >&2
-    exit 1
-fi
-
-if ! /usr/bin/awk '
-        /\/usr\/bin\/timeout --signal=TERM --kill-after=5 30/ {
-            timeout_line = NR
-        }
-        /\/usr\/bin\/sudo --non-interactive \/usr\/bin\/systemctl start/ {
-            starts += 1
-            if (timeout_line != NR - 1 \
-                    || $0 !~ /"user@\$runner_uid[.]service"/) {
-                invalid = 1
-            }
-        }
-        END { exit !(starts == 1 && invalid == 0) }
-    ' "$workflow"; then
-    printf '%s\n' 'error: delegated CI resource scope is not started safely' >&2
     exit 1
 fi
 

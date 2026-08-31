@@ -2,9 +2,9 @@
 set -eu
 umask 077
 
-if test "$#" -ne 9; then
+if test "$#" -ne 9 && test "$#" -ne 10; then
     printf '%s\n' \
-        'usage: ci-verify.sh REPOSITORY TRUST-SHA HEAD-SHA EVENT REPOSITORY-NAME BASE-REF HEAD-REPOSITORY HEAD-REF PRIVATE-PARENT' >&2
+        'usage: ci-verify.sh REPOSITORY TRUST-SHA HEAD-SHA EVENT REPOSITORY-NAME BASE-REF HEAD-REPOSITORY HEAD-REF PRIVATE-PARENT [admission|full]' >&2
     exit 2
 fi
 repository=$1
@@ -16,10 +16,15 @@ base_ref=$6
 head_repository=$7
 head_ref=$8
 private_parent=$9
+verification_mode=${10:-full}
 
 case "$event_name" in
     pull_request | push) ;;
     *) printf '%s\n' 'error: CI trust metadata is invalid' >&2; exit 1 ;;
+esac
+case "$verification_mode" in
+    admission | full) ;;
+    *) printf '%s\n' 'error: CI verification mode is invalid' >&2; exit 1 ;;
 esac
 for revision in "$trust_sha" "$head_sha"; do
     case "$revision" in
@@ -182,6 +187,14 @@ projection_git -c user.name='Marketplace CI' \
     -c user.email='marketplace-ci@invalid.example' \
     commit --quiet --no-gpg-sign -m 'reviewed CI projection'
 
+# Hosted admission parses candidate bytes only through reviewed tools. It must
+# finish before staging, compilation, tests, or any other candidate execution.
+sh "$projection/scripts/check-policy.sh"
+if test "$verification_mode" = admission; then
+    printf '%s\n' 'Hosted static admission passed'
+    exit 0
+fi
+
 stage_parent="$work/stage"
 /usr/bin/install -d -m 0700 -- "$stage_parent"
 sh "$projection/scripts/stage-catalog-repository.sh" --mode production --trusted-tool "$trusted_tool" "$stage_parent/repository"
@@ -238,7 +251,6 @@ sh "$trusted_root/tests/ci-trust-boundary-smoke.sh" --trusted-root "$trusted_roo
 sh "$projection/tests/sandbox-review-checks-smoke.sh"
 sh "$projection/tests/sandbox-component-build-smoke.sh"
 sh "$projection/tests/ci-policy-smoke.sh"
-sh "$projection/scripts/check-policy.sh"
 sh "$projection/tests/check-policy-smoke.sh"
 /usr/bin/shellcheck "$projection"/scripts/*.sh "$projection"/tests/*.sh
 /bin/sh -n "$projection"/scripts/*.sh "$projection"/tests/*.sh

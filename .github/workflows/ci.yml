@@ -16,17 +16,11 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Install pinned review tools
+      - name: Install pinned admission toolchain
         run: |
-          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          rustup toolchain install 1.98.0 --profile minimal
           rustup default 1.98.0
-          rustup target add --toolchain 1.98.0 wasm32-wasip2
-          sudo apt-get update
-          sudo apt-get install --yes bubblewrap shellcheck
-          runner_uid=$(/usr/bin/id -u)
-          /usr/bin/timeout --signal=TERM --kill-after=5 30 \
-            /usr/bin/sudo --non-interactive /usr/bin/systemctl start "user@$runner_uid.service"
-      - name: Verify through the reviewed base
+      - name: Admit through the reviewed base
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -99,4 +93,4 @@ jobs:
           sh "$trusted_root/scripts/ci-verify.sh" \
             "$PWD" "$TRUST_SHA" "$REVIEW_SHA" "$EVENT_NAME" \
             "$REPOSITORY" "$BASE_REF" "$HEAD_REPOSITORY" "$HEAD_REF" \
-            "$private_root"
+            "$private_root" admission

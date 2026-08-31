@@ -4,7 +4,7 @@
 
 Do not open a public issue or publish a proof-of-concept exploit for an
 unresolved vulnerability. Use
-[GitHub Private Vulnerability Reporting](https://github.com/Valhallab/playervox-overcrow/security/advisories/new)
+[GitHub Private Vulnerability Reporting](https://github.com/Valhallab/playervox-overcrow-marketplace/security/advisories/new)
 to contact Valhallab SASU privately and identify this marketplace as the
 affected project. Include the affected revision, impact, environment, and the
 smallest safe reproduction. Never include user data, credentials, production
@@ -22,12 +22,17 @@ evidence for a separate human review, and acceptance into `candidate` does not
 publish a package. Production signing and promotion remain offline maintainer
 operations against an exact reviewed revision.
 
-Before any pull-request Cargo, test, or native code runs, CI prepares its
-validator and drivers from the exact base commit and treats the proposed tree
-as data. Candidate format, lint, native tests, component builds, and web tests
-run without network, secrets, a host process view, a writable source checkout,
-or writable later evidence. A proposed root Cargo configuration fails
-admission; it is never used to prepare the validator.
+Hosted CI prepares its validator and drivers from the exact base commit and
+treats the proposed tree only as data. It performs bounded metadata, path,
+manifest, and private-material admission, then exits before staging,
+compilation, tests, or any other candidate execution. A proposed root Cargo
+configuration fails admission; it is never used to prepare the validator.
+
+The maintainer's complete gate uses the same trusted-base boundary. Candidate
+format, lint, native tests, component builds, and web tests then run without
+network, secrets, a host process view, a writable source checkout, or writable
+later evidence. Unsupported sandbox primitives fail closed; they are never
+replaced by an unsandboxed build.
 
 The marketplace website cannot install software. The Control Center validates
 packages and user consent; local unverified packages install disabled and stay

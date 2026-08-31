@@ -1,8 +1,9 @@
 # Publishing
 
 Community intake is open through pull requests to `candidate`, but merge
-acceptance is not publication and makes no security certification. Read-only CI
-provides automated evidence, human maintainers review the exact revision, and a
+acceptance is not publication and makes no security certification. Read-only
+hosted CI provides static admission evidence without executing submitted code.
+Human maintainers run the complete sandboxed gate on the exact revision, and a
 later repository-local `release/*` pull request to `master` may carry output
 from the offline publisher. Creators receive no signing or deployment
 credentials.
@@ -15,12 +16,22 @@ that changes the workflow itself.
 
 The pull-request job bootstraps only from the exact base commit. It materializes
 bounded private base and candidate snapshots, compiles the base marketplace
-validator offline, and admits candidate metadata before running candidate code
-inside the review sandboxes. Changes under `.github/`, `scripts/`, `tests/`, or
-`tools/` are rejected by this path until a maintainer lands those trusted bytes
+validator offline, and admits candidate metadata and repository policy through
+reviewed parsers. It exits before production staging, compilation, tests, or
+any other candidate execution. Changes under `.github/`, `scripts`, `tests`, or
+`tools` are rejected by this path until a maintainer lands those trusted bytes
 separately. The first rollout of a new trusted driver therefore fails closed
 until that driver exists in the base commit; CI never falls back to a copy from
 the pull-request head.
+
+Before accepting or promoting a submission, a maintainer runs the complete
+gate from a clean checkout on a compatible Linux host. That gate uses the same
+trusted-base admission, then performs native tests and component compilation
+inside the bounded Bubblewrap sandboxes. GitHub-hosted Ubuntu currently blocks
+the user-namespace mapping required by this confinement, so hosted CI must not
+silently replace it with an unsandboxed build. The commands in
+[testing.md](testing.md), including `scripts/review-revision.sh`, are the
+operational gate until a disposable compatible runner is available.
 
 One validated source record generates both the human site and machine catalog.
 Packages bind exact IDs, versions, digests, and sizes; the catalog is canonical,
@@ -62,9 +73,10 @@ selected from `PATH`. The executable and every directory in its resolved path
 must be root-owned and not
 group- or world-writable; the executable must be single-link. A user-managed
 version-manager shim is intentionally rejected. The Node checks run without
-network or a process view and under fixed CPU, task, virtual-address, resident
-memory, swap, file, and wall-time limits. Release and CI hosts must provide
-that system Node installation or production verification fails closed.
+network and with a `/proc` view limited to their isolated PID namespace, under
+fixed CPU, task, virtual-address, resident memory, swap, file, and wall-time
+limits. Release and full-gate hosts must provide that system Node installation
+or production verification fails closed.
 Bubblewrap exposes the host network only to the fixed trusted setup command;
 that command creates an empty network namespace, drops every capability, and
 sets `no_new_privs` before starting any reviewed package or site code.

@@ -26,11 +26,13 @@ English metadata is mandatory. Additional translations are optional, and the
 manifest must list every locale actually supplied so the marketplace can show
 the exact available languages.
 
-CI produces read-only automated evidence, then a maintainer applies the
-complete [review policy](docs/review-policy.md) to the exact revision. Merge to
-`candidate` records review acceptance but does not publish the package. A
-separate maintainer-owned offline promotion is required; creators never receive
-signing or deployment credentials. Updates repeat the applicable review.
+Hosted CI produces read-only static admission evidence without compiling or
+executing submitted code. A maintainer then runs the sandboxed build gate and
+applies the complete [review policy](docs/review-policy.md) to the exact
+revision. Merge to `candidate` records review acceptance but does not publish
+the package. A separate maintainer-owned offline promotion is required;
+creators never receive signing or deployment credentials. Updates repeat the
+applicable review.
 
 Test a local `.ocpkg` through the Control Center's explicit unverified flow. It
 must install disabled, remain disabled until enabled by the user, and uninstall

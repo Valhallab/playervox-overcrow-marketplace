@@ -77,8 +77,9 @@ Place the complete source tree at `community/<publisher>/<widget-id>/`, work
 from a fork or short-lived branch, and open a pull request to `candidate` using
 the widget submission template. Include tests, preview, licenses, provenance,
 capability reasons, exact HTTPS hosts, game scope, dependencies, and every
-available locale. Read-only CI supplies automated evidence; a maintainer
-reviews the exact revision. Merge acceptance does not publish the widget.
+available locale. Read-only hosted CI supplies static admission evidence
+without executing the submission; a maintainer runs the sandboxed build gate
+and reviews the exact revision. Merge acceptance does not publish the widget.
 Publication is a later offline promotion, and every update is reviewed again.
 
 The Rust SDK is the current authoring path. A later visual builder will target

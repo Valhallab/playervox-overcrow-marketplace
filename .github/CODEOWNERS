@@ -12,6 +12,7 @@
 /tests/ci-trust-boundary-smoke.sh @Valhallab
 /tests/sandbox-review-checks-smoke.sh @Valhallab
 /tests/ci-policy-smoke.sh @Valhallab
+/scripts/review-revision.sh @Valhallab
 /SECURITY.md @Valhallab
 /docs/permissions.md @Valhallab
 /docs/publishing.md @Valhallab

@@ -57,10 +57,29 @@ sh tests/sandbox-review-checks-smoke.sh
 sh -n scripts/*.sh tests/*.sh
 ```
 
-CI repeats the repository suites with read-only permissions, no credentials,
-trusted-base admission of the actual candidate tree, sandboxed native tests and
-builds of every target, both static-site suites, and two deterministic builds
-of the reviewed snapshot. The standalone malicious community fixtures remain a
-maintainer validation gate; CI never executes a pull-request smoke script on
-the host. Its results are review evidence, not publication authority or live
-desktop/game acceptance.
+Creators may run those commands directly on code they authored. A maintainer
+must not run contributor code directly on the host. From a clean checkout of
+the exact trusted `candidate` base, first populate the pinned dependency cache,
+then run the reviewed full gate against the proposed Git object:
+
+```sh
+cargo fetch --locked --manifest-path tools/marketplace-tool/Cargo.toml
+scripts/review-revision.sh TRUST_SHA REVIEW_SHA
+```
+
+The wrapper requires `HEAD` to equal `TRUST_SHA`, materializes both revisions
+from Git rather than the working tree, and invokes `ci-verify.sh` in `full`
+mode. Candidate compilation and tests then run only inside the bounded
+sandboxes. Missing cached inputs or unsupported sandbox primitives fail closed.
+
+Hosted CI has read-only permissions and no credentials. It materializes the
+actual candidate tree and applies trusted-base metadata, path, manifest, and
+private-material admission, but exits before staging, compilation, tests, or
+any other candidate execution. This keeps public pull requests off a persistent
+self-hosted runner and avoids weakening confinement for GitHub-hosted kernels
+that reject Bubblewrap's required user namespace.
+
+The full wrapper covers sandboxed native tests and builds, both static-site
+suites, deterministic output, and malicious fixtures. A maintainer records that
+result before merge or promotion. Neither hosted admission nor the full local
+gate has publication authority or constitutes live desktop/game acceptance.

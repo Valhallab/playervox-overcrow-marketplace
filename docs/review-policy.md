@@ -4,7 +4,9 @@ Every catalog entry requires both automated validation and explicit human
 maintainer approval. Automation is evidence, not a security certification.
 Submissions live at `community/<publisher>/<widget-id>/` and target
 `candidate`. CI has read-only repository access and no credential or signing
-authority.
+authority. Hosted CI performs static admission only and never executes submitted
+code; the maintainer's complete gate performs compilation and tests inside the
+documented sandbox before acceptance or promotion.
 
 Reviewers must verify:
 
