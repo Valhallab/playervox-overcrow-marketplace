@@ -90,6 +90,12 @@ write_path 'community/example/hello-widget/src/lib.rs' "$changed_paths"
 accepted_plan="$scratch/accepted-plan.tsv"
 community_plan "$fixture" "$changed_paths" >"$accepted_plan"
 
+printf '%s\n' '[]' >"$fixture/marketplace/targets.json"
+write_path 'docs/readme.md' "$changed_paths"
+expect_gate_reject "$fixture" "$changed_paths"
+/usr/bin/cp -- "$accepted_targets" "$fixture/marketplace/targets.json"
+write_path 'community/example/hello-widget/src/lib.rs' "$changed_paths"
+
 accepted_workspace="$scratch/accepted-workspace.toml"
 /usr/bin/cp -- "$fixture/Cargo.toml" "$accepted_workspace"
 /usr/bin/sed -i '/"community\/example\/hello-widget",/d' \

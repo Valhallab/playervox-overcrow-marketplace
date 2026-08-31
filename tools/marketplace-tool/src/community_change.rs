@@ -12,6 +12,9 @@ pub(crate) fn validate(
     changed_paths: &Path,
     targets: &[TargetSpec],
 ) -> Result<(), ()> {
+    if targets.is_empty() {
+        return Err(());
+    }
     let bytes = read_private_file(changed_paths, MAX_CHANGED_BYTES).map_err(|_| ())?;
     if bytes.is_empty() {
         return Ok(());
