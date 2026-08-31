@@ -1,5 +1,8 @@
 # Community widget submissions
 
+Documentation-only community updates pass through the same admission status as
+widget submissions.
+
 Submit each widget as one self-contained reviewed source tree at
 `community/<publisher>/<widget-id>/`. Publisher and widget identifiers use
 1–63 lowercase ASCII letters, digits, and hyphens, start and end with a letter
