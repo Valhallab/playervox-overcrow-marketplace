@@ -413,8 +413,9 @@ previous_published="$repo_root/.published-previous.$$"
 if ! sh "$source_root/scripts/publish-directory.sh" \
         "$source_root/public" "$repo_root/published" \
         "$next_published" "$previous_published" \
-        /usr/bin/mv /usr/bin/mv /usr/bin/mv /usr/bin/mv \
-        "$trusted_tool" "$tree_ledger" "$tree_ledger_sha256" >/dev/null 2>&1; then
+        /usr/bin/true /usr/bin/true /usr/bin/true /usr/bin/true \
+        "$trusted_tool" "$trusted_tool" "$tree_ledger" \
+        "$tree_ledger_sha256" >/dev/null 2>&1; then
     printf '%s\n' 'error: production publication failed' >&2
     exit 1
 fi

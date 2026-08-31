@@ -3,18 +3,20 @@ set -eu
 
 if test "$#" -gt 1; then
     printf '%s\n' \
-        'usage: build-local-rollback-smoke.sh [validation|signal|post-move|race-next|race-previous|identity-race|foreign-next|foreign-public|foreign-previous|cleanup-signal|restore-signal|rollback|final-move-fail|final-move-signal|verified-race|publish-noop|restore-failure]' >&2
+        'usage: build-local-rollback-smoke.sh [validation|signal|post-move|race-next|race-previous|empty-next|empty-previous|empty-public|empty-restore|quarantine-collision|identity-race|foreign-next|foreign-public|foreign-previous|cleanup-signal|restore-signal|rollback|final-move-fail|final-move-signal|verified-race|publish-noop|restore-failure]' >&2
     exit 2
 fi
 selected_case=${1:-all}
 case "$selected_case" in
     all | validation | signal | post-move | race-next | race-previous \
+        | empty-next | empty-previous | empty-public | empty-restore \
+        | quarantine-collision \
         | identity-race | foreign-next | foreign-public | foreign-previous \
         | cleanup-signal | restore-signal | rollback | final-move-fail \
         | final-move-signal | verified-race | publish-noop | restore-failure) ;;
     *)
         printf '%s\n' \
-            'usage: build-local-rollback-smoke.sh [validation|signal|post-move|race-next|race-previous|identity-race|foreign-next|foreign-public|foreign-previous|cleanup-signal|restore-signal|rollback|final-move-fail|final-move-signal|verified-race|publish-noop|restore-failure]' >&2
+            'usage: build-local-rollback-smoke.sh [validation|signal|post-move|race-next|race-previous|empty-next|empty-previous|empty-public|empty-restore|quarantine-collision|identity-race|foreign-next|foreign-public|foreign-previous|cleanup-signal|restore-signal|rollback|final-move-fail|final-move-signal|verified-race|publish-noop|restore-failure]' >&2
         exit 2
         ;;
 esac
@@ -26,7 +28,27 @@ trap cleanup EXIT HUP INT TERM
 git clone --quiet --no-hardlinks "$repo_root" "$scratch/repository"
 copy="$scratch/repository"
 public="$copy/public"
-helper="$repo_root/scripts/publish-directory.sh"
+helper_source="$repo_root/scripts/publish-directory.sh"
+tool_work="$scratch/tool"
+/usr/bin/mkdir -m 0700 -- "$tool_work"
+trusted_tool=$(sh "$repo_root/scripts/prepare-marketplace-tool.sh" \
+    "$repo_root" "$tool_work")
+helper="$scratch/publish-wrapper"
+export PUBLISH_HELPER_SOURCE="$helper_source" PUBLISH_RENAME_TOOL="$trusted_tool"
+printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'case "$5" in /usr/bin/mv) hook_staged=/usr/bin/true ;; *) hook_staged=$5 ;; esac' \
+    'case "$6" in /usr/bin/mv) hook_old=/usr/bin/true ;; *) hook_old=$6 ;; esac' \
+    'case "$7" in /usr/bin/mv) hook_next=/usr/bin/true ;; *) hook_next=$7 ;; esac' \
+    'case "$8" in /usr/bin/mv) hook_restore=/usr/bin/true ;; *) hook_restore=$8 ;; esac' \
+    'if test "$#" -eq 8; then' \
+    '    exec sh "$PUBLISH_HELPER_SOURCE" "$1" "$2" "$3" "$4" "$hook_staged" "$hook_old" "$hook_next" "$hook_restore" "$PUBLISH_RENAME_TOOL"' \
+    'fi' \
+    'test "$#" -eq 11' \
+    'exec sh "$PUBLISH_HELPER_SOURCE" "$1" "$2" "$3" "$4" "$hook_staged" "$hook_old" "$hook_next" "$hook_restore" "$PUBLISH_RENAME_TOOL" "$9" "${10}" "${11}"' \
+    >"$helper"
+/usr/bin/chmod 0700 "$helper"
 tracked_paths="$scratch/tracked-paths"
 tracked_before="$scratch/tracked-before"
 tracked_after="$scratch/tracked-after"
@@ -96,6 +118,14 @@ assert_absent() {
     test ! -e "$path" && test ! -L "$path"
 }
 
+assert_recorded_identity() {
+    identity_path=$1
+    identity_record=$2
+    test -d "$identity_path" && test ! -L "$identity_path"
+    test "$(/usr/bin/stat -c '%d:%i' "$identity_path")" \
+        = "$(/usr/bin/cat "$identity_record")"
+}
+
 should_run() {
     test "$selected_case" = all || test "$selected_case" = "$1"
 }
@@ -112,7 +142,7 @@ move_then_signal="$scratch/move-then-signal"
 printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
-    '/usr/bin/mv "$@"' \
+    'test "$1" = before && exit 0' \
     '/usr/bin/kill -TERM "$PPID"' >"$move_then_signal"
 /usr/bin/chmod 0700 "$move_then_signal"
 
@@ -121,7 +151,7 @@ move_then_fail="$scratch/move-then-fail"
 printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
-    '/usr/bin/mv "$@"' \
+    'test "$1" = before && exit 0' \
     '/usr/bin/false' >"$move_then_fail"
 /usr/bin/chmod 0700 "$move_then_fail"
 
@@ -130,10 +160,11 @@ move_into_raced_destination="$scratch/move-into-raced-destination"
 printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
-    'destination=$4' \
-    '/usr/bin/mkdir -p "$destination"' \
+    'test "$1" = after && exit 0' \
+    'destination=$3' \
+    '/usr/bin/mkdir -- "$destination"' \
     'printf "%s\n" racer >"$destination/racer"' \
-    '/usr/bin/mv "$@"' >"$move_into_raced_destination"
+    >"$move_into_raced_destination"
 /usr/bin/chmod 0700 "$move_into_raced_destination"
 
 move_then_mutate="$scratch/move-then-mutate"
@@ -141,8 +172,8 @@ move_then_mutate="$scratch/move-then-mutate"
 printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
-    '/usr/bin/mv "$@"' \
-    'printf "%s\n" raced >"$4/raced-after-verification"' >"$move_then_mutate"
+    'test "$1" = before && exit 0' \
+    'printf "%s\n" raced >"$3/raced-after-verification"' >"$move_then_mutate"
 /usr/bin/chmod 0700 "$move_then_mutate"
 
 final_tree_verifier="$scratch/final-tree-verifier"
@@ -180,7 +211,7 @@ hide_next_during_old_move="$scratch/hide-next-during-old-move"
 printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
-    '/usr/bin/mv "$@"' \
+    'test "$1" = before && exit 0' \
     '/usr/bin/mv -T -- "$NEXT_TREE_TO_HIDE" "$HIDDEN_NEXT_TREE"' \
     >"$hide_next_during_old_move"
 /usr/bin/chmod 0700 "$hide_next_during_old_move"
@@ -190,9 +221,9 @@ restore_hidden_then_move="$scratch/restore-hidden-then-move"
 printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
+    'test "$1" = after && exit 0' \
     ': >"$FINAL_MOVE_WAS_CALLED"' \
-    '/usr/bin/mv -T -- "$HIDDEN_NEXT_TREE" "$3"' \
-    '/usr/bin/mv "$@"' \
+    '/usr/bin/mv -T -- "$HIDDEN_NEXT_TREE" "$2"' \
     >"$restore_hidden_then_move"
 /usr/bin/chmod 0700 "$restore_hidden_then_move"
 
@@ -201,7 +232,7 @@ substitute_next_then_fail="$scratch/substitute-next-then-fail"
 printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
-    '/usr/bin/mv "$@"' \
+    'test "$1" = before && exit 0' \
     '/usr/bin/mv -T -- "$NEXT_WRAPPER_TO_SUBSTITUTE" "$OWNED_NEXT_HIDDEN"' \
     '/usr/bin/mv -T -- "$FOREIGN_NEXT_SOURCE" "$NEXT_WRAPPER_TO_SUBSTITUTE"' \
     '/usr/bin/false' \
@@ -229,7 +260,7 @@ substitute_previous_after_move="$scratch/substitute-previous-after-move"
 printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
-    '/usr/bin/mv "$@"' \
+    'test "$1" = before && exit 0' \
     '/usr/bin/mv -T -- "$PREVIOUS_TO_SUBSTITUTE" "$OWNED_PREVIOUS_HIDDEN"' \
     '/usr/bin/mv -T -- "$FOREIGN_PREVIOUS_SOURCE" "$PREVIOUS_TO_SUBSTITUTE"' \
     >"$substitute_previous_after_move"
@@ -240,11 +271,12 @@ signal_during_restore="$scratch/signal-during-restore"
 printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
+    'test "$1" = after && exit 0' \
     'parent=$PPID' \
     '/usr/bin/kill -TERM "$parent"' \
     '/usr/bin/sleep 0.05' \
     'if /usr/bin/kill -0 "$parent" 2>/dev/null; then' \
-    '    /usr/bin/mv "$@"' \
+    '    exit 0' \
     'else' \
     '    exit 143' \
     'fi' \
@@ -256,7 +288,8 @@ signal_during_cleanup_removal="$scratch/signal-during-cleanup-removal"
 printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
-    '/usr/bin/mv "$@"' \
+    'test "$1" = before || exit 0' \
+    'case "$3" in */finalize-next.0) ;; *) exit 0 ;; esac' \
     '/usr/bin/mkdir -- "$NEXT_WRAPPER_TO_WATCH/removal-fixture"' \
     'entry=0' \
     'while test "$entry" -lt 4096; do' \
@@ -272,6 +305,32 @@ printf '%s\n' \
     '/usr/bin/false' \
     >"$signal_during_cleanup_removal"
 /usr/bin/chmod 0700 "$signal_during_cleanup_removal"
+
+move_into_empty_destination="$scratch/move-into-empty-destination"
+# shellcheck disable=SC2016 # generated helper expands fixture variables when run
+printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'test "$1" = after && exit 0' \
+    'destination=$3' \
+    '/usr/bin/mkdir -- "$destination"' \
+    '/usr/bin/stat -c "%d:%i" "$destination" >"$FOREIGN_IDENTITY_RECORD"' \
+    >"$move_into_empty_destination"
+/usr/bin/chmod 0700 "$move_into_empty_destination"
+
+move_then_add_quarantine_collision="$scratch/move-then-add-quarantine-collision"
+# shellcheck disable=SC2016 # generated helper expands fixture variables when run
+printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'test "$1" = before && exit 0' \
+    'test -f "$FOREIGN_IDENTITY_RECORD" && exit 0' \
+    'quarantine=$(/usr/bin/find "$LIVE_ROOT_FOR_COLLISION" -maxdepth 1 -type d -name ".public-quarantine.*" -print -quit)' \
+    'test -n "$quarantine"' \
+    '/usr/bin/mkdir -- "$quarantine/finalize-next.0"' \
+    '/usr/bin/stat -c "%d:%i" "$quarantine/finalize-next.0" >"$FOREIGN_IDENTITY_RECORD"' \
+    >"$move_then_add_quarantine_collision"
+/usr/bin/chmod 0700 "$move_then_add_quarantine_collision"
 
 if should_run validation; then
     staged_public="$scratch/staged-validation/public"
@@ -392,6 +451,116 @@ if should_run race-previous; then
     test ! -e "$previous_public/prior"
     assert_prior_public
     /usr/bin/rm -rf -- "$previous_public"
+fi
+
+if should_run empty-next; then
+    staged_public="$scratch/staged-empty-next/public"
+    next_public="$copy/.public-next.empty-next"
+    previous_public="$copy/.public-previous.empty-next"
+    foreign_identity="$scratch/empty-next.identity"
+    make_staged_public "$staged_public"
+    snapshot_tree "$staged_public" "$scratch/expected-empty-next-source.manifest"
+    if FOREIGN_IDENTITY_RECORD="$foreign_identity" \
+            sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
+            "$move_into_empty_destination" /usr/bin/mv /usr/bin/mv /usr/bin/mv; then
+        printf '%s\n' 'error: foreign empty next destination was clobbered' >&2
+        exit 1
+    fi
+    snapshot_tree "$staged_public" "$scratch/actual-empty-next-source.manifest"
+    /usr/bin/cmp -- "$scratch/expected-empty-next-source.manifest" \
+        "$scratch/actual-empty-next-source.manifest"
+    assert_recorded_identity "$next_public/tree" "$foreign_identity"
+    assert_absent "$previous_public"
+    assert_prior_public
+    /usr/bin/rm -rf -- "$next_public"
+fi
+
+if should_run empty-previous; then
+    staged_public="$scratch/staged-empty-previous/public"
+    next_public="$copy/.public-next.empty-previous"
+    previous_public="$copy/.public-previous.empty-previous"
+    foreign_identity="$scratch/empty-previous.identity"
+    make_staged_public "$staged_public"
+    if FOREIGN_IDENTITY_RECORD="$foreign_identity" \
+            sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
+            /usr/bin/mv "$move_into_empty_destination" /usr/bin/mv /usr/bin/mv; then
+        printf '%s\n' 'error: foreign empty previous destination was clobbered' >&2
+        exit 1
+    fi
+    assert_absent "$staged_public"
+    assert_absent "$next_public"
+    assert_recorded_identity "$previous_public" "$foreign_identity"
+    assert_prior_public
+    /usr/bin/rmdir -- "$previous_public"
+fi
+
+if should_run empty-public; then
+    staged_public="$scratch/staged-empty-public/public"
+    next_public="$copy/.public-next.empty-public"
+    previous_public="$copy/.public-previous.empty-public"
+    foreign_identity="$scratch/empty-public.identity"
+    make_staged_public "$staged_public"
+    if FOREIGN_IDENTITY_RECORD="$foreign_identity" \
+            sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
+            /usr/bin/mv /usr/bin/mv "$move_into_empty_destination" /usr/bin/mv; then
+        printf '%s\n' 'error: foreign empty public destination was clobbered' >&2
+        exit 1
+    fi
+    assert_absent "$staged_public"
+    assert_absent "$next_public"
+    assert_recorded_identity "$public" "$foreign_identity"
+    snapshot_tree "$previous_public" "$scratch/empty-public-prior.manifest"
+    /usr/bin/cmp -- "$scratch/prior-public.manifest" \
+        "$scratch/empty-public-prior.manifest"
+    /usr/bin/rmdir -- "$public"
+    /usr/bin/mv -T -- "$previous_public" "$public"
+    assert_prior_public
+fi
+
+if should_run empty-restore; then
+    staged_public="$scratch/staged-empty-restore/public"
+    next_public="$copy/.public-next.empty-restore"
+    previous_public="$copy/.public-previous.empty-restore"
+    foreign_identity="$scratch/empty-restore.identity"
+    make_staged_public "$staged_public"
+    if FOREIGN_IDENTITY_RECORD="$foreign_identity" \
+            sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
+            /usr/bin/mv /usr/bin/mv /usr/bin/false "$move_into_empty_destination"; then
+        printf '%s\n' 'error: foreign empty restore destination was clobbered' >&2
+        exit 1
+    fi
+    assert_absent "$staged_public"
+    assert_absent "$next_public"
+    assert_recorded_identity "$public" "$foreign_identity"
+    snapshot_tree "$previous_public" "$scratch/empty-restore-prior.manifest"
+    /usr/bin/cmp -- "$scratch/prior-public.manifest" \
+        "$scratch/empty-restore-prior.manifest"
+    /usr/bin/rmdir -- "$public"
+    /usr/bin/mv -T -- "$previous_public" "$public"
+    assert_prior_public
+fi
+
+if should_run quarantine-collision; then
+    staged_public="$scratch/staged-quarantine-collision/public"
+    next_public="$copy/.public-next.quarantine-collision"
+    previous_public="$copy/.public-previous.quarantine-collision"
+    foreign_identity="$scratch/quarantine-collision.identity"
+    make_staged_public "$staged_public"
+    if LIVE_ROOT_FOR_COLLISION="$copy" FOREIGN_IDENTITY_RECORD="$foreign_identity" \
+            sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
+            /usr/bin/mv /usr/bin/mv "$move_then_add_quarantine_collision" /usr/bin/mv; then
+        printf '%s\n' 'error: quarantine collision unexpectedly reported success' >&2
+        exit 1
+    fi
+    quarantine=$(/usr/bin/find "$copy" -maxdepth 1 -type d \
+        -name '.public-quarantine.*' -print -quit)
+    test -n "$quarantine"
+    assert_recorded_identity "$quarantine/finalize-next.0" "$foreign_identity"
+    assert_absent "$staged_public"
+    assert_absent "$next_public"
+    assert_absent "$previous_public"
+    assert_prior_public
+    /usr/bin/rm -rf -- "$quarantine"
 fi
 
 if should_run identity-race; then
@@ -621,7 +790,7 @@ if should_run publish-noop; then
     previous_public="$copy/.public-previous.publish-noop"
     make_staged_public "$staged_public"
     if sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
-            /usr/bin/mv /usr/bin/mv /usr/bin/true /usr/bin/mv; then
+            /usr/bin/mv /usr/bin/mv /usr/bin/false /usr/bin/mv; then
         printf '%s\n' 'error: publication without a completed move unexpectedly succeeded' >&2
         exit 1
     fi

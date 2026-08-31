@@ -1,6 +1,6 @@
 use std::{
     fs::{self, Permissions},
-    os::unix::fs::{PermissionsExt as _, symlink},
+    os::unix::fs::{MetadataExt as _, PermissionsExt as _, symlink},
     path::Path,
     process::{Command, Output},
 };
@@ -13,6 +13,122 @@ const FIXED_GENERATED: &str = "2026-08-25T00:00:00Z";
 const FIXED_EXPIRES: &str = "2036-08-25T00:00:00Z";
 const PRODUCTION_EXPIRES: &str = "2026-09-24T00:00:00Z";
 const PRODUCTION_KEY_ID: &str = "overcrow-production-2026-01";
+
+#[test]
+fn rename_noreplace_never_clobbers_transaction_destinations() {
+    for destination_relative in [
+        "public",
+        ".public-previous.fixture",
+        ".public-next.fixture/tree",
+        ".public-quarantine.fixture/slot.0",
+    ] {
+        let fixture = tempfile::tempdir().expect("rename fixture");
+        let live = fixture.path().join("live");
+        let staged = fixture.path().join("staged");
+        fs::create_dir(&live).expect("live root");
+        fs::create_dir(&staged).expect("staged root");
+        fs::set_permissions(&live, Permissions::from_mode(0o700)).expect("live root mode");
+        fs::set_permissions(&staged, Permissions::from_mode(0o700)).expect("staged root mode");
+        let source = staged.join("public");
+        fs::create_dir(&source).expect("source directory");
+        fs::write(source.join("owned"), b"owned\n").expect("owned bytes");
+        let destination = live.join(destination_relative);
+        fs::create_dir_all(destination.parent().expect("destination parent"))
+            .expect("destination parents");
+        fs::create_dir(&destination).expect("foreign empty destination");
+        let source_identity = directory_identity(&source);
+        let destination_identity = directory_identity(&destination);
+
+        let output = rename_noreplace(&live, &staged, &source, &destination);
+        assert!(!output.status.success(), "existing destination must win");
+        assert!(output.stdout.is_empty());
+        assert_eq!(output.stderr, b"marketplace-tool: publication failed\n");
+        assert_eq!(directory_identity(&source), source_identity);
+        assert_eq!(directory_identity(&destination), destination_identity);
+        assert_eq!(
+            fs::read(source.join("owned")).expect("owned bytes"),
+            b"owned\n"
+        );
+        assert!(
+            fs::read_dir(&destination)
+                .expect("foreign destination")
+                .next()
+                .is_none(),
+            "foreign empty destination remains the same empty inode"
+        );
+    }
+
+    let fixture = tempfile::tempdir().expect("successful rename fixture");
+    let live = fixture.path().join("live");
+    let staged = fixture.path().join("staged");
+    fs::create_dir(&live).expect("live root");
+    fs::create_dir(&staged).expect("staged root");
+    fs::set_permissions(&live, Permissions::from_mode(0o700)).expect("live root mode");
+    fs::set_permissions(&staged, Permissions::from_mode(0o700)).expect("staged root mode");
+    let source = staged.join("public");
+    let next = live.join(".public-next.fixture");
+    let destination = next.join("tree");
+    fs::create_dir(&source).expect("source directory");
+    fs::write(source.join("owned"), b"owned\n").expect("owned bytes");
+    fs::create_dir(&next).expect("next wrapper");
+    fs::set_permissions(&next, Permissions::from_mode(0o700)).expect("next wrapper mode");
+    let source_identity = directory_identity(&source);
+    let output = rename_noreplace(&live, &staged, &source, &destination);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"publication=renamed\n");
+    assert!(output.stderr.is_empty());
+    assert!(!source.exists());
+    assert_eq!(directory_identity(&destination), source_identity);
+}
+
+#[test]
+fn rename_noreplace_rejects_paths_outside_the_owned_transaction() {
+    let fixture = tempfile::tempdir().expect("unsafe rename fixture");
+    let live = fixture.path().join("live");
+    let staged = fixture.path().join("staged");
+    fs::create_dir(&live).expect("live root");
+    fs::create_dir(&staged).expect("staged root");
+    fs::set_permissions(&live, Permissions::from_mode(0o700)).expect("live root mode");
+    fs::set_permissions(&staged, Permissions::from_mode(0o700)).expect("staged root mode");
+    let source = staged.join("public");
+    fs::create_dir(&source).expect("source directory");
+    let outside = fixture.path().join("outside");
+    fs::create_dir(&outside).expect("outside directory");
+
+    for output in [
+        rename_noreplace(&live, &staged, &source, &outside.join("moved")),
+        tool()
+            .args([
+                "rename-noreplace",
+                "--live-root",
+                "relative",
+                "--staged-root",
+            ])
+            .arg(&staged)
+            .args(["--public-name", "public", "--source"])
+            .arg(&source)
+            .args(["--destination"])
+            .arg(live.join("public"))
+            .output()
+            .expect("relative-root rename"),
+    ] {
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert_eq!(output.stderr, b"marketplace-tool: publication failed\n");
+    }
+
+    let linked_live = fixture.path().join("linked-live");
+    symlink(&live, &linked_live).expect("live-root symlink");
+    let output = rename_noreplace(&linked_live, &staged, &source, &live.join("public"));
+    assert!(!output.status.success());
+    assert_eq!(output.stderr, b"marketplace-tool: publication failed\n");
+
+    fs::set_permissions(&live, Permissions::from_mode(0o777)).expect("unsafe live mode");
+    let output = rename_noreplace(&live, &staged, &source, &live.join("public"));
+    assert!(!output.status.success());
+    assert_eq!(output.stderr, b"marketplace-tool: publication failed\n");
+    assert!(source.is_dir());
+}
 
 #[test]
 fn snapshot_plan_accepts_only_a_bounded_regular_reviewed_tree() {
@@ -1375,6 +1491,26 @@ fn production_build_requires_the_exact_key_and_thirty_day_window() {
 
 fn tool() -> Command {
     Command::new(env!("CARGO_BIN_EXE_marketplace-tool"))
+}
+
+fn rename_noreplace(live: &Path, staged: &Path, source: &Path, destination: &Path) -> Output {
+    tool()
+        .args(["rename-noreplace", "--live-root"])
+        .arg(live)
+        .args(["--staged-root"])
+        .arg(staged)
+        .args(["--public-name", "public", "--source"])
+        .arg(source)
+        .args(["--destination"])
+        .arg(destination)
+        .output()
+        .expect("rename-noreplace command")
+}
+
+fn directory_identity(path: &Path) -> (u64, u64) {
+    let metadata = fs::symlink_metadata(path).expect("directory metadata");
+    assert!(metadata.is_dir(), "identity belongs to a directory");
+    (metadata.dev(), metadata.ino())
 }
 
 fn build_plan(repository: &Path) -> Output {

@@ -32,6 +32,10 @@ trap cleanup EXIT HUP INT TERM
 
 sh "$script_dir/stage-catalog-repository.sh" --mode development "$source_root"
 /usr/bin/rm -f -- "$source_root/marketplace/development-catalog-state.json"
+tool_work="$stage/trusted-tool"
+/usr/bin/install -d -m 0700 "$tool_work"
+trusted_tool=$(sh "$script_dir/prepare-marketplace-tool.sh" \
+    "$repo_root" "$tool_work")
 cargo run --manifest-path "$repo_root/tools/marketplace-tool/Cargo.toml" \
     --locked --quiet -- build \
     --repository "$source_root" \
@@ -58,4 +62,4 @@ next_public="$repo_root/.public-next.$$"
 previous_public="$repo_root/.public-previous.$$"
 sh "$script_dir/publish-directory.sh" \
     "$source_root/public" "$repo_root/public" "$next_public" "$previous_public" \
-    /usr/bin/mv /usr/bin/mv /usr/bin/mv /usr/bin/mv
+    /usr/bin/true /usr/bin/true /usr/bin/true /usr/bin/true "$trusted_tool"

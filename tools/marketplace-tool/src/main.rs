@@ -2,6 +2,7 @@ mod cargo_manifest;
 mod catalog;
 mod metadata;
 mod package;
+mod transaction;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -128,8 +129,32 @@ fn run(arguments: Vec<OsString>) -> Result<(), AppError> {
         Some("verify-tree") => verify_tree(&arguments),
         Some("write-tree-ledger") => write_tree_ledger(&arguments),
         Some("verify-tree-ledger") => verify_final_tree_ledger(&arguments),
+        Some("rename-noreplace") => rename_noreplace(&arguments),
         _ => Err(AppError::Arguments),
     }
+}
+
+fn rename_noreplace(arguments: &[String]) -> Result<(), AppError> {
+    if arguments.len() != 11
+        || arguments[1] != "--live-root"
+        || arguments[3] != "--staged-root"
+        || arguments[5] != "--public-name"
+        || arguments[7] != "--source"
+        || arguments[9] != "--destination"
+    {
+        return Err(AppError::Output);
+    }
+    transaction::rename_noreplace(
+        Path::new(&arguments[2]),
+        Path::new(&arguments[4]),
+        &arguments[6],
+        Path::new(&arguments[8]),
+        Path::new(&arguments[10]),
+    )
+    .map_err(|()| AppError::Output)?;
+    std::io::stdout()
+        .write_all(b"publication=renamed\n")
+        .map_err(|_| AppError::Output)
 }
 
 fn parse_build(arguments: &[String]) -> Result<BuildOptions, AppError> {
