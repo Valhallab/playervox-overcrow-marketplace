@@ -463,7 +463,7 @@ test ! -e "$scratch/untrusted-node-ran" && test ! -L "$scratch/untrusted-node-ra
 /usr/bin/rm -f -- "$scratch/fake-path/node"
 
 # V8 needs a generous virtual-address limit, but resident memory for the whole
-# verifier scope must remain independently bounded.
+# verifier service must remain independently bounded.
 fixture=$(make_fixture resident-memory)
 secrets=$(make_secrets resident-memory)
 printf '%s\n' \

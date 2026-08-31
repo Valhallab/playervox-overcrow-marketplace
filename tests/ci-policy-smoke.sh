@@ -11,6 +11,7 @@ workflow="$repo_root/.github/workflows/ci.yml"
 ci_driver="$repo_root/scripts/ci-verify.sh"
 sandbox_driver="$repo_root/scripts/sandbox-review-checks.sh"
 component_sandbox="$repo_root/scripts/sandbox-component-build.sh"
+published_verifier="$repo_root/scripts/verify-published.sh"
 gate="$repo_root/tests/reject-published-change.sh"
 community_gate="$repo_root/tests/check-community-change.mjs"
 community_smoke="$repo_root/tests/community-submission-smoke.sh"
@@ -142,6 +143,21 @@ for sandbox in "$sandbox_driver" "$component_sandbox"; do
             || /usr/bin/grep -F -- '/usr/bin/gcc -std=c11' \
                 "$sandbox" >/dev/null; then
         printf '%s\n' 'error: sandbox does not use the trusted system compiler' >&2
+        exit 1
+    fi
+done
+
+for resource_limited_runner in \
+        "$sandbox_driver" "$component_sandbox" "$published_verifier"; do
+    if /usr/bin/grep -F -- 'systemd-run --user --scope' \
+            "$resource_limited_runner" >/dev/null \
+            || ! /usr/bin/grep -F -- \
+                'systemd-run --user --wait --pipe --collect' \
+                "$resource_limited_runner" >/dev/null \
+            || ! /usr/bin/grep -F -- \
+                '--quiet --expand-environment=no --service-type=exec' \
+                "$resource_limited_runner" >/dev/null; then
+        printf '%s\n' 'error: resource limits do not use a transient user service' >&2
         exit 1
     fi
 done

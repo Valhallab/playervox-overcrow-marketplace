@@ -157,7 +157,8 @@ run_sandboxed_build() {
     /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
         XDG_RUNTIME_DIR="$runtime_directory" \
         DBUS_SESSION_BUS_ADDRESS="unix:path=$session_bus" \
-        /usr/bin/systemd-run --user --scope --quiet --collect \
+        /usr/bin/systemd-run --user --wait --pipe --collect \
+        --quiet --expand-environment=no --service-type=exec \
         --property=MemoryMax=1073741824 \
         --property=MemorySwapMax=0 \
         --property=TasksMax=256 \

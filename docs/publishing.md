@@ -56,9 +56,10 @@ verifies the complete tree, advances the sequence, and atomically replaces
 first catalog expires exactly 30 days after issuance and maintainers republish
 at least every 14 days.
 
-Production verification also requires Bubblewrap, a delegated user systemd
-scope, and a canonical regular Node executable selected from `PATH`. Node and
-every directory in its resolved absolute path must be root-owned and not
+Production verification also requires Bubblewrap, a user systemd manager for
+transient resource-limited services, and a canonical regular Node executable
+selected from `PATH`. The executable and every directory in its resolved path
+must be root-owned and not
 group- or world-writable; the executable must be single-link. A user-managed
 version-manager shim is intentionally rejected. The Node checks run without
 network or a process view and under fixed CPU, task, virtual-address, resident
