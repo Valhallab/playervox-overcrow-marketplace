@@ -9,9 +9,28 @@ fi
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 workflow="$repo_root/.github/workflows/ci.yml"
 gate="$repo_root/tests/reject-published-change.sh"
+community_gate="$repo_root/tests/check-community-change.mjs"
+community_smoke="$repo_root/tests/community-submission-smoke.sh"
+codeowners="$repo_root/.github/CODEOWNERS"
+
+for owned_path in \
+        '/tests/reject-published-change.sh @Valhallab' \
+        '/tests/check-community-change.mjs @Valhallab' \
+        '/tests/community-submission-smoke.sh @Valhallab' \
+        '/tests/ci-policy-smoke.sh @Valhallab'; do
+    if ! /usr/bin/grep -F -x -- "$owned_path" "$codeowners" >/dev/null; then
+        printf '%s\n' 'error: CI policy gates are not explicitly owned' >&2
+        exit 1
+    fi
+done
 
 if ! test -x "$gate" || test -L "$gate"; then
     printf '%s\n' 'error: published-change gate is missing or unsafe' >&2
+    exit 1
+fi
+if ! test -f "$community_gate" || test -L "$community_gate" \
+        || ! test -x "$community_smoke" || test -L "$community_smoke"; then
+    printf '%s\n' 'error: community-change policy tests are missing or unsafe' >&2
     exit 1
 fi
 
@@ -72,7 +91,12 @@ require_line 'shellcheck'
 require_line 'tests/reject-published-change.sh'
 require_line 'git show "$BASE_SHA:tests/reject-published-change.sh" >"$trusted_gate"'
 require_line 'sh "$trusted_gate" pull_request "$REPOSITORY"'
+require_line 'git show "$BASE_SHA:tests/check-community-change.mjs" >"$trusted_community_gate"'
+require_line 'cargo run -p marketplace-tool --locked --quiet -- build-plan'
+require_line 'node "$trusted_community_gate" "$PWD" "$build_plan" "$changed_paths"'
+require_line 'sh tests/community-submission-smoke.sh'
 require_line 'tests/sandbox-component-build-smoke.sh'
+require_line 'scripts/stage-catalog-repository.sh --mode production'
 require_line 'node --test tests/landing/*.test.mjs'
 require_line 'node tests/site-runtime.test.js public/marketplace/v1/catalog.json'
 require_line 'diff --recursive --no-dereference "${RUNNER_TEMP}/public-first" public'

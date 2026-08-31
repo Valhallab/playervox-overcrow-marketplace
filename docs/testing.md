@@ -50,11 +50,12 @@ Before opening a widget pull request, also run:
 scripts/check-policy.sh
 sh tests/check-policy-smoke.sh
 sh tests/ci-policy-smoke.sh
+sh tests/community-submission-smoke.sh
 sh tests/sandbox-component-build-smoke.sh
 sh -n scripts/*.sh tests/*.sh
 ```
 
 CI repeats the repository suites with read-only permissions, no credentials,
-the sandbox canary, both static-site suites, and two deterministic local builds.
-Its results are review evidence, not publication authority or live desktop/game
-acceptance.
+the community admission fixture, sandboxed builds of every target, both
+static-site suites, and two deterministic local builds. Its results are review
+evidence, not publication authority or live desktop/game acceptance.

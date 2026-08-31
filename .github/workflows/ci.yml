@@ -16,7 +16,15 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Enforce pull request publication boundary
+      - name: Install toolchain and checks
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          rustup default 1.98.0
+          rustup target add --toolchain 1.98.0 wasm32-wasip2
+          cargo install wasm-tools --version 1.245.1 --locked
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap shellcheck
+      - name: Enforce pull request source boundaries
         if: github.event_name == 'pull_request'
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
@@ -41,24 +49,25 @@ jobs:
           git cat-file -e "$base_commit"
           git cat-file -e "$head_commit"
           trusted_gate=$(/usr/bin/mktemp -- "${RUNNER_TEMP}/publication-gate.XXXXXXXXXX")
-          changed_paths=$(/usr/bin/mktemp -- "${RUNNER_TEMP}/published-paths.XXXXXXXXXX")
-          cleanup() { /usr/bin/rm -f -- "$trusted_gate" "$changed_paths"; }
+          trusted_community_gate=$(/usr/bin/mktemp -- "${RUNNER_TEMP}/community-gate.XXXXXXXXXX")
+          changed_paths=$(/usr/bin/mktemp -- "${RUNNER_TEMP}/changed-paths.XXXXXXXXXX")
+          build_plan=$(/usr/bin/mktemp -- "${RUNNER_TEMP}/build-plan.XXXXXXXXXX")
+          cleanup() {
+            /usr/bin/rm -f -- \
+              "$trusted_gate" "$trusted_community_gate" "$changed_paths" "$build_plan"
+          }
           trap cleanup EXIT HUP INT TERM
           git show "$BASE_SHA:tests/reject-published-change.sh" >"$trusted_gate"
+          git show "$BASE_SHA:tests/check-community-change.mjs" >"$trusted_community_gate"
           git diff --name-only -z --no-renames "$BASE_SHA" "$HEAD_SHA" -- >"$changed_paths"
           sh "$trusted_gate" pull_request "$REPOSITORY" \
             "$BASE_REF" "$HEAD_REPOSITORY" "$HEAD_REF"
           /usr/bin/xargs -0 -r -- sh "$trusted_gate" \
             pull_request "$REPOSITORY" "$BASE_REF" "$HEAD_REPOSITORY" \
             "$HEAD_REF" <"$changed_paths"
-      - name: Install toolchain and checks
-        run: |
-          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
-          rustup default 1.98.0
-          rustup target add --toolchain 1.98.0 wasm32-wasip2
-          cargo install wasm-tools --version 1.245.1 --locked
-          sudo apt-get update
-          sudo apt-get install --yes bubblewrap shellcheck
+          cargo run -p marketplace-tool --locked --quiet -- build-plan \
+            --repository "$PWD" >"$build_plan"
+          node "$trusted_community_gate" "$PWD" "$build_plan" "$changed_paths"
       - name: Format, lint, and test
         run: |
           cargo fmt --all -- --check
@@ -66,29 +75,12 @@ jobs:
           cargo test --workspace --all-targets --locked
       - name: Run component sandbox canary
         run: sh tests/sandbox-component-build-smoke.sh
-      - name: Build and inspect all components
+      - name: Build and inspect the reviewed snapshot
         run: |
-          cargo build --release --target wasm32-wasip2 --locked \
-            -p warframe-worldstate-provider \
-            -p warframe-status-widget \
-            -p warframe-fissures-widget \
-            -p warframe-sortie-archon-widget \
-            -p warframe-invasions-widget \
-            -p warframe-market-widget
-          component_stage=$(mktemp -d "${RUNNER_TEMP}/components.XXXXXXXXXX")
-          for component in \
-            warframe_worldstate_provider \
-            warframe_status_widget \
-            warframe_fissures_widget \
-            warframe_sortie_archon_widget \
-            warframe_invasions_widget \
-            warframe_market_widget; do
-            install -m 0644 \
-              "target/wasm32-wasip2/release/${component}.wasm" \
-              "${component_stage}/${component}.wasm"
-            cargo run -p marketplace-tool --locked -- inspect-component \
-              "${component_stage}/${component}.wasm"
-          done
+          stage_parent=$(mktemp -d "${RUNNER_TEMP}/reviewed-stage.XXXXXXXXXX")
+          trap 'rm -rf -- "$stage_parent"' EXIT HUP INT TERM
+          scripts/stage-catalog-repository.sh --mode production \
+            "$stage_parent/repository"
       - name: Generate deterministic local catalog and site
         run: |
           scripts/build-local.sh
@@ -109,6 +101,7 @@ jobs:
       - name: Policy and shell checks
         run: |
           sh tests/ci-policy-smoke.sh
+          sh tests/community-submission-smoke.sh
           scripts/check-policy.sh
           sh tests/check-policy-smoke.sh
           shellcheck scripts/*.sh tests/*.sh

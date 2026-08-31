@@ -12,6 +12,7 @@ Describe the widget, its intended game or use, and the exact revision tested.
 - [ ] Source, assets, fonts, preview, and third-party licenses have documented provenance.
 - [ ] The creator crate has no `build.rs`, proc-macro target, Git dependency, custom registry, or dependency outside the reviewed policy.
 - [ ] English metadata is present; every additional locale is listed and tested.
+- [ ] The exact submission root is listed in the Cargo workspace and `marketplace/targets.json`.
 - [ ] The local `.ocpkg` installs disabled and uninstalls with its unreferenced dependencies and private data removed.
 - [ ] This PR targets `candidate` and does not modify `published/`.
 

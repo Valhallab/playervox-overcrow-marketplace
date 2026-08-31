@@ -113,7 +113,9 @@ run_final_file_race() {
 
 fixture="$scratch/repository"
 /usr/bin/install -d -m 0700 "$fixture"
-for path in Cargo.toml Cargo.lock rust-toolchain.toml marketplace fixtures providers widgets sdk wit examples tools web scripts; do
+for path in \
+        Cargo.toml Cargo.lock rust-toolchain.toml marketplace fixtures \
+        providers widgets sdk wit examples tools web scripts community; do
     /usr/bin/cp -R -- "$repo_root/$path" "$fixture/"
 done
 
@@ -185,7 +187,9 @@ done
 
 production_fixture="$scratch/production-repository"
 /usr/bin/install -d -m 0700 "$production_fixture"
-for path in .gitignore Cargo.toml Cargo.lock rust-toolchain.toml marketplace fixtures providers widgets sdk wit examples tools web scripts; do
+for path in \
+        .gitignore Cargo.toml Cargo.lock rust-toolchain.toml marketplace fixtures \
+        providers widgets sdk wit examples tools web scripts community; do
     /usr/bin/cp -R -- "$repo_root/$path" "$production_fixture/"
 done
 /usr/bin/git init --quiet "$production_fixture"

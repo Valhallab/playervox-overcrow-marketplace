@@ -324,7 +324,9 @@ prepare_trusted_marketplace_tool() {
 case "$mode" in
     development)
         marketplace_tool build-plan --repository "$repo_root" >"$plan"
-        for path in Cargo.toml Cargo.lock rust-toolchain.toml marketplace fixtures providers widgets sdk wit examples tools; do
+        for path in \
+                Cargo.toml Cargo.lock rust-toolchain.toml marketplace fixtures \
+                providers widgets sdk wit examples tools community; do
             if test ! -e "$repo_root/$path" || test -L "$repo_root/$path"; then
                 printf '%s\n' 'error: required catalog source is unavailable' >&2
                 exit 1
