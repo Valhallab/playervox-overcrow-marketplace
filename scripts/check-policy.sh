@@ -18,11 +18,6 @@ command -v git >/dev/null 2>&1 || {
     printf '%s\n' 'error: git is required' >&2
     exit 1
 }
-command -v rg >/dev/null 2>&1 || {
-    printf '%s\n' 'error: ripgrep is required' >&2
-    exit 1
-}
-
 git_root=$(git -C "$repo_root" rev-parse --show-toplevel 2>/dev/null) || {
     printf '%s\n' 'error: repository root is unavailable' >&2
     exit 1
@@ -52,7 +47,7 @@ if matches=$(cd "$repo_root" && git ls-files --cached --others --exclude-standar
         shift
         for path; do
             result=0
-            rg -q "$pattern" -- "$path" || result=$?
+            /usr/bin/grep -E -q -- "$pattern" "$path" || result=$?
             case "$result" in
                 0) printf "%s\\n" "$path" ;;
                 1) ;;
