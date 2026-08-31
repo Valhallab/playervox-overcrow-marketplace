@@ -118,8 +118,8 @@ fi
 
 tool_work="$stage/publisher-tool"
 /usr/bin/install -d -m 0700 "$tool_work"
-trusted_tool=$(sh "$script_dir/prepare-marketplace-tool.sh" \
-    "$repo_root" "$tool_work" 2>/dev/null) || {
+trusted_tool=$(sh "$source_root/scripts/prepare-marketplace-tool.sh" \
+    "$source_root" "$tool_work" 2>/dev/null) || {
     printf '%s\n' 'error: production signing failed' >&2
     exit 1
 }
@@ -231,24 +231,26 @@ test "${#sequence}" -le 20 || {
 
 write_receipt() {
     payload_digest=$1
-    temporary=$(/usr/bin/mktemp "$private_parent/.production-receipt.XXXXXXXXXX") \
-        || return 1
-    if ! /usr/bin/chmod 0600 "$temporary" 2>/dev/null \
-            || ! printf '%s\n' \
-                'schemaVersion=1' \
-                "candidateRevision=$candidate_revision" \
-                "keyId=$key_id" \
-                "publicKeySha256=$public_key_fingerprint" \
-                "sequence=$sequence" \
-                "generatedAt=$generated_at" \
-                "expiresAt=$expires_at" \
-                "payloadSha256=$payload_digest" >"$temporary" \
-            || ! /usr/bin/sync -f "$temporary" 2>/dev/null \
-            || ! /usr/bin/mv -T -- "$temporary" "$receipt" 2>/dev/null; then
-        /usr/bin/rm -f -- "$temporary" >/dev/null 2>&1 || :
-        return 1
-    fi
-    /usr/bin/sync -f "$private_parent" >/dev/null 2>&1
+    {
+        temporary=$(/usr/bin/mktemp "$private_parent/.production-receipt.XXXXXXXXXX") \
+            || return 1
+        if ! /usr/bin/chmod 0600 "$temporary" \
+                || ! printf '%s\n' \
+                    'schemaVersion=1' \
+                    "candidateRevision=$candidate_revision" \
+                    "keyId=$key_id" \
+                    "publicKeySha256=$public_key_fingerprint" \
+                    "sequence=$sequence" \
+                    "generatedAt=$generated_at" \
+                    "expiresAt=$expires_at" \
+                    "payloadSha256=$payload_digest" >"$temporary" \
+                || ! /usr/bin/sync -f "$temporary" \
+                || ! /usr/bin/mv -T -- "$temporary" "$receipt"; then
+            /usr/bin/rm -f -- "$temporary" || :
+            return 1
+        fi
+        /usr/bin/sync -f "$private_parent"
+    } >/dev/null 2>&1
 }
 
 receipt_copy="$stage/receipt"

@@ -199,27 +199,66 @@ if test -e "$public" || test -L "$public"; then
     fi
 fi
 
+next_tree_identity=$(/usr/bin/stat -c '%d:%i' "$next_tree" 2>/dev/null || :)
+case "$next_tree_identity" in
+    *[!0-9:]* | :* | *: | *:*:*)
+        printf '%s\n' 'error: staged publication verification failed' >&2
+        exit 1
+        ;;
+esac
+
+# A move helper can rename successfully and still report failure, and a signal
+# can arrive after rename(2) but before its wrapper returns. Keep signal exit
+# deferred until the exact postconditions establish whether our inode reached
+# the public name, so cleanup never mistakes the new tree for the prior tree.
+move_next_status=0
 mutation_active=1
 if "$move_next" -T -- "$next_tree" "$public"; then
-    mutation_active=0
-    abort_if_interrupted
-    new_at_public=1
-    if test -e "$next_tree" || test -L "$next_tree" \
-            || test ! -d "$public" || test -L "$public"; then
-        printf '%s\n' 'error: publication move was incomplete' >&2
-        exit 1
-    fi
-    if test -n "$verify_tool" \
-            && ! "$verify_tool" verify-tree-ledger --tree "$public" \
-                --ledger "$ledger" --sha256 "$ledger_sha256" >/dev/null 2>&1; then
-        printf '%s\n' 'error: published tree verification failed' >&2
-        exit 1
-    fi
-    published=1
-    new_at_public=0
+    :
 else
-    mutation_active=0
-    abort_if_interrupted
+    move_next_status=$?
+fi
+public_identity=''
+if test -d "$public" && test ! -L "$public"; then
+    public_identity=$(/usr/bin/stat -c '%d:%i' "$public" 2>/dev/null || :)
+fi
+next_identity=''
+if test -d "$next_tree" && test ! -L "$next_tree"; then
+    next_identity=$(/usr/bin/stat -c '%d:%i' "$next_tree" 2>/dev/null || :)
+fi
+if test "$public_identity" = "$next_tree_identity"; then
+    new_at_public=1
+fi
+moved_exact=0
+unmoved_exact=0
+if test "$new_at_public" -eq 1 \
+        && test ! -e "$next_tree" && test ! -L "$next_tree"; then
+    moved_exact=1
+elif test -z "$public_identity" \
+        && test ! -e "$public" && test ! -L "$public" \
+        && test "$next_identity" = "$next_tree_identity"; then
+    unmoved_exact=1
+fi
+mutation_active=0
+abort_if_interrupted
+
+if test "$move_next_status" -ne 0; then
     printf '%s\n' 'error: publication move failed' >&2
     exit 1
 fi
+if test "$moved_exact" -ne 1; then
+    printf '%s\n' 'error: publication move was incomplete' >&2
+    exit 1
+fi
+if test "$unmoved_exact" -eq 1; then
+    printf '%s\n' 'error: publication move was incomplete' >&2
+    exit 1
+fi
+if test -n "$verify_tool" \
+        && ! "$verify_tool" verify-tree-ledger --tree "$public" \
+            --ledger "$ledger" --sha256 "$ledger_sha256" >/dev/null 2>&1; then
+    printf '%s\n' 'error: published tree verification failed' >&2
+    exit 1
+fi
+published=1
+new_at_public=0

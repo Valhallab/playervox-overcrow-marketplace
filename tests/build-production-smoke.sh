@@ -200,6 +200,69 @@ printf '%s\n' '#!/bin/sh' "printf '%s\\n' ran >'$scratch/ambient-cargo-ran'" 'ex
     >"$scratch/fake-path/cargo"
 /usr/bin/chmod 0700 "$scratch/fake-path/cargo"
 
+# This committed fixture hook runs only after immutable staging has completed.
+# It corrupts the mutable live Rust source; the publisher must compile and run
+# only the already-staged trusted tool bytes.
+fixture=$(make_fixture staged-publisher-tool)
+secrets=$(make_secrets staged-publisher-tool)
+printf '%s\n' \
+    '' \
+    '# Fixture-only post-staging mutation; never copied into production code.' \
+    'printf "%s\n" fixture_live_tool_source_must_not_compile >>"$repo_root/tools/marketplace-tool/src/main.rs"' \
+    >>"$fixture/scripts/stage-catalog-repository.sh"
+/usr/bin/git -C "$fixture" add scripts/stage-catalog-repository.sh
+/usr/bin/git -C "$fixture" commit --quiet -m 'post-staging live tool mutation fixture'
+revision=$(/usr/bin/git -C "$fixture" rev-parse HEAD)
+if ! run_publisher "$fixture" "$secrets" "$revision" overcrow-production-2026-01 \
+        "$scratch/staged-tool.stdout" "$scratch/staged-tool.stderr"; then
+    actual_error=$(/usr/bin/cat "$scratch/staged-tool.stderr")
+    case "$actual_error" in
+        'error: production signing failed') ;;
+        *) actual_error='non-fixed diagnostic' ;;
+    esac
+    printf '%s\n' "error: staged publisher tool was not isolated: $actual_error" >&2
+    exit 1
+fi
+test ! -s "$scratch/staged-tool.stdout"
+test ! -s "$scratch/staged-tool.stderr"
+if /usr/bin/git -C "$fixture" diff --quiet -- tools/marketplace-tool/src/main.rs; then
+    printf '%s\n' 'error: post-staging live tool mutation fixture did not run' >&2
+    exit 1
+fi
+test -f "$fixture/published/marketplace/v1/catalog.json"
+test "$(/usr/bin/cat "$secrets/sequence.txt")" = 2
+test ! -e "$secrets/state.json.receipt" && test ! -L "$secrets/state.json.receipt"
+
+# Keep each private filename below PATH_MAX while forcing the longer receipt
+# tempfile template itself beyond PATH_MAX. The publisher must suppress the raw
+# mktemp diagnostic, including this external authority path.
+fixture=$(make_fixture receipt-creation-failure)
+secrets="$scratch/receipt-creation-authority"
+/usr/bin/install -d -m 0700 "$secrets"
+component=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+while test "${#secrets}" -lt 3900; do
+    secrets="$secrets/$component"
+    /usr/bin/install -d -m 0700 "$secrets"
+done
+padding=$((4070 - ${#secrets} - 1))
+if test "$padding" -lt 1 || test "$padding" -gt 255; then
+    printf '%s\n' 'error: receipt creation path fixture is outside its fixed bound' >&2
+    exit 1
+fi
+last_component=$(
+    /usr/bin/printf '%*s' "$padding" '' | /usr/bin/tr ' ' a
+)
+secrets="$secrets/$last_component"
+/usr/bin/install -d -m 0700 "$secrets"
+test "${#secrets}" -eq 4070
+printf '%s\n' 1 >"$secrets/sequence.txt"
+printf '%s\n' 2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a \
+    >"$secrets/signing.key"
+/usr/bin/chmod 0600 "$secrets/sequence.txt" "$secrets/signing.key"
+assert_fixed_failure receipt-creation-failure "$fixture" "$secrets" \
+    "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" \
+    'production receipt rejected'
+
 fixture=$(make_fixture dirty)
 secrets=$(make_secrets dirty)
 printf '%s\n' dirty >>"$fixture/marketplace/targets.json"

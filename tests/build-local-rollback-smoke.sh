@@ -3,15 +3,15 @@ set -eu
 
 if test "$#" -gt 1; then
     printf '%s\n' \
-        'usage: build-local-rollback-smoke.sh [validation|signal|post-move|race-next|race-previous|rollback|verified-race|publish-noop|restore-failure]' >&2
+        'usage: build-local-rollback-smoke.sh [validation|signal|post-move|race-next|race-previous|rollback|final-move-fail|final-move-signal|verified-race|publish-noop|restore-failure]' >&2
     exit 2
 fi
 selected_case=${1:-all}
 case "$selected_case" in
-    all | validation | signal | post-move | race-next | race-previous | rollback | verified-race | publish-noop | restore-failure) ;;
+    all | validation | signal | post-move | race-next | race-previous | rollback | final-move-fail | final-move-signal | verified-race | publish-noop | restore-failure) ;;
     *)
         printf '%s\n' \
-            'usage: build-local-rollback-smoke.sh [validation|signal|post-move|race-next|race-previous|rollback|verified-race|publish-noop|restore-failure]' >&2
+            'usage: build-local-rollback-smoke.sh [validation|signal|post-move|race-next|race-previous|rollback|final-move-fail|final-move-signal|verified-race|publish-noop|restore-failure]' >&2
         exit 2
         ;;
 esac
@@ -289,6 +289,38 @@ if should_run rollback; then
     if sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
             /usr/bin/mv /usr/bin/mv /usr/bin/false /usr/bin/mv; then
         printf '%s\n' 'error: failing publication move unexpectedly succeeded' >&2
+        exit 1
+    fi
+    assert_absent "$staged_public"
+    assert_absent "$next_public"
+    assert_absent "$previous_public"
+    assert_prior_public
+fi
+
+if should_run final-move-fail; then
+    staged_public="$scratch/staged-final-move-fail/public"
+    next_public="$copy/.public-next.final-move-fail"
+    previous_public="$copy/.public-previous.final-move-fail"
+    make_staged_public "$staged_public"
+    if sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
+            /usr/bin/mv /usr/bin/mv "$move_then_fail" /usr/bin/mv; then
+        printf '%s\n' 'error: final rename followed by failure unexpectedly succeeded' >&2
+        exit 1
+    fi
+    assert_absent "$staged_public"
+    assert_absent "$next_public"
+    assert_absent "$previous_public"
+    assert_prior_public
+fi
+
+if should_run final-move-signal; then
+    staged_public="$scratch/staged-final-move-signal/public"
+    next_public="$copy/.public-next.final-move-signal"
+    previous_public="$copy/.public-previous.final-move-signal"
+    make_staged_public "$staged_public"
+    if sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
+            /usr/bin/mv /usr/bin/mv "$move_then_signal" /usr/bin/mv; then
+        printf '%s\n' 'error: final rename followed by signal unexpectedly succeeded' >&2
         exit 1
     fi
     assert_absent "$staged_public"
