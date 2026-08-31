@@ -23,6 +23,9 @@ jobs:
           rustup target add --toolchain 1.98.0 wasm32-wasip2
           sudo apt-get update
           sudo apt-get install --yes bubblewrap shellcheck
+          runner_uid=$(/usr/bin/id -u)
+          /usr/bin/timeout --signal=TERM --kill-after=5 30 \
+            /usr/bin/sudo --non-interactive /usr/bin/systemctl start "user@$runner_uid.service"
       - name: Verify through the reviewed base
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}

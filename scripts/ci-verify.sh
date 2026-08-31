@@ -56,6 +56,7 @@ for required in \
         scripts/materialize-git-snapshot.sh scripts/prepare-marketplace-tool.sh \
         scripts/ci-verify.sh scripts/sandbox-review-checks.sh \
         scripts/sandbox-component-build.sh scripts/sandbox-supervisor.c \
+        scripts/resolve-system-gcc.sh \
         tests/reject-published-change.sh tests/reject-trusted-change.sh \
         tests/check-community-change.mjs; do
     if test ! -f "$trusted_root/$required" || test -L "$trusted_root/$required"; then

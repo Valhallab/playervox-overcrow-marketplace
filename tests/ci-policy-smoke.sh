@@ -10,6 +10,7 @@ repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 workflow="$repo_root/.github/workflows/ci.yml"
 ci_driver="$repo_root/scripts/ci-verify.sh"
 sandbox_driver="$repo_root/scripts/sandbox-review-checks.sh"
+component_sandbox="$repo_root/scripts/sandbox-component-build.sh"
 gate="$repo_root/tests/reject-published-change.sh"
 community_gate="$repo_root/tests/check-community-change.mjs"
 community_smoke="$repo_root/tests/community-submission-smoke.sh"
@@ -44,7 +45,6 @@ if ! test -f "$community_gate" || test -L "$community_gate" \
     printf '%s\n' 'error: community-change policy tests are missing or unsafe' >&2
     exit 1
 fi
-
 expect_accept() {
     if ! "$gate" "$@"; then
         printf '%s\n' 'error: published-change gate rejected an allowed fixture' >&2
@@ -131,6 +131,37 @@ require_line 'sandbox-review-checks.sh" site'
 require_line 'diff --recursive --no-dereference'
 require_line '--unshare-all --unshare-net'
 require_line 'CARGO_NET_OFFLINE=true'
+require_line 'runner_uid=$(/usr/bin/id -u)'
+
+for sandbox in "$sandbox_driver" "$component_sandbox"; do
+    if ! /usr/bin/grep -F -x \
+            'system_gcc=$(sh "$script_dir/resolve-system-gcc.sh") || exit 1' \
+            "$sandbox" >/dev/null \
+            || ! /usr/bin/grep -F -- '"$system_gcc" -std=c11' \
+                "$sandbox" >/dev/null \
+            || /usr/bin/grep -F -- '/usr/bin/gcc -std=c11' \
+                "$sandbox" >/dev/null; then
+        printf '%s\n' 'error: sandbox does not use the trusted system compiler' >&2
+        exit 1
+    fi
+done
+
+if ! /usr/bin/awk '
+        /\/usr\/bin\/timeout --signal=TERM --kill-after=5 30/ {
+            timeout_line = NR
+        }
+        /\/usr\/bin\/sudo --non-interactive \/usr\/bin\/systemctl start/ {
+            starts += 1
+            if (timeout_line != NR - 1 \
+                    || $0 !~ /"user@\$runner_uid[.]service"/) {
+                invalid = 1
+            }
+        }
+        END { exit !(starts == 1 && invalid == 0) }
+    ' "$workflow"; then
+    printf '%s\n' 'error: delegated CI resource scope is not started safely' >&2
+    exit 1
+fi
 
 if ! /usr/bin/awk '
         /CDPATH='"'"''"'"' cd -- "\$trusted_root"/ { trusted_root_line = NR }

@@ -79,6 +79,7 @@ if test "$(/usr/bin/stat -c '%u' "$source_root")" != "$invoking_uid" \
     exit 1
 fi
 
+script_dir=$(CDPATH='' cd -- "$(/usr/bin/dirname -- "$0")" && pwd -P)
 bwrap_path=$(command -v bwrap 2>/dev/null || true)
 case "$bwrap_path" in
     /usr/bin/bwrap | /bin/bwrap) ;;
@@ -91,13 +92,14 @@ if test ! -f "$bwrap_path" || test -L "$bwrap_path" \
 fi
 for program in \
         /usr/bin/timeout /usr/bin/prlimit /usr/bin/tar /usr/bin/env \
-        /usr/bin/systemd-run /usr/bin/gcc /usr/bin/setpriv; do
+        /usr/bin/systemd-run /usr/bin/readlink /usr/bin/setpriv; do
     if test ! -f "$program" || test -L "$program" \
             || test "$(/usr/bin/stat -c '%u:%a' "$program")" != 0:755; then
         printf '%s\n' 'error: required resource control is unavailable' >&2
         exit 1
     fi
 done
+system_gcc=$(sh "$script_dir/resolve-system-gcc.sh") || exit 1
 runtime_directory="/run/user/$invoking_uid"
 session_bus="$runtime_directory/bus"
 if test ! -d "$runtime_directory" || test -L "$runtime_directory" \
@@ -109,7 +111,6 @@ if test ! -d "$runtime_directory" || test -L "$runtime_directory" \
     exit 1
 fi
 
-script_dir=$(CDPATH='' cd -- "$(/usr/bin/dirname -- "$0")" && pwd -P)
 resolved_toolchain=$(sh "$script_dir/resolve-pinned-rust.sh" "$source_root") || exit 1
 tab=$(printf '\t')
 IFS="$tab" read -r toolchain_root cargo_path rustc_path \
@@ -139,7 +140,7 @@ if ! /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
         /usr/bin/timeout --signal=KILL 10 \
         /usr/bin/prlimit --cpu=5 --as=536870912 --nproc=4096 \
             --nofile=64 --fsize=1048576 -- \
-        /usr/bin/gcc -std=c11 -O2 -Wall -Wextra -Werror \
+        "$system_gcc" -std=c11 -O2 -Wall -Wextra -Werror \
             "$script_dir/sandbox-supervisor.c" -o "$supervisor" \
             >/dev/null 2>&1 \
         || test ! -f "$supervisor" || test -L "$supervisor" \
