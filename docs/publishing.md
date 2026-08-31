@@ -10,25 +10,16 @@ from the offline publisher. Creators receive no signing or deployment
 credentials.
 
 This repository supplies the minimal-permission check and CODEOWNERS
-declarations, but GitHub branch protection, the required check, and required
-CODEOWNER review are separate operational configuration. Until those controls
+declarations, but GitHub protections remain separate operational configuration.
+Until the controls in the [production operations runbook](production-operations.md)
 are configured, CI output is evidence rather than stand-alone enforcement of
-merge policy.
-
-Configure both `overcrow/marketplace-admission/candidate` and the `verify`
-check as required for `candidate`. Configure both
-`overcrow/marketplace-admission/master` and `verify` as required for `master`.
-Pin `verify` to the GitHub Actions application. The base-specific admission
-result is deliberately published through the commit-status API and is not
-associated with a GitHub App, so it must remain required alongside the
-source-pinned `verify` check. Use strict required status checks so the reviewed
-head must also be current with its target branch. The trusted
-`pull_request_target` workflow serializes runs for the same pull request,
-publishes `pending` before validation, then publishes the final result on the
-exact reviewed head.
-Reporting jobs have only `statuses: write`; the verification job has only
-`contents: read`. Neither permission can merge, publish, deploy, or sign a
-package.
+merge policy. The workflow publishes `pending` and final base-specific
+admission statuses on the exact reviewed pull-request head. Reporting jobs have
+only `statuses: write`; the verification job has only `contents: read`.
+Neither permission can merge, publish, deploy, or sign a package.
+Branch protection uses strict required status checks: `candidate` requires
+`overcrow/marketplace-admission/candidate`, while `master` requires
+`overcrow/marketplace-admission/master`.
 
 The `pull_request_target` job definition comes from the default branch. It does
 not check out the proposed revision: it obtains the exact head through the
@@ -78,22 +69,20 @@ objects. A changed payload requires a strictly higher development sequence;
 never reset or reuse one. Source package directories never retain
 `component.wasm` after publication.
 
-The reviewed offline publisher is `scripts/build-production.sh`. It remains
-disabled until the production ceremony commits the reviewed public key at
-`keys/overcrow-production-2026-01.pub`; no private authority material belongs
-in this repository. It accepts only an exact clean `release/*` commit and
-external private files with the required ownership and modes, stages and
-verifies the complete tree, advances the sequence, and atomically replaces
-`published/`. This is a local build operation and does not deploy or push. The
-first catalog expires exactly 30 days after issuance and maintainers republish
-at least every 14 days.
+The reviewed offline publisher is `scripts/build-production.sh`. It accepts
+only an exact clean `release/*` commit and external private authority files,
+stages and verifies the complete tree, advances the sequence, and atomically
+replaces `published/`; it does not deploy or push. The authoritative key,
+release, recovery, cache, and deployment procedure is the
+[production operations runbook](production-operations.md).
 
 Production verification also requires Bubblewrap, a user systemd manager for
 transient resource-limited services, and a canonical regular Node executable
-selected from `PATH`. The executable and every directory in its resolved path
-must be root-owned and not group- or world-writable; the executable must have
-mode `0755` and be single-link. A user-managed
-version-manager shim is intentionally rejected. The Node checks run without
+selected from the fixed reviewed system locations. The executable and every
+directory in its resolved path must be root-owned and not group- or
+world-writable; the executable must have mode `0755` and be single-link. A
+user-managed version-manager shim is intentionally rejected. The Node checks
+run without
 network and with a `/proc` view limited to their isolated PID namespace, under
 fixed CPU, task, virtual-address, resident memory, swap, file, and wall-time
 limits. Release and full-gate hosts must provide that system Node installation
@@ -102,17 +91,9 @@ Bubblewrap exposes the host network only to the fixed trusted setup command;
 that command creates an empty network namespace, drops every capability, and
 sets `no_new_privs` before starting any reviewed package or site code.
 
-The deployment contract serves tracked production output at
-<https://overcrow.playervox.com/>, with the marketplace at
-<https://overcrow.playervox.com/marketplace/> and the signed catalog at
-<https://overcrow.playervox.com/marketplace/v1/catalog.json>. The website
-cannot install packages; installation remains a Control Center operation.
-
-Do not add a private key, passphrase, private key path, deployment credential,
-or publishing endpoint to local configuration, generated output, CI logs, or
-a commit.
-
-Production operation additionally requires the security gates in
-[SECURITY.md](../SECURITY.md), a key-operations and recovery procedure, and an
-incident suspension/revocation runbook. Deployment remains a separate,
-explicitly authorized operation.
+The deployment contract and its public endpoint checks are defined in the
+[production operations runbook](production-operations.md). The website cannot
+install packages; installation remains a Control Center operation. Do not add a
+private key, passphrase, private authority path, deployment credential, or
+publishing endpoint to local configuration, generated output, CI logs, or a
+commit. Deployment remains a separate, explicitly authorized operation.

@@ -12,7 +12,7 @@ use serde_json::Value;
 
 const FIXED_GENERATED: &str = "2026-08-25T00:00:00Z";
 const FIXED_EXPIRES: &str = "2036-08-25T00:00:00Z";
-const PRODUCTION_EXPIRES: &str = "2026-09-24T00:00:00Z";
+const PRODUCTION_EXPIRES: &str = "2026-11-23T00:00:00Z";
 const PRODUCTION_KEY_ID: &str = "overcrow-production-2026-01";
 
 #[test]
@@ -1372,7 +1372,7 @@ fn verify_tree_accepts_only_the_exact_public_key_bound_object_tree() {
 }
 
 #[test]
-fn production_build_requires_the_exact_key_and_thirty_day_window() {
+fn production_build_requires_the_exact_key_and_ninety_day_window() {
     let repository = tempfile::tempdir().expect("repository");
     let target = tempfile::tempdir().expect("isolated cargo target");
     assert!(
@@ -1427,9 +1427,9 @@ fn production_build_requires_the_exact_key_and_thirty_day_window() {
         &state,
         &signing_key,
         FIXED_GENERATED,
-        "2026-09-23T23:59:59Z",
+        "2026-11-22T23:59:59Z",
     );
-    assert!(!wrong_expiry.status.success(), "non-30-day expiry rejected");
+    assert!(!wrong_expiry.status.success(), "non-90-day expiry rejected");
     assert!(!repository.path().join("public").exists());
 
     let wrong_key = tool()

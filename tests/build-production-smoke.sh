@@ -115,6 +115,29 @@ assert_unchanged() (
     /usr/bin/rm -f -- "$after"
 )
 
+assert_receipt_has_ninety_day_lifetime() (
+    receipt=$1
+    generated_at=$(/usr/bin/sed -n 's/^generatedAt=//p' "$receipt")
+    expires_at=$(/usr/bin/sed -n 's/^expiresAt=//p' "$receipt")
+    expected_expires=$(/usr/bin/date -u -d "$generated_at +90 days" '+%Y-%m-%dT%H:%M:%SZ')
+    test "${#generated_at}" -eq 20
+    test "${#expires_at}" -eq 20
+    test "$expires_at" = "$expected_expires"
+)
+
+assert_catalog_has_ninety_day_lifetime() (
+    catalog=$1
+    "$trusted_node" -e '
+const fs = require("node:fs");
+const envelope = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const payload = JSON.parse(Buffer.from(envelope.payload, "base64url"));
+const expected = new Date(Date.parse(payload.generatedAt) + 90 * 24 * 60 * 60 * 1000)
+  .toISOString()
+  .replace(".000Z", "Z");
+if (payload.expiresAt !== expected) process.exit(1);
+' "$catalog"
+)
+
 run_publisher() (
     fixture=$1
     secrets=$2
@@ -428,11 +451,18 @@ printf '%s\n' \
     "publicKeySha256=$public_key_fingerprint" \
     'sequence=1' \
     'generatedAt=2026-08-30T00:00:00Z' \
-    'expiresAt=2026-09-28T23:59:59Z' \
+    'expiresAt=2026-11-27T23:59:59Z' \
     'payloadSha256=pending' >"$secrets/state.json.receipt"
 /usr/bin/chmod 0600 "$secrets/state.json.receipt"
+before_receipt="$scratch/bad-expiry-receipt-before"
+before_sequence="$scratch/bad-expiry-sequence-before"
+/usr/bin/cp -p -- "$secrets/state.json.receipt" "$before_receipt"
+/usr/bin/cp -p -- "$secrets/sequence.txt" "$before_sequence"
 assert_fixed_failure bad-expiry-receipt "$fixture" "$secrets" "$revision" \
     'production receipt rejected'
+/usr/bin/cmp -- "$before_receipt" "$secrets/state.json.receipt"
+/usr/bin/cmp -- "$before_sequence" "$secrets/sequence.txt"
+test ! -e "$secrets/state.json" && test ! -L "$secrets/state.json"
 
 fixture=$(make_fixture verifier)
 secrets=$(make_secrets verifier \
@@ -490,6 +520,7 @@ test "$(/usr/bin/wc -l <"$secrets/state.json.receipt")" -eq 8
 /usr/bin/grep -F -x "publicKeySha256=$(/usr/bin/sha256sum \
     "$fixture/keys/overcrow-production-2026-01.pub" | /usr/bin/cut -d ' ' -f 1)" \
     "$secrets/state.json.receipt" >/dev/null
+assert_receipt_has_ninety_day_lifetime "$secrets/state.json.receipt"
 /usr/bin/cp -p -- "$secrets/state.json.receipt" "$scratch/candidate-a.receipt"
 /usr/bin/rmdir -- "$secrets/state.json"
 fixture_b=$(make_fixture receipt-candidate-b)
@@ -530,6 +561,7 @@ test ! -s "$scratch/candidate-a-retry.stdout"
 test ! -s "$scratch/candidate-a-retry.stderr"
 test "$(/usr/bin/cat "$secrets/sequence.txt")" = 2
 test ! -e "$secrets/state.json.receipt" && test ! -L "$secrets/state.json.receipt"
+assert_catalog_has_ninety_day_lifetime "$fixture/published/marketplace/v1/catalog.json"
 
 fixture=$(make_fixture advance)
 secrets=$(make_secrets advance)
@@ -614,6 +646,7 @@ test "$(/usr/bin/cat "$scratch/publication-move.stderr")" = \
 assert_unchanged "$fixture" "$before"
 test "$(/usr/bin/cat "$secrets/sequence.txt")" = 2
 test -f "$secrets/state.json.receipt"
+assert_receipt_has_ninety_day_lifetime "$secrets/state.json.receipt"
 /usr/bin/rm -rf -- "$fixture/.published-next.$publisher_pid"
 run_publisher "$fixture" "$secrets" "$revision" overcrow-production-2026-01 \
     "$scratch/publication-retry.stdout" "$scratch/publication-retry.stderr"
@@ -628,5 +661,6 @@ catalog_sequence=$(node -e '
   process.stdout.write(String(payload.sequence));
 ' "$fixture/published/marketplace/v1/catalog.json")
 test "$catalog_sequence" = 2
+assert_catalog_has_ninety_day_lifetime "$fixture/published/marketplace/v1/catalog.json"
 
 printf '%s\n' 'Production publisher smoke tests passed'

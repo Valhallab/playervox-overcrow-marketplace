@@ -23,6 +23,7 @@ use crate::{
 pub(crate) const DEVELOPMENT_KEY_ID: &str = "overcrow-development-2026";
 pub(crate) const PRODUCTION_KEY_ID: &str = "overcrow-production-2026-01";
 pub(crate) const PRODUCTION_PUBLIC_KEY_PATH: &str = "keys/overcrow-production-2026-01.pub";
+const PRODUCTION_CATALOG_LIFETIME_DAYS: i64 = 90;
 pub(crate) const DEV_SEED: [u8; 32] = [
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
     0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
@@ -663,7 +664,8 @@ pub(crate) fn build_catalog_with_static_tree(
         return Err(CatalogCode::Time);
     }
     if matches!(origin, CatalogOrigin::Production)
-        && expires.signed_duration_since(generated) != chrono::TimeDelta::days(30)
+        && expires.signed_duration_since(generated)
+            != chrono::TimeDelta::days(PRODUCTION_CATALOG_LIFETIME_DAYS)
     {
         return Err(CatalogCode::Time);
     }
@@ -999,7 +1001,8 @@ fn verify_catalog_payload(
     if expires <= generated
         || expires <= now
         || (matches!(origin, CatalogOrigin::Production)
-            && expires.signed_duration_since(generated) != chrono::TimeDelta::days(30))
+            && expires.signed_duration_since(generated)
+                != chrono::TimeDelta::days(PRODUCTION_CATALOG_LIFETIME_DAYS))
         || generated
             > now
                 .checked_add_signed(chrono::TimeDelta::minutes(5))
@@ -1932,7 +1935,7 @@ mod tests {
             &targets,
             10,
             "2026-08-25T00:00:00Z",
-            "2026-09-24T00:00:00Z",
+            "2026-11-23T00:00:00Z",
             CatalogOrigin::Production,
             "production-alias",
             &DEV_SEED,

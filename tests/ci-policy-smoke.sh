@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC2016 # Policy assertions intentionally match literal shell/YAML.
 set -eu
 
 if test "$#" -ne 0; then
@@ -18,10 +19,12 @@ trusted_gate="$repo_root/tests/reject-trusted-change.sh"
 trust_smoke="$repo_root/tests/ci-trust-boundary-smoke.sh"
 sandbox_review_smoke="$repo_root/tests/sandbox-review-checks-smoke.sh"
 review_gate="$repo_root/scripts/review-revision.sh"
+acceptance_gate="$repo_root/scripts/accept-candidate-revision.sh"
 node_resolver="$repo_root/scripts/resolve-system-node.sh"
 codeowners="$repo_root/.github/CODEOWNERS"
 testing_doc="$repo_root/docs/testing.md"
 publishing_doc="$repo_root/docs/publishing.md"
+production_doc="$repo_root/docs/production-operations.md"
 
 for owned_path in \
         '/tests/reject-published-change.sh @ypMrg' \
@@ -30,7 +33,9 @@ for owned_path in \
         '/tests/ci-trust-boundary-smoke.sh @ypMrg' \
         '/tests/sandbox-review-checks-smoke.sh @ypMrg' \
         '/tests/ci-policy-smoke.sh @ypMrg' \
-        '/scripts/review-revision.sh @ypMrg'; do
+        '/tests/accept-candidate-revision-smoke.sh @ypMrg' \
+        '/scripts/review-revision.sh @ypMrg' \
+        '/scripts/accept-candidate-revision.sh @ypMrg'; do
     if ! /usr/bin/grep -F -x -- "$owned_path" "$codeowners" >/dev/null; then
         printf '%s\n' 'error: CI policy gates are not explicitly owned' >&2
         exit 1
@@ -50,6 +55,10 @@ if ! test -x "$community_smoke" || test -L "$community_smoke" \
 fi
 if ! test -x "$review_gate" || test -L "$review_gate"; then
     printf '%s\n' 'error: maintainer review gate is missing or unsafe' >&2
+    exit 1
+fi
+if ! test -x "$acceptance_gate" || test -L "$acceptance_gate"; then
+    printf '%s\n' 'error: accepted-revision gate is missing or unsafe' >&2
     exit 1
 fi
 if ! test -x "$node_resolver" || test -L "$node_resolver"; then
@@ -294,6 +303,27 @@ if ! /usr/bin/grep -F -- \
         || ! /usr/bin/grep -F -x -- \
             '    "$private_root" full' "$review_gate" >/dev/null; then
     printf '%s\n' 'error: maintainer gate does not bootstrap exact reviewed bytes' >&2
+    exit 1
+fi
+
+if /usr/bin/grep -F -- \
+        'test "$candidate_revision" = "$review_revision"' \
+        "$production_doc" >/dev/null \
+        || ! /usr/bin/awk '
+            /review-revision[.]sh "\$trusted_base_revision" "\$review_revision"/ {
+                premerge_gate = NR
+            }
+            /fetch --no-tags --no-write-fetch-head --force origin/ { fetch = NR }
+            /candidate_revision=\$\(accepted_git rev-parse --verify/ { resolve = NR }
+            /accept-candidate-revision[.]sh / { accepted_gate = NR }
+            /worktree add -b "release\/\$sequence_name"/ { release = NR }
+            END {
+                exit !(premerge_gate > 0 && fetch > premerge_gate \
+                    && resolve > fetch && accepted_gate > resolve \
+                    && release > accepted_gate)
+            }
+        ' "$production_doc"; then
+    printf '%s\n' 'error: accepted revision is not tree-bound and regated after merge' >&2
     exit 1
 fi
 if /usr/bin/grep -E \
