@@ -15,13 +15,17 @@ CODEOWNER review are separate operational configuration. Until those controls
 are configured, CI output is evidence rather than stand-alone enforcement of
 merge policy.
 
-Configure `overcrow/marketplace-admission/candidate` as the required status for
-`candidate`, and `overcrow/marketplace-admission/master` for `master`. Use
-strict required status checks so the reviewed head must also be current with
-its target branch, and require GitHub Actions as the status source when the
-ruleset UI offers that restriction. The trusted `pull_request_target` workflow
-serializes runs for the same pull request, publishes `pending` before
-validation, then publishes the final result on the exact reviewed head.
+Configure both `overcrow/marketplace-admission/candidate` and the `verify`
+check as required for `candidate`. Configure both
+`overcrow/marketplace-admission/master` and `verify` as required for `master`.
+Pin `verify` to the GitHub Actions application. The base-specific admission
+result is deliberately published through the commit-status API and is not
+associated with a GitHub App, so it must remain required alongside the
+source-pinned `verify` check. Use strict required status checks so the reviewed
+head must also be current with its target branch. The trusted
+`pull_request_target` workflow serializes runs for the same pull request,
+publishes `pending` before validation, then publishes the final result on the
+exact reviewed head.
 Reporting jobs have only `statuses: write`; the verification job has only
 `contents: read`. Neither permission can merge, publish, deploy, or sign a
 package.
