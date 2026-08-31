@@ -3,7 +3,7 @@ set -eu
 
 if test "$#" -gt 1; then
     printf '%s\n' \
-        'usage: build-local-rollback-smoke.sh [validation|signal|post-move|race-next|race-previous|empty-next|empty-previous|empty-public|empty-restore|quarantine-collision|identity-race|foreign-next|foreign-public|foreign-previous|cleanup-signal|restore-signal|rollback|final-move-fail|final-move-signal|verified-race|publish-noop|restore-failure]' >&2
+        'usage: build-local-rollback-smoke.sh [validation|signal|post-move|race-next|race-previous|empty-next|empty-previous|empty-public|empty-restore|quarantine-collision|identity-race|foreign-next|foreign-public|foreign-previous|cleanup-signal|restore-signal|rollback|final-move-fail|final-move-signal|verified-race|publish-noop|restore-failure|retirement-failure]' >&2
     exit 2
 fi
 selected_case=${1:-all}
@@ -13,10 +13,11 @@ case "$selected_case" in
         | quarantine-collision \
         | identity-race | foreign-next | foreign-public | foreign-previous \
         | cleanup-signal | restore-signal | rollback | final-move-fail \
-        | final-move-signal | verified-race | publish-noop | restore-failure) ;;
+        | final-move-signal | verified-race | publish-noop | restore-failure \
+        | retirement-failure) ;;
     *)
         printf '%s\n' \
-            'usage: build-local-rollback-smoke.sh [validation|signal|post-move|race-next|race-previous|empty-next|empty-previous|empty-public|empty-restore|quarantine-collision|identity-race|foreign-next|foreign-public|foreign-previous|cleanup-signal|restore-signal|rollback|final-move-fail|final-move-signal|verified-race|publish-noop|restore-failure]' >&2
+            'usage: build-local-rollback-smoke.sh [validation|signal|post-move|race-next|race-previous|empty-next|empty-previous|empty-public|empty-restore|quarantine-collision|identity-race|foreign-next|foreign-public|foreign-previous|cleanup-signal|restore-signal|rollback|final-move-fail|final-move-signal|verified-race|publish-noop|restore-failure|retirement-failure]' >&2
         exit 2
         ;;
 esac
@@ -331,6 +332,30 @@ printf '%s\n' \
     '/usr/bin/stat -c "%d:%i" "$quarantine/finalize-next.0" >"$FOREIGN_IDENTITY_RECORD"' \
     >"$move_then_add_quarantine_collision"
 /usr/bin/chmod 0700 "$move_then_add_quarantine_collision"
+
+retirement_failure_tool="$scratch/retirement-failure-tool"
+# shellcheck disable=SC2016 # generated helper expands fixture variables when run
+printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    '"$REAL_PUBLISH_RENAME_TOOL" "$@"' \
+    'destination=' \
+    'while test "$#" -gt 0; do' \
+    '    case "$1" in' \
+    '        --destination) destination=$2; shift 2 ;;' \
+    '        *) shift ;;' \
+    '    esac' \
+    'done' \
+    'case "$destination" in' \
+    '    */finalize-previous.0)' \
+    '        quarantine=$(/usr/bin/dirname -- "$destination")' \
+    '        /usr/bin/mv -T -- "$destination" "$quarantine/retired-prior"' \
+    '        /usr/bin/mkdir -m 0700 -- "$destination"' \
+    '        printf "%s\n" foreign >"$destination/foreign.txt"' \
+    '        ;;' \
+    'esac' \
+    >"$retirement_failure_tool"
+/usr/bin/chmod 0700 "$retirement_failure_tool"
 
 if should_run validation; then
     staged_public="$scratch/staged-validation/public"
@@ -820,6 +845,51 @@ if should_run restore-failure; then
     /usr/bin/mv -T -- "$previous_public" "$public"
     assert_absent "$previous_public"
     assert_prior_public
+fi
+
+if should_run retirement-failure; then
+    staged_public="$scratch/staged-retirement-failure/public"
+    next_public="$copy/.public-next.retirement-failure"
+    previous_public="$copy/.public-previous.retirement-failure"
+    make_staged_public "$staged_public"
+    snapshot_tree "$staged_public" "$scratch/expected-retirement-live.manifest"
+    set +e
+    retirement_error=$(REAL_PUBLISH_RENAME_TOOL="$trusted_tool" \
+        PUBLISH_RENAME_TOOL="$retirement_failure_tool" \
+        sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
+            /usr/bin/mv /usr/bin/mv /usr/bin/mv /usr/bin/mv 2>&1)
+    retirement_result=$?
+    set -e
+    if test "$retirement_result" -eq 0; then
+        printf '%s\n' 'error: failed prior retirement unexpectedly succeeded' >&2
+        exit 1
+    fi
+    case "$retirement_error" in
+        *'error: publication cleanup failed'*) ;;
+        *)
+            printf '%s\n' 'error: failed prior retirement was not visible' >&2
+            exit 1
+            ;;
+    esac
+    assert_absent "$staged_public"
+    assert_absent "$next_public"
+    assert_absent "$previous_public"
+    if test ! -d "$public" || test -L "$public"; then
+        printf '%s\n' 'error: failed prior retirement removed the verified live tree' >&2
+        exit 1
+    fi
+    snapshot_tree "$public" "$scratch/actual-retirement-live.manifest"
+    /usr/bin/cmp -- "$scratch/expected-retirement-live.manifest" \
+        "$scratch/actual-retirement-live.manifest"
+    quarantine=$(/usr/bin/find "$copy" -maxdepth 1 -type d \
+        -name '.public-quarantine.*' -print -quit)
+    test -n "$quarantine"
+    snapshot_tree "$quarantine/retired-prior" \
+        "$scratch/actual-retired-prior.manifest"
+    /usr/bin/cmp -- "$scratch/prior-public.manifest" \
+        "$scratch/actual-retired-prior.manifest"
+    test "$(/usr/bin/cat "$quarantine/finalize-previous.0/foreign.txt")" = foreign
+    /usr/bin/rm -rf -- "$quarantine"
 fi
 
 if /usr/bin/find "$copy" -maxdepth 1 \

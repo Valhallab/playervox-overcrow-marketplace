@@ -21,7 +21,7 @@ const MAX_MANIFEST_LOCALES: usize = 32;
 const MAX_MANIFEST_GAMES: usize = 32;
 const MAX_MANIFEST_DEPENDENCIES: usize = 32;
 const MAX_HTTP_HOSTS: usize = 16;
-const MAX_LISTING_LOCALIZATIONS: usize = 16;
+const MAX_LISTING_LOCALIZATIONS: usize = 32;
 const EXPECTED_WIT: &str = include_str!("../../../wit/widget-v1.wit");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -573,6 +573,10 @@ fn validate_manifest(mut manifest: Manifest) -> Result<Manifest, PolicyError> {
             .available_locales
             .binary_search(&manifest.default_locale)
             .is_err()
+        || manifest
+            .available_locales
+            .binary_search_by(|locale| locale.as_str().cmp("en"))
+            .is_err()
     {
         return Err(PolicyError::new(PolicyCode::Manifest));
     }
@@ -585,7 +589,7 @@ fn validate_manifest(mut manifest: Manifest) -> Result<Manifest, PolicyError> {
 }
 
 fn validate_games(values: &mut Vec<GameScope>) -> Result<(), PolicyError> {
-    if values.is_empty() || values.len() > MAX_MANIFEST_GAMES {
+    if values.len() > MAX_MANIFEST_GAMES {
         return Err(PolicyError::new(PolicyCode::Manifest));
     }
     let mut ids = BTreeSet::new();
@@ -752,7 +756,7 @@ fn validate_listing(
             return Err(PolicyError::new(PolicyCode::LocaleMismatch));
         }
     }
-    if !locales.contains(&manifest.default_locale) {
+    if locales.iter().ne(manifest.available_locales.iter()) {
         return Err(PolicyError::new(PolicyCode::LocaleMismatch));
     }
     Ok(ValidatedMetadata {
@@ -781,10 +785,7 @@ fn valid_spdx_license(value: &str) -> bool {
 }
 
 fn canonical_source_url(value: &str) -> bool {
-    if value.len() > 2_048
-        || !value.is_ascii()
-        || value.contains(['\\', '%'])
-        || value.ends_with('/')
+    if value.len() > 512 || !value.is_ascii() || value.contains(['\\', '%']) || value.ends_with('/')
     {
         return false;
     }
@@ -941,25 +942,95 @@ mod tests {
 
     const MANIFEST: &str = include_str!("../../../examples/hello-widget/manifest.json");
 
+    fn manifest() -> Value {
+        serde_json::from_str(MANIFEST).expect("manifest JSON")
+    }
+
     fn listing() -> Value {
         json!({
             "author": "PlayerVox",
             "spdxLicense": "AGPL-3.0-only",
             "sourceUrl": "https://github.com/PlayerVox/playervox-overcrow-marketplace",
             "localizations": [
-                {"locale": "en", "name": "Hello Widget", "description": "A safe example."}
+                {"locale": "en", "name": "Hello Widget", "description": "A safe example."},
+                {"locale": "fr", "name": "Widget Bonjour", "description": "Un exemple sûr."}
             ],
             "previewFile": "preview.png"
         })
     }
 
-    fn validate_listing(value: &Value) -> Result<(), PolicyCode> {
+    fn validate(manifest: &Value, listing: &Value) -> Result<(), PolicyCode> {
         validate_metadata(
-            MANIFEST.as_bytes(),
-            &serde_json::to_vec(value).expect("listing JSON"),
+            &serde_json::to_vec(manifest).expect("manifest JSON"),
+            &serde_json::to_vec(listing).expect("listing JSON"),
         )
         .map(|_| ())
         .map_err(|error| error.0)
+    }
+
+    fn validate_listing(value: &Value) -> Result<(), PolicyCode> {
+        validate(&manifest(), value)
+    }
+
+    fn metadata_with_locales(locales: &[&str]) -> (Value, Value) {
+        let mut manifest = manifest();
+        manifest["defaultLocale"] = json!("en");
+        manifest["availableLocales"] = json!(locales);
+        manifest["files"]["locales"] = Value::Object(
+            locales
+                .iter()
+                .map(|locale| {
+                    (
+                        (*locale).to_owned(),
+                        json!({
+                            "path": format!("locales/{locale}.json"),
+                            "sha256": "a".repeat(64)
+                        }),
+                    )
+                })
+                .collect(),
+        );
+
+        let mut listing = listing();
+        listing["localizations"] = Value::Array(
+            locales
+                .iter()
+                .map(|locale| {
+                    json!({
+                        "locale": locale,
+                        "name": format!("Name {locale}"),
+                        "description": format!("Description {locale}")
+                    })
+                })
+                .collect(),
+        );
+        (manifest, listing)
+    }
+
+    #[test]
+    fn manifest_requires_english_locale() {
+        let mut manifest = manifest();
+        manifest["defaultLocale"] = json!("fr");
+        manifest["availableLocales"] = json!(["fr"]);
+        manifest["files"]["locales"]
+            .as_object_mut()
+            .expect("locale file map")
+            .remove("en");
+
+        let mut listing = listing();
+        listing["localizations"] = json!([
+            {"locale": "fr", "name": "Widget Bonjour", "description": "Un exemple sûr."}
+        ]);
+
+        assert_eq!(validate(&manifest, &listing), Err(PolicyCode::Manifest));
+    }
+
+    #[test]
+    fn manifest_allows_empty_game_scope() {
+        let mut manifest = manifest();
+        manifest["games"] = json!([]);
+
+        validate(&manifest, &listing()).expect("empty game scope means all games");
     }
 
     #[test]
@@ -994,13 +1065,35 @@ mod tests {
     }
 
     #[test]
+    fn listing_locales_must_exactly_match_manifest() {
+        let mut subset = listing();
+        subset["localizations"] = json!([
+            {"locale": "en", "name": "Hello", "description": "English"}
+        ]);
+
+        assert_eq!(validate_listing(&subset), Err(PolicyCode::LocaleMismatch));
+    }
+
+    #[test]
+    fn listing_accepts_thirty_two_localizations() {
+        let locales = [
+            "en", "aa", "ab", "ac", "ad", "ae", "af", "ag", "ah", "ai", "aj", "ak", "al", "am",
+            "an", "ao", "ap", "aq", "ar", "as", "at", "au", "av", "aw", "ax", "ay", "az", "ba",
+            "bb", "bc", "bd", "be",
+        ];
+        let (manifest, listing) = metadata_with_locales(&locales);
+
+        validate(&manifest, &listing).expect("32 matching localizations");
+    }
+
+    #[test]
     fn listing_locales_are_unique_bounded_and_manifest_scoped() {
         let mut value = listing();
         value["localizations"] = json!([
             {"locale": "en", "name": "Hello", "description": "English"},
             {"locale": "fr", "name": "Bonjour", "description": "French"}
         ]);
-        validate_listing(&value).expect("optional translation subset");
+        validate_listing(&value).expect("exact translation set");
 
         for localizations in [
             json!([{"locale": "fr", "name": "Bonjour", "description": "French"}]),
@@ -1043,6 +1136,17 @@ mod tests {
     }
 
     #[test]
+    fn listing_source_url_is_bounded_to_512_bytes() {
+        let prefix = "https://example.test/";
+        let mut boundary = listing();
+        boundary["sourceUrl"] = json!(format!("{prefix}{}", "a".repeat(512 - prefix.len())));
+        validate_listing(&boundary).expect("512-byte source URL");
+
+        boundary["sourceUrl"] = json!(format!("{prefix}{}", "a".repeat(513 - prefix.len())));
+        assert_eq!(validate_listing(&boundary), Err(PolicyCode::Listing));
+    }
+
+    #[test]
     fn listing_schema_documents_the_runtime_grammar() {
         let schema: Value =
             serde_json::from_str(include_str!("../../../marketplace/listing.schema.json"))
@@ -1068,6 +1172,8 @@ mod tests {
         ] {
             assert_eq!(actual, expected);
         }
+        assert_eq!(properties["sourceUrl"]["maxLength"], 512);
+        assert_eq!(properties["localizations"]["maxItems"], 32);
         assert_eq!(properties["previewFile"]["maxLength"], 192);
         assert!(
             schema["$comment"]

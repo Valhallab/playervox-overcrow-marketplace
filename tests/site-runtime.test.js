@@ -7,6 +7,11 @@ const vm = require("node:vm");
 
 const DEVELOPMENT_BASE = "http://127.0.0.1:8787/marketplace/v1/";
 const PRODUCTION_BASE = "https://overcrow.playervox.com/marketplace/v1/";
+const THIRTY_TWO_LOCALES = [
+  "en", "aa", "ab", "ac", "ad", "ae", "af", "ag", "ah", "ai", "aj", "ak",
+  "al", "am", "an", "ao", "ap", "aq", "ar", "as", "at", "au", "av", "aw",
+  "ax", "ay", "az", "ba", "bb", "bc", "bd", "be",
+];
 
 class Element {
   constructor(tag = "div") {
@@ -319,6 +324,34 @@ test("accepts a declared non-English default when English metadata is present", 
   );
 });
 
+test("accepts thirty-two exact localized entries", async () => {
+  const localized = withTargets((targets) => {
+    const widget = targets.find((target) => target.manifest.kind === "widget");
+    widget.manifest.availableLocales = [...THIRTY_TWO_LOCALES];
+    widget.listing.localizations = THIRTY_TWO_LOCALES.map((locale) => ({
+      locale,
+      name: locale === "en" ? "Warframe Void Fissures" : `Name ${locale}`,
+      description: `Description ${locale}`,
+    }));
+    return targets;
+  });
+  const page = await run(localized);
+
+  assert.ok(card(page, /Warframe Void Fissures/u));
+});
+
+test("accepts a 512-byte ASCII source URL", async () => {
+  const prefix = "https://example.test/";
+  const bounded = withTargets((targets) => {
+    targets[firstConsumer(targets)].listing.sourceUrl =
+      `${prefix}${"a".repeat(512 - prefix.length)}`;
+    return targets;
+  });
+  const page = await run(bounded);
+
+  assert.ok(card(page, /Warframe Void Fissures/u));
+});
+
 test("French UI falls back to English copy rather than a non-English declared default", async () => {
   const germanDefault = withTargets((targets) => {
     const widget = targets.find((target) => target.manifest.kind === "widget");
@@ -471,6 +504,12 @@ const invalidCatalogs = [
     targets[firstConsumer(targets)].listing.sourceUrl = "http://example.test/source";
     return targets;
   }), {}],
+  ["513-byte ASCII source URL", withTargets((targets) => {
+    const prefix = "https://example.test/";
+    targets[firstConsumer(targets)].listing.sourceUrl =
+      `${prefix}${"a".repeat(513 - prefix.length)}`;
+    return targets;
+  }), {}],
   ["wrong object origin", withTargets((targets) => {
     const target = targets[firstConsumer(targets)];
     target.packageUrl = target.packageUrl.replace(DEVELOPMENT_BASE, "https://example.test/");
@@ -512,6 +551,22 @@ const invalidCatalogs = [
   ["duplicate available locales", withTargets((targets) => {
     const target = targets[firstConsumer(targets)];
     target.manifest.availableLocales[1] = "en";
+    return targets;
+  }), {}],
+  ["missing English locale", withTargets((targets) => {
+    const target = targets[firstConsumer(targets)];
+    target.manifest.defaultLocale = "fr";
+    target.manifest.availableLocales = ["fr"];
+    target.listing.localizations = target.listing.localizations.filter(
+      (entry) => entry.locale === "fr",
+    );
+    return targets;
+  }), {}],
+  ["listing locale subset", withTargets((targets) => {
+    const target = targets[firstConsumer(targets)];
+    target.listing.localizations = target.listing.localizations.filter(
+      (entry) => entry.locale === "en",
+    );
     return targets;
   }), {}],
   ["more than 32 Steam scopes", withTargets((targets) => {

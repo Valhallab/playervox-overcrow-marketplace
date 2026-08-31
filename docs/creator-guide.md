@@ -52,17 +52,19 @@ filesystem, process, raw input, game-memory, or clipboard-read access.
 Manifests and listings are each limited to 64 KiB; components to 4 MiB;
 packages to 16 MiB and 64 entries; raster assets to 8 MiB compressed and
 32 MiB decoded in total; and a preview to 256 KiB. A manifest can declare up
-to 32 locales, games, and dependencies, up to 16 HTTPS hosts, and a listing
-can expose up to 16 localized entries. Declare the exact `availableLocales`,
-including the required `defaultLocale`. The host chooses the application
-locale when available and otherwise uses the default; missing strings also
-fall back to that default. Official Warframe packages provide `en` and `fr`.
+to 32 locales, games, and dependencies and up to 16 HTTPS hosts. A listing
+must provide exactly one entry for every declared locale, and its canonical
+HTTPS source URL is limited to 512 ASCII bytes. Declare the exact
+`availableLocales`, including both `en` and the required `defaultLocale`. The
+host chooses the application locale when available and otherwise uses the
+default; missing strings also fall back to that default. Official Warframe
+packages provide `en` and `fr`.
 
-Community submissions require complete English metadata. Translations are
-optional. Declare every supplied language exactly in the manifest, keep the
-default complete, and use `LocalizedText` for exact-locale selection with
-default fallback. The marketplace always displays the available locale list;
-see the [localization policy](localization.md).
+Community submissions require complete English metadata. Other translations
+are optional. Declare every supplied language exactly in the manifest and
+listing, keep the default complete, and use `LocalizedText` for exact-locale
+selection with default fallback. The marketplace always displays the available
+locale list; see the [localization policy](localization.md).
 
 The Control Center can install a local package only after an explicit
 unverified-development confirmation. Local packages receive the same manifest,

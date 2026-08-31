@@ -770,7 +770,10 @@ mod tests {
         "author":"PlayerVox",
         "spdxLicense":"AGPL-3.0-only",
         "sourceUrl":"https://github.com/PlayerVox/playervox-overcrow-marketplace",
-        "localizations":[{"locale":"en","name":"Hello","description":"Safe"}],
+        "localizations":[
+            {"locale":"en","name":"Hello","description":"Safe"},
+            {"locale":"fr","name":"Bonjour","description":"Safe French"}
+        ],
         "previewFile":"preview.png"
     }"#;
 

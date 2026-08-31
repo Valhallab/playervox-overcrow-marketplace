@@ -21,8 +21,6 @@ jobs:
           rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
           rustup default 1.98.0
           rustup target add --toolchain 1.98.0 wasm32-wasip2
-          cd "${RUNNER_TEMP:?}"
-          cargo install wasm-tools --version 1.245.1 --locked
           sudo apt-get update
           sudo apt-get install --yes bubblewrap shellcheck
       - name: Verify through the reviewed base

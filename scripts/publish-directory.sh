@@ -440,7 +440,8 @@ if test -n "$prior_identity" \
     exit 1
 fi
 
-# Finalization is still rollback-capable until the prior tree has been removed.
+# Commit the verified live tree once its empty wrapper has been removed. Prior
+# retirement is cleanup from this point and must never roll back the new tree.
 mutation_active=1
 if ! remove_owned_directory "$next_public" "$next_wrapper_identity" \
         finalize-next.0 "$hook_next"; then
@@ -450,6 +451,7 @@ if ! remove_owned_directory "$next_public" "$next_wrapper_identity" \
 fi
 next_wrapper_identity=''
 next_tree_identity=''
+transaction=committed
 if test -n "$prior_identity"; then
     if ! path_has_identity "$public" "$public_new_identity" \
             || ! path_has_identity "$previous_public" "$prior_identity" \
@@ -460,6 +462,5 @@ if test -n "$prior_identity"; then
         exit 1
     fi
 fi
-transaction=committed
 mutation_active=0
 abort_if_interrupted

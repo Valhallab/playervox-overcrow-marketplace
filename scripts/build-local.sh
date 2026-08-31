@@ -36,14 +36,12 @@ tool_work="$stage/trusted-tool"
 /usr/bin/install -d -m 0700 "$tool_work"
 trusted_tool=$(sh "$script_dir/prepare-marketplace-tool.sh" \
     "$repo_root" "$tool_work")
-cargo run --manifest-path "$repo_root/tools/marketplace-tool/Cargo.toml" \
-    --locked --quiet -- build \
+"$trusted_tool" build \
     --repository "$source_root" \
     --generated-at 2026-08-27T00:00:00Z \
     --expires-at 2036-08-27T00:00:00Z \
     --development-key
-cargo run --manifest-path "$repo_root/tools/marketplace-tool/Cargo.toml" \
-    --locked --quiet -- verify "$source_root/public/marketplace/v1/catalog.json"
+"$trusted_tool" verify "$source_root/public/marketplace/v1/catalog.json"
 
 if test ! -d "$source_root/public" || test -L "$source_root/public"; then
     printf '%s\n' 'error: generated catalog tree is unavailable or unsafe' >&2
