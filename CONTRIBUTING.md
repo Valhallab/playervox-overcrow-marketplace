@@ -1,9 +1,10 @@
 # Contributing
 
-Public arbitrary package submissions are not accepted yet. The initial local
-proof of concept is maintainer-authored while the sandbox and publication
-process undergo a separate security audit. This policy will be updated before
-any public intake opens.
+Reviewed community package submissions are accepted. Work in a fork or
+short-lived branch, place one source tree at
+`community/<publisher>/<widget-id>/`, complete the widget submission template,
+and open a pull request to `candidate`. See the
+[community submission contract](community/README.md) for the required tree.
 
 By submitting repository tooling or official widget source, you agree to
 license your contribution under `AGPL-3.0-only` and confirm that you are
@@ -21,13 +22,20 @@ Every proposed package must declare:
 7. its exact game scope;
 8. every dependency by immutable ID, version, and digest.
 
-The default locale is mandatory; additional translations are optional for
-community creators. Available languages must remain visible on the listing.
+English metadata is mandatory. Additional translations are optional, and the
+manifest must list every locale actually supplied so the marketplace can show
+the exact available languages.
 
-Before a package can enter a catalog, automated checks and the complete
-[review policy](docs/review-policy.md) must pass, followed by explicit human
-maintainer approval and signing. Passing automation is not a security audit or
-an entitlement to publication.
+CI produces read-only automated evidence, then a maintainer applies the
+complete [review policy](docs/review-policy.md) to the exact revision. Merge to
+`candidate` records review acceptance but does not publish the package. A
+separate maintainer-owned offline promotion is required; creators never receive
+signing or deployment credentials. Updates repeat the applicable review.
+
+Test a local `.ocpkg` through the Control Center's explicit unverified flow. It
+must install disabled, remain disabled until enabled by the user, and uninstall
+with unreferenced dependencies and private data removed. The website cannot
+install packages.
 
 Keep changes focused and run:
 

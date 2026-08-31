@@ -2,6 +2,9 @@
 
 Every catalog entry requires both automated validation and explicit human
 maintainer approval. Automation is evidence, not a security certification.
+Submissions live at `community/<publisher>/<widget-id>/` and target
+`candidate`. CI has read-only repository access and no credential or signing
+authority.
 
 Reviewers must verify:
 
@@ -37,6 +40,10 @@ Review fails closed on missing evidence, ambiguous ownership, mutable sources,
 unreviewed capability expansion, unknown files, or inconsistent metadata. A
 later update repeats the applicable review; prior approval does not cover new
 code or permissions.
+
+Merge into `candidate` records review acceptance only. Publication is a later
+offline maintainer promotion of an exact accepted revision; creators never
+receive the catalog signing key or deployment authority.
 
 Suspension and revocation use newly signed, monotonically newer catalog data.
 No reviewer may edit an installed user's registry or advise bypassing host

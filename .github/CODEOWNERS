@@ -1,0 +1,11 @@
+# Repository-owner fallback. Replace @Valhallab with a validated dedicated
+# maintainer team when that team exists in the repository organization.
+/marketplace/ @Valhallab
+/scripts/ @Valhallab
+/tools/ @Valhallab
+/.github/ @Valhallab
+/published/ @Valhallab
+/SECURITY.md @Valhallab
+/docs/permissions.md @Valhallab
+/docs/publishing.md @Valhallab
+/docs/review-policy.md @Valhallab

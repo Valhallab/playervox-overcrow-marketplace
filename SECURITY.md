@@ -13,12 +13,18 @@ keys, or provider payloads.
 Coordinated disclosure is appreciated. The project does not currently offer a
 bug bounty or guarantee a response deadline.
 
-## Launch and incident boundary
+## Submission and publication boundary
 
-Arbitrary public submissions and production publication remain disabled until
-a separate security audit, fuzzing, dependency review, supported-distribution
-sandbox validation, key-operations procedure, and incident runbook are
-complete.
+Community pull requests run in CI with read-only repository permissions and no
+signing key, token, deployment credential, production sequence state, or other
+publication authority. Creators never receive signing authority. Automation is
+evidence for a separate human review, and acceptance into `candidate` does not
+publish a package. Production signing and promotion remain offline maintainer
+operations against an exact reviewed revision.
+
+The marketplace website cannot install software. The Control Center validates
+packages and user consent; local unverified packages install disabled and stay
+disabled until explicitly enabled.
 
 If a listed package is suspected of compromise, maintainers may publish a
 signed suspension or revocation in a newer monotonic catalog. Clients must

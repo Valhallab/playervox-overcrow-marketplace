@@ -58,15 +58,30 @@ including the required `defaultLocale`. The host chooses the application
 locale when available and otherwise uses the default; missing strings also
 fall back to that default. Official Warframe packages provide `en` and `fr`.
 
-Translations beyond the declared default locale are optional. Declare the
-exact available languages in the manifest, keep the default complete, and use
-`LocalizedText` for exact-locale selection with default fallback. See the
-[localization policy](localization.md).
+Community submissions require complete English metadata. Translations are
+optional. Declare every supplied language exactly in the manifest, keep the
+default complete, and use `LocalizedText` for exact-locale selection with
+default fallback. The marketplace always displays the available locale list;
+see the [localization policy](localization.md).
 
 The Control Center can install a local package only after an explicit
 unverified-development confirmation. Local packages receive the same manifest,
 archive, and sandbox validation as signed packages and remain disabled until
-the user enables them.
+the user enables them. The website never installs packages.
+
+## Submit for review
+
+Place the complete source tree at `community/<publisher>/<widget-id>/`, work
+from a fork or short-lived branch, and open a pull request to `candidate` using
+the widget submission template. Include tests, preview, licenses, provenance,
+capability reasons, exact HTTPS hosts, game scope, dependencies, and every
+available locale. Read-only CI supplies automated evidence; a maintainer
+reviews the exact revision. Merge acceptance does not publish the widget.
+Publication is a later offline promotion, and every update is reviewed again.
+
+The Rust SDK is the current authoring path. A later visual builder will target
+the same manifest, component, capability, and review contracts rather than a
+separate trust path.
 
 For local catalog development, build all components, run
 `scripts/build-local.sh`, verify `public/marketplace/v1/catalog.json`, then

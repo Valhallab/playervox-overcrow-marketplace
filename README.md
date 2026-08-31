@@ -1,6 +1,6 @@
 # OverCrow Widget Marketplace
 
-This independent repository will contain the local-first marketplace, creator
+This independent repository contains the local-first marketplace, creator
 SDK, documentation, build tooling, and external widget sources for PlayerVox
 OverCrow. Application and overlay code remain in the OverCrow repository.
 
@@ -21,18 +21,28 @@ scripts/build-local.sh
 cargo run -p marketplace-tool --locked -- verify public/marketplace/v1/catalog.json
 ```
 
-The generated `/public` directory is ignored and reproducible. The build
-temporarily stages each `component.wasm` beside its package metadata and
-removes it before exiting; source package directories must never retain or
-commit those binaries. Serve `/public` through a local loopback HTTP server to
-browse the catalog. The static site uses English by default and has a French
-language switch. It uses no remote resources and is labelled
-**Development - unverified**.
+The generated `/public` directory is ignored and reproducible. The build stages
+component binaries privately and never retains them in source package
+directories. Serve `/public` through a local loopback HTTP server to browse the
+catalog. The static site uses English by default, offers French application
+copy, loads no remote resources, and is labelled **Development - unverified**.
+It displays catalog information only; installation happens in the Control
+Center. A local unverified `.ocpkg` installs disabled and remains disabled until
+the user enables it.
 
-This repository does not deploy a public catalog, accept arbitrary public
-submissions, provide production signing material, or make any security
-certification. Those steps remain gated on human review, application
-integration, and explicit maintainer authorization.
+Reviewed community submissions are accepted under
+[`community/<publisher>/<widget-id>/`](community/README.md) through pull
+requests to `candidate`. Automated checks provide evidence and a maintainer
+reviews the exact source, capabilities, dependencies, license, and provenance.
+Merge acceptance is not publication; a later maintainer-owned offline release
+promotes an accepted revision without giving creators signing authority.
+
+The public deployment contract uses <https://overcrow.playervox.com/> for the
+landing page, <https://overcrow.playervox.com/marketplace/> for browsing, and
+<https://overcrow.playervox.com/marketplace/v1/catalog.json> for the catalog.
+Production catalogs expire after exactly 30 days and are republished at least
+every 14 days. A visual builder can produce the same reviewed package format in
+a later milestone; the current creator path is the Rust SDK and source review.
 
 Local development catalogs are signed only with a clearly labelled development
 fixture key and accepted only by debug OverCrow builds. Production
@@ -42,6 +52,7 @@ logs, CI output, or temporary files.
 ## Contributing
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md), the
+[community submission contract](community/README.md), the
 [review policy](docs/review-policy.md), and the
 [security policy](SECURITY.md) before proposing content. Run:
 

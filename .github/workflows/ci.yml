@@ -3,7 +3,7 @@ name: marketplace-ci
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [master, candidate]
 
 permissions:
   contents: read
@@ -15,19 +15,57 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Enforce pull request publication boundary
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          if test "${#BASE_SHA}" -ne 40 || test "${#HEAD_SHA}" -ne 40; then
+            printf '%s\n' 'error: pull request commit metadata is missing' >&2
+            exit 1
+          fi
+          case "${BASE_SHA}${HEAD_SHA}" in
+            *[!0-9a-f]*)
+              printf '%s\n' 'error: pull request commit metadata is malformed' >&2
+              exit 1
+              ;;
+          esac
+          base_commit="${BASE_SHA}^{commit}"
+          head_commit="${HEAD_SHA}^{commit}"
+          git cat-file -e "$base_commit"
+          git cat-file -e "$head_commit"
+          trusted_gate=$(/usr/bin/mktemp -- "${RUNNER_TEMP}/publication-gate.XXXXXXXXXX")
+          changed_paths=$(/usr/bin/mktemp -- "${RUNNER_TEMP}/published-paths.XXXXXXXXXX")
+          cleanup() { /usr/bin/rm -f -- "$trusted_gate" "$changed_paths"; }
+          trap cleanup EXIT HUP INT TERM
+          git show "$BASE_SHA:tests/reject-published-change.sh" >"$trusted_gate"
+          git diff --name-only -z --no-renames "$BASE_SHA" "$HEAD_SHA" -- >"$changed_paths"
+          sh "$trusted_gate" pull_request "$REPOSITORY" \
+            "$BASE_REF" "$HEAD_REPOSITORY" "$HEAD_REF"
+          /usr/bin/xargs -0 -r -- sh "$trusted_gate" \
+            pull_request "$REPOSITORY" "$BASE_REF" "$HEAD_REPOSITORY" \
+            "$HEAD_REF" <"$changed_paths"
       - name: Install toolchain and checks
         run: |
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-          rustup default stable
-          rustup target add wasm32-wasip2
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          rustup default 1.98.0
+          rustup target add --toolchain 1.98.0 wasm32-wasip2
           cargo install wasm-tools --version 1.245.1 --locked
           sudo apt-get update
-          sudo apt-get install --yes shellcheck
+          sudo apt-get install --yes bubblewrap shellcheck
       - name: Format, lint, and test
         run: |
           cargo fmt --all -- --check
           cargo clippy --workspace --all-targets --locked -- -D warnings
           cargo test --workspace --all-targets --locked
+      - name: Run component sandbox canary
+        run: sh tests/sandbox-component-build-smoke.sh
       - name: Build and inspect all components
         run: |
           cargo build --release --target wasm32-wasip2 --locked \
@@ -60,6 +98,8 @@ jobs:
           scripts/build-local.sh
           diff --recursive --no-dereference "${RUNNER_TEMP}/public-first" public
           cargo run -p marketplace-tool --locked -- verify public/marketplace/v1/catalog.json
+          node --test tests/landing/*.test.mjs
+          node tests/site-runtime.test.js public/marketplace/v1/catalog.json
           cargo test -p marketplace-tool --test marketplace \
             catalog::generated_catalog_has_five_visible_packages_and_one_hidden_provider --locked -- --exact
           cargo test -p marketplace-tool --test marketplace \
@@ -68,6 +108,7 @@ jobs:
             site::marketplace_site_is_localized_dom_safe_and_hides_providers --locked -- --exact
       - name: Policy and shell checks
         run: |
+          sh tests/ci-policy-smoke.sh
           scripts/check-policy.sh
           sh tests/check-policy-smoke.sh
           shellcheck scripts/*.sh tests/*.sh

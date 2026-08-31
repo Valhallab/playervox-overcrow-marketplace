@@ -43,3 +43,18 @@ files, and remapped source paths for reproducible package builds. Validate the
 manifest with the matching OverCrow parser and confirm that its capabilities
 are exactly the commands the widget can emit. Local test fixtures must never
 contain production signing material.
+
+Before opening a widget pull request, also run:
+
+```sh
+scripts/check-policy.sh
+sh tests/check-policy-smoke.sh
+sh tests/ci-policy-smoke.sh
+sh tests/sandbox-component-build-smoke.sh
+sh -n scripts/*.sh tests/*.sh
+```
+
+CI repeats the repository suites with read-only permissions, no credentials,
+the sandbox canary, both static-site suites, and two deterministic local builds.
+Its results are review evidence, not publication authority or live desktop/game
+acceptance.
