@@ -90,6 +90,19 @@ write_path 'community/example/hello-widget/src/lib.rs' "$changed_paths"
 accepted_plan="$scratch/accepted-plan.tsv"
 community_plan "$fixture" "$changed_paths" >"$accepted_plan"
 
+nested_fixture="$scratch/nested-repository"
+/usr/bin/cp -R -- "$fixture" "$nested_fixture"
+/usr/bin/mv -- "$nested_fixture/widgets/warframe-status" \
+    "$nested_fixture/community/example/hello-widget/nested"
+/usr/bin/sed -i \
+    's|"widgets/warframe-status"|"community/example/hello-widget/nested"|' \
+    "$nested_fixture/Cargo.toml" "$nested_fixture/marketplace/targets.json"
+/usr/bin/sed -i \
+    -e 's|../../sdk/rust/overcrow-widget-sdk|../../../../sdk/rust/overcrow-widget-sdk|' \
+    -e 's|../warframe-data|../../../../widgets/warframe-data|' \
+    "$nested_fixture/community/example/hello-widget/nested/Cargo.toml"
+expect_gate_reject "$nested_fixture" "$changed_paths"
+
 printf '%s\n' '[]' >"$fixture/marketplace/targets.json"
 write_path 'docs/readme.md' "$changed_paths"
 expect_gate_reject "$fixture" "$changed_paths"

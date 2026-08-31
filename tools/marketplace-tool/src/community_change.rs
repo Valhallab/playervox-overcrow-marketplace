@@ -49,10 +49,21 @@ pub(crate) fn validate(
         }
     }
 
-    let sources: BTreeSet<_> = targets
-        .iter()
-        .map(|target| target.source_directory())
-        .collect();
+    let mut sources = BTreeSet::new();
+    for target in targets {
+        let source = target.source_directory();
+        if source.starts_with("community/") {
+            let mut parts = source.split('/');
+            if parts.next() != Some("community")
+                || !parts.next().is_some_and(valid_identifier)
+                || !parts.next().is_some_and(valid_identifier)
+                || parts.next().is_some()
+            {
+                return Err(());
+            }
+        }
+        sources.insert(source);
+    }
     for root in roots {
         let submission = repository.join(&root);
         match fs::symlink_metadata(&submission) {
