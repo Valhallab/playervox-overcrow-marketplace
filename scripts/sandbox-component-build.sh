@@ -258,7 +258,9 @@ run_sandboxed_build() {
                 /usr/bin/tar --create --format=ustar --file=/artifact-export -- "$@"
             '
 }
-if ! run_sandboxed_build </dev/null >/dev/null 2>/dev/null; then
+# Candidate compiler output is discarded inside the sandbox. Keep trusted
+# launcher diagnostics visible so host capability failures remain actionable.
+if ! run_sandboxed_build </dev/null >/dev/null; then
     printf '%s\n' 'error: sandboxed component build failed' >&2
     exit 1
 fi
