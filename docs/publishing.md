@@ -1,26 +1,41 @@
 # Publishing
 
 Community intake is open through pull requests to `candidate`, but merge
-acceptance is not publication and makes no security certification. Read-only
-hosted CI provides static admission evidence without executing submitted code.
+acceptance is not publication and makes no security certification.
+Minimal-permission hosted CI provides static admission evidence without
+executing submitted code.
 Human maintainers run the complete sandboxed gate on the exact revision, and a
 later repository-local `release/*` pull request to `master` may carry output
 from the offline publisher. Creators receive no signing or deployment
 credentials.
 
-This repository supplies the read-only check and CODEOWNERS declarations, but
-GitHub branch protection, the required check, and required CODEOWNER review are
-separate operational configuration. Until those controls are configured, CI
-output is evidence rather than stand-alone enforcement of merge policy.
+This repository supplies the minimal-permission check and CODEOWNERS
+declarations, but GitHub branch protection, the required check, and required
+CODEOWNER review are separate operational configuration. Until those controls
+are configured, CI output is evidence rather than stand-alone enforcement of
+merge policy.
+
+Configure `overcrow/marketplace-admission/candidate` as the required status for
+`candidate`, and `overcrow/marketplace-admission/master` for `master`. Use
+strict required status checks so the reviewed head must also be current with
+its target branch, and require GitHub Actions as the status source when the
+ruleset UI offers that restriction. The trusted `pull_request_target` workflow
+serializes runs for the same pull request, publishes `pending` before
+validation, then publishes the final result on the exact reviewed head.
+Reporting jobs have only `statuses: write`; the verification job has only
+`contents: read`. Neither permission can merge, publish, deploy, or sign a
+package.
 
 The `pull_request_target` job definition comes from the default branch. It does
 not check out the proposed revision: it obtains the exact head through the
 fixed public repository URL, verifies the expected commit, and treats that Git
 object only as input data. The job materializes bounded private base and
 candidate snapshots, compiles the exact target-base marketplace validator
-offline, and admits candidate metadata and repository policy through reviewed
-parsers. It exits before production staging, compilation, tests, or any other
-candidate execution. Changes under `.github/`, `scripts`, `tests`, or `tools`
+offline, and admits candidate Cargo/target metadata and repository policy
+through reviewed parsers. It exits before production staging,
+package-manifest validation, compilation, tests, or any other candidate
+execution. The complete maintainer gate validates package manifests and
+listings before merge. Changes under `.github/`, `scripts`, `tests`, or `tools`
 are rejected by this path until a maintainer lands those trusted bytes
 separately. The first rollout of a new trusted driver therefore fails closed
 until that driver exists in the base commit; CI never falls back to a copy from

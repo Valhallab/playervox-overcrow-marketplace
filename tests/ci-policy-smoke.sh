@@ -21,6 +21,7 @@ review_gate="$repo_root/scripts/review-revision.sh"
 node_resolver="$repo_root/scripts/resolve-system-node.sh"
 codeowners="$repo_root/.github/CODEOWNERS"
 testing_doc="$repo_root/docs/testing.md"
+publishing_doc="$repo_root/docs/publishing.md"
 
 for owned_path in \
         '/tests/reject-published-change.sh @Valhallab' \
@@ -120,6 +121,7 @@ require_line 'branches: [master, candidate]'
 require_line 'pull_request_target:'
 require_line 'timeout-minutes: 15'
 require_line 'contents: read'
+require_line 'statuses: write'
 require_line 'persist-credentials: false'
 require_line 'rustup toolchain install 1.98.0'
 require_line 'rustup target add --toolchain 1.98.0 wasm32-wasip2'
@@ -150,6 +152,86 @@ require_line 'sandbox-review-checks.sh" site'
 require_line 'diff --recursive --no-dereference'
 require_line '--unshare-all --share-net'
 require_line 'CARGO_NET_OFFLINE=true'
+
+if ! /usr/bin/awk '
+        /^  pending:$/ { section = "pending"; pending_job = NR; next }
+        /^  verify:$/ { section = "verify"; verify_job = NR; next }
+        /^  report:$/ { section = "report"; report_job = NR; next }
+        /name: Mark head admission pending/ { pending_step = NR }
+        /name: Admit through the reviewed base/ { admission_step = NR }
+        /name: Publish head admission status/ { report_step = NR }
+        /uses: actions\/checkout@/ {
+            checkouts += 1
+            if (section != "verify") invalid = 1
+        }
+        /^      statuses: write$/ {
+            status_permissions += 1
+            if (section != "pending" && section != "report") invalid = 1
+        }
+        /^      contents: read$/ {
+            content_permissions += 1
+            if (section != "verify") invalid = 1
+        }
+        /GITHUB_TOKEN: \$\{\{ github[.]token \}\}/ {
+            tokens += 1
+            if (section == "verify") invalid = 1
+        }
+        /Authorization: Bearer \$\{GITHUB_TOKEN:[?]\}/ {
+            authorizations += 1
+            if (section == "verify") invalid = 1
+        }
+        /statuses\/\$HEAD_SHA/ { endpoints += 1 }
+        /state.*pending/ { pending_state = NR }
+        /ADMISSION_OUTCOME: \$\{\{ needs[.]verify[.]result \}\}/ {
+            outcome = NR
+        }
+        END {
+            exit !(pending_job > 0 && verify_job > pending_job \
+                && report_job > verify_job && pending_step > pending_job \
+                && pending_step < verify_job && admission_step > verify_job \
+                && admission_step < report_job && report_step > report_job \
+                && outcome > report_step && pending_state > pending_step \
+                && pending_state < verify_job && status_permissions == 2 \
+                && content_permissions == 1 && checkouts == 1 && tokens == 2 \
+                && authorizations == 2 && endpoints == 2 && invalid == 0)
+        }
+    ' "$workflow" \
+        || ! /usr/bin/grep -F -x -- 'permissions: {}' "$workflow" >/dev/null \
+        || ! /usr/bin/grep -F -x -- '    needs: pending' "$workflow" >/dev/null \
+        || ! /usr/bin/grep -F -x -- \
+            "    if: \${{ always() && (github.event_name == 'push' || needs.pending.result == 'success') }}" \
+            "$workflow" >/dev/null \
+        || ! /usr/bin/grep -F -x -- '    needs: [pending, verify]' \
+            "$workflow" >/dev/null \
+        || ! /usr/bin/grep -F -x -- \
+            "    if: \${{ always() && github.event_name == 'pull_request_target' }}" \
+            "$workflow" >/dev/null \
+        || ! /usr/bin/grep -F -x -- \
+            '  group: marketplace-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}' \
+            "$workflow" >/dev/null \
+        || ! /usr/bin/grep -F -x -- '  cancel-in-progress: false' \
+            "$workflow" >/dev/null \
+        || test "$(/usr/bin/grep -F -c -- 'GITHUB_TOKEN' "$workflow")" -ne 4 \
+        || test "$(/usr/bin/grep -F -c -- 'github.token' "$workflow")" -ne 2 \
+        || ! /usr/bin/grep -F -- '--max-time 30 --retry 0' \
+            "$workflow" >/dev/null \
+        || test "$(/usr/bin/grep -F -c -- \
+            'status_context=overcrow/marketplace-admission/candidate' \
+            "$workflow")" -ne 2 \
+        || test "$(/usr/bin/grep -F -c -- \
+            'status_context=overcrow/marketplace-admission/master' \
+            "$workflow")" -ne 2; then
+    printf '%s\n' 'error: CI does not report exact admission status on the reviewed head' >&2
+    exit 1
+fi
+
+if ! /usr/bin/grep -F -- \
+        '`overcrow/marketplace-admission/candidate`' "$publishing_doc" >/dev/null \
+        || ! /usr/bin/grep -F -- 'strict required status checks' \
+            "$publishing_doc" >/dev/null; then
+    printf '%s\n' 'error: required admission statuses are not documented as base-bound and strict' >&2
+    exit 1
+fi
 
 if ! /usr/bin/grep -F -x -- \
         '            "$private_root" admission' "$workflow" >/dev/null \
@@ -187,7 +269,7 @@ if ! /usr/bin/awk '
     exit 1
 fi
 if ! /usr/bin/awk '
-        /case "\$BASE_REF" in/ { base = NR }
+        /case "\$BASE_REF" in/ { if (number == 0) base = NR }
         /master \| candidate/ { base_scope = NR }
         /case "\$PR_NUMBER" in/ { number = NR }
         /if test "\$\{#PR_NUMBER\}" -gt 20/ { length_check = NR }
@@ -349,7 +431,7 @@ if /usr/bin/grep -Eq \
 fi
 
 if /usr/bin/grep -Eq \
-        'pull-requests: write|contents: write|id-token: write|secrets\.|github\.token|GITHUB_TOKEN|upload-artifact|deploy|[Cc]oolify|build-production\.sh|--private-key' \
+        'pull-requests: write|contents: write|id-token: write|secrets\.|upload-artifact|deploy|[Cc]oolify|build-production\.sh|--private-key' \
         "$workflow" "$ci_driver" "$sandbox_driver"; then
     printf '%s\n' 'error: CI has publication authority' >&2
     exit 1

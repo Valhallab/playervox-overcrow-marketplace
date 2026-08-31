@@ -6,13 +6,59 @@ on:
   push:
     branches: [master, candidate]
 
-permissions:
-  contents: read
+permissions: {}
+
+concurrency:
+  group: marketplace-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  pending:
+    if: ${{ github.event_name == 'pull_request_target' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      statuses: write
+    steps:
+      - name: Mark head admission pending
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if test "${#HEAD_SHA}" -ne 40; then
+            printf '%s\n' 'error: pull-request head is malformed' >&2
+            exit 1
+          fi
+          case "$HEAD_SHA" in
+            *[!0-9a-f]*)
+              printf '%s\n' 'error: pull-request head is malformed' >&2
+              exit 1
+              ;;
+          esac
+          case "$BASE_REF" in
+            candidate) status_context=overcrow/marketplace-admission/candidate ;;
+            master) status_context=overcrow/marketplace-admission/master ;;
+            *)
+              printf '%s\n' 'error: pull-request base is not trusted' >&2
+              exit 1
+              ;;
+          esac
+          payload="{\"state\":\"pending\",\"description\":\"Static admission is running\",\"context\":\"$status_context\"}"
+          /usr/bin/curl --fail-with-body --silent --show-error \
+            --max-time 30 --retry 0 -X POST \
+            -H 'Accept: application/vnd.github+json' \
+            -H "Authorization: Bearer ${GITHUB_TOKEN:?}" \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/Valhallab/playervox-overcrow-marketplace/statuses/$HEAD_SHA" \
+            --data-binary "$payload" --output /dev/null
   verify:
+    needs: pending
+    if: ${{ always() && (github.event_name == 'push' || needs.pending.result == 'success') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -136,3 +182,55 @@ jobs:
             "$PWD" "$TRUST_SHA" "$REVIEW_SHA" "$CI_EVENT" \
             "$REPOSITORY" "$BASE_REF" "$HEAD_REPOSITORY" "$HEAD_REF" \
             "$private_root" admission
+
+  report:
+    needs: [pending, verify]
+    if: ${{ always() && github.event_name == 'pull_request_target' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      statuses: write
+    steps:
+      - name: Publish head admission status
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ADMISSION_OUTCOME: ${{ needs.verify.result }}
+        run: |
+          if test "${#HEAD_SHA}" -ne 40; then
+            printf '%s\n' 'error: pull-request head is malformed' >&2
+            exit 1
+          fi
+          case "$HEAD_SHA" in
+            *[!0-9a-f]*)
+              printf '%s\n' 'error: pull-request head is malformed' >&2
+              exit 1
+              ;;
+          esac
+          case "$BASE_REF" in
+            candidate) status_context=overcrow/marketplace-admission/candidate ;;
+            master) status_context=overcrow/marketplace-admission/master ;;
+            *)
+              printf '%s\n' 'error: pull-request base is not trusted' >&2
+              exit 1
+              ;;
+          esac
+          case "$ADMISSION_OUTCOME" in
+            success)
+              status_state=success
+              status_description='Static admission passed'
+              ;;
+            *)
+              status_state=failure
+              status_description='Static admission failed'
+              ;;
+          esac
+          payload="{\"state\":\"$status_state\",\"description\":\"$status_description\",\"context\":\"$status_context\"}"
+          /usr/bin/curl --fail-with-body --silent --show-error \
+            --max-time 30 --retry 0 -X POST \
+            -H 'Accept: application/vnd.github+json' \
+            -H "Authorization: Bearer ${GITHUB_TOKEN:?}" \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/Valhallab/playervox-overcrow-marketplace/statuses/$HEAD_SHA" \
+            --data-binary "$payload" --output /dev/null

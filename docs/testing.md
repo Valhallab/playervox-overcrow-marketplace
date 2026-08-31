@@ -72,15 +72,20 @@ materializes the proposed revision from Git and invokes `ci-verify.sh` in
 `full` mode. Candidate compilation and tests run only inside the bounded
 sandboxes. Missing inputs or unsupported sandbox primitives fail closed.
 
-Hosted CI has read-only permissions. Its automatic `GITHUB_TOKEN` is limited to
-`contents: read` and is not persisted, and no repository or organization
-secret or publication credential is passed to a step. The job definition comes
-from the default branch. It fetches and verifies the exact proposed commit as
-data, without checking it out, then applies trusted-base metadata, path,
-manifest, and private-material admission. It exits before staging, compilation,
-tests, or any other candidate execution. This keeps public pull requests off a
-persistent self-hosted runner and avoids weakening confinement for
-GitHub-hosted kernels that reject Bubblewrap's required user namespace.
+Hosted CI uses split, minimal permissions. The verification job has only
+`contents: read`, and checkout does not persist its token. The pending and
+final reporter jobs have no checkout or content access; only they receive
+`statuses: write`, solely for the base-specific admission context on the exact
+reviewed pull-request head. No repository or organization secret or
+publication credential is passed to a step. The job definition comes from the
+default branch. It fetches and verifies the exact proposed commit as data,
+without checking it out, then applies trusted-base Cargo/target metadata, path,
+repository-policy, and private-material admission. It exits before staging,
+package-manifest validation, compilation, tests, or any other candidate
+execution. The complete maintainer gate validates package manifests and
+listings before merge. This keeps public pull requests off a persistent
+self-hosted runner and avoids weakening confinement for GitHub-hosted kernels
+that reject Bubblewrap's required user namespace.
 
 The full wrapper covers sandboxed native tests and builds, both static-site
 suites, deterministic output, and malicious fixtures. A maintainer records that

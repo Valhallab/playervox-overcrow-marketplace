@@ -15,24 +15,28 @@ bug bounty or guarantee a response deadline.
 
 ## Submission and publication boundary
 
-Community pull requests run in CI with read-only repository permissions. The
-automatic `GITHUB_TOKEN` is limited to `contents: read` and is not persisted;
-no repository or organization secret, signing key, deployment credential,
-production sequence state, or other publication authority is passed to a job
-step. Creators never receive signing authority. Automation is evidence for a
-separate human review, and acceptance into `candidate` does not publish a
-package. Production signing and promotion remain offline maintainer operations
-against an exact reviewed revision.
+Community pull requests run in CI with split, minimal permissions. The
+verification job has only `contents: read`; its automatic `GITHUB_TOKEN` is not
+persisted by checkout. Two separate jobs have no checkout or content access and
+receive only `statuses: write` to report the base-specific admission context on
+the exact reviewed pull-request head. No repository or organization secret,
+signing key, deployment credential, production sequence state, or other
+publication authority is passed to a job step. Creators never receive signing
+authority. Automation is evidence for a separate human review, and acceptance
+into `candidate` does not publish a package. Production signing and promotion
+remain offline maintainer operations against an exact reviewed revision.
 
 The hosted `pull_request_target` job definition comes from the default branch,
 not from the proposed revision. It fetches the exact pull-request head through
 the fixed public repository URL as a Git object, verifies its expected digest,
 and prepares its validator and drivers from the exact target-base commit. The
 proposed tree is treated only as data and is never selected as the Actions
-checkout or a shell-script source. Admission performs bounded metadata, path,
-manifest, and private-material checks, then exits before staging, compilation,
-tests, or any other candidate execution. A proposed root Cargo configuration
-fails admission; it is never used to prepare the validator.
+checkout or a shell-script source. Admission performs bounded Cargo/target
+metadata, path, repository-policy, and private-material checks, then exits
+before staging, package-manifest validation, compilation, tests, or any other
+candidate execution. A proposed root Cargo configuration fails admission; it
+is never used to prepare the validator. Package manifests and listings are
+validated later by the complete maintainer gate before merge.
 
 The maintainer's complete gate uses the same trusted-base boundary. Candidate
 format, lint, native tests, component builds, and web tests then run without
