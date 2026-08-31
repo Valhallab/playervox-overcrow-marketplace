@@ -80,6 +80,14 @@ jobs:
           /usr/bin/chmod 0700 "$bootstrap"
           trusted_root="$private_root/trusted"
           sh "$bootstrap" --bootstrap "$PWD" "$TRUST_SHA" "$trusted_root"
+          # A fresh runner has no Cargo registry cache. Populate it only from
+          # the reviewed snapshot; all candidate-facing builds remain offline.
+          (
+            CDPATH='' cd -- "$trusted_root"
+            /usr/bin/timeout --signal=TERM --kill-after=5 300 \
+              cargo fetch --locked \
+                --manifest-path tools/marketplace-tool/Cargo.toml
+          )
           if test ! -f "$trusted_root/scripts/ci-verify.sh" \
               || test -L "$trusted_root/scripts/ci-verify.sh"; then
             printf '%s\n' 'error: reviewed CI driver is unavailable' >&2
