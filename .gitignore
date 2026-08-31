@@ -4,6 +4,8 @@
 /.published-next.*
 /.published-previous.*
 /.worktrees/
+/.superpowers/
+/docs/superpowers/
 .env*
 *.key
 *.pem
