@@ -15,12 +15,14 @@ bug bounty or guarantee a response deadline.
 
 ## Submission and publication boundary
 
-Community pull requests run in CI with read-only repository permissions and no
-secret, signing key, deployment credential, production sequence state, or
-other publication authority. Creators never receive signing authority.
-Automation is evidence for a separate human review, and acceptance into
-`candidate` does not publish a package. Production signing and promotion remain
-offline maintainer operations against an exact reviewed revision.
+Community pull requests run in CI with read-only repository permissions. The
+automatic `GITHUB_TOKEN` is limited to `contents: read` and is not persisted;
+no repository or organization secret, signing key, deployment credential,
+production sequence state, or other publication authority is passed to a job
+step. Creators never receive signing authority. Automation is evidence for a
+separate human review, and acceptance into `candidate` does not publish a
+package. Production signing and promotion remain offline maintainer operations
+against an exact reviewed revision.
 
 The hosted `pull_request_target` job definition comes from the default branch,
 not from the proposed revision. It fetches the exact pull-request head through

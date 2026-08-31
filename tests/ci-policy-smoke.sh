@@ -162,6 +162,19 @@ if ! /usr/bin/grep -F -x -- '  pull_request_target:' "$workflow" >/dev/null \
     exit 1
 fi
 if ! /usr/bin/awk '
+        /^  pull_request_target:$/ { section = "pull"; next }
+        /^  push:$/ { section = "push"; next }
+        /^  [^ ]/ { section = "" }
+        /^    branches: \[master, candidate\]$/ {
+            if (section == "pull") pull_branches += 1
+            if (section == "push") push_branches += 1
+        }
+        END { exit !(pull_branches == 1 && push_branches == 1) }
+    ' "$workflow"; then
+    printf '%s\n' 'error: CI branch admission scope is not explicit' >&2
+    exit 1
+fi
+if ! /usr/bin/awk '
         /case "\$PR_NUMBER" in/ { number = NR }
         /if test "\$\{#PR_NUMBER\}" -gt 20/ { length_check = NR }
         /ci_git fetch --no-tags --no-write-fetch-head/ { fetch = NR }
@@ -192,15 +205,24 @@ fi
 
 if ! /usr/bin/awk '
         /current_head=/ { head = NR }
+        /if test "\$current_head" != "\$trust_sha"/ { head_reject = NR }
         /status_size=/ { clean = NR }
+        /if test "\$status_size" -gt 1048576/ { clean_reject = NR }
         /sh "\$bootstrap" --bootstrap/ { materialized = NR }
         /"\$cargo_path" fetch --locked/ { fetches += 1; fetch = NR }
         /sh "\$trusted_root\/scripts\/ci-verify[.]sh"/ { verify = NR }
         END {
-            exit !(head > 0 && clean > head && materialized > clean \
+            exit !(head > 0 && head_reject > head && clean > head_reject \
+                && clean_reject > clean && materialized > clean_reject \
                 && fetches == 1 && fetch > materialized && verify > fetch)
         }
     ' "$review_gate" \
+        || ! /usr/bin/grep -F -x -- \
+            'if test "$current_head" != "$trust_sha" || test "$resolved_review" != "$review_sha"; then' \
+            "$review_gate" >/dev/null \
+        || ! /usr/bin/grep -F -x -- \
+            'if test "$status_size" -gt 1048576 || test -s "$status_file"; then' \
+            "$review_gate" >/dev/null \
         || /usr/bin/grep -F -- 'cargo fetch' "$testing_doc" >/dev/null; then
     printf '%s\n' 'error: maintainer dependency bootstrap precedes trust checks' >&2
     exit 1

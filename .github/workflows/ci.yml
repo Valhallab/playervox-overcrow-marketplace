@@ -2,6 +2,7 @@ name: marketplace-ci
 
 on:
   pull_request_target:
+    branches: [master, candidate]
   push:
     branches: [master, candidate]
 
