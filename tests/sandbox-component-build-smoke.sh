@@ -104,7 +104,10 @@ printf '%s\n' \
     "    if env::var_os(\"HOME\").as_deref() != Some(std::ffi::OsStr::new(\"/home/build\")) { panic!(\"home leak\"); }" \
     "    if fs::read_dir(\"$parent_home\").is_ok() { panic!(\"host home leak\"); }" \
     '    let status = fs::read_to_string("/proc/self/status").expect("process status");' \
-    '    if !status.contains("CapEff:\t0000000000000000") || !status.contains("CapBnd:\t0000000000000000") || !status.contains("NoNewPrivs:\t1") { panic!("capability leak"); }' \
+    '    for capability in ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"] {' \
+    '        if !status.contains(&format!("{capability}:\t0000000000000000")) { panic!("capability leak"); }' \
+    '    }' \
+    '    if !status.contains("NoNewPrivs:\t1") { panic!("privilege escalation leak"); }' \
     '    if let Ok(entries) = fs::read_dir("/proc") {' \
     '        for entry in entries.flatten() {' \
     '            let path = entry.path().join("cmdline");' \

@@ -100,8 +100,9 @@ printf '%s\n' \
     '        );' \
     "        assert!(TcpStream::connect((\"127.0.0.1\", $port)).is_err());" \
     '        let status = fs::read_to_string("/proc/self/status").expect("process status");' \
-    '        assert!(status.contains("CapEff:\t0000000000000000"));' \
-    '        assert!(status.contains("CapBnd:\t0000000000000000"));' \
+    '        for capability in ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"] {' \
+    '            assert!(status.contains(&format!("{capability}:\t0000000000000000")));' \
+    '        }' \
     '        assert!(status.contains("NoNewPrivs:\t1"));' \
     '        assert!(fs::write("/source/canary/source-mutation", b"changed").is_err());' \
     '        let host_process_is_visible = fs::read_dir("/proc")' \

@@ -144,7 +144,7 @@ run_node_sandbox() {
             --cap-add CAP_SYS_ADMIN --cap-add CAP_SETPCAP --clearenv \
             --ro-bind /usr /usr \
             --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib /lib64 \
-            --dev /dev --tmpfs /tmp --dir /home \
+            --dir /proc --proc /proc --dev /dev --tmpfs /tmp --dir /home \
             --dir /workspace --dir /workspace/web \
             --ro-bind "$node_path" /node \
             --ro-bind "$tree" /tree \

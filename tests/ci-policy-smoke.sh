@@ -180,6 +180,12 @@ for resource_limited_runner in \
     fi
 done
 
+if ! /usr/bin/grep -F -- '--dir /proc --proc /proc' \
+        "$published_verifier" >/dev/null; then
+    printf '%s\n' 'error: published verifier does not expose isolated process status' >&2
+    exit 1
+fi
+
 if ! /usr/bin/awk '
         /\/usr\/bin\/timeout --signal=TERM --kill-after=5 30/ {
             timeout_line = NR

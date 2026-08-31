@@ -540,9 +540,17 @@ assert_fixed_failure advance "$fixture" "$secrets" \
 fixture=$(make_fixture success)
 secrets=$(make_secrets success)
 node_host_marker="/tmp/marketplace-node-sandbox-host-marker.$$"
+host_network_namespace=$(/usr/bin/readlink /proc/self/ns/net)
 /usr/bin/rm -f -- "$node_host_marker"
 printf '%s\n' \
     "fs.writeFileSync(\"$node_host_marker\", \"sandbox escape\");" \
+    'const sandboxStatus = fs.readFileSync("/proc/self/status", "utf8");' \
+    'for (const capability of ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"]) {' \
+    '  assert.match(sandboxStatus, new RegExp(`^${capability}:\\t0{16}$`, "m"));' \
+    '}' \
+    'assert.match(sandboxStatus, /^NoNewPrivs:\t1$/m);' \
+    "assert.notEqual(fs.readlinkSync(\"/proc/self/ns/net\"), \"$host_network_namespace\");" \
+    'assert.deepEqual(require("node:os").networkInterfaces(), {});' \
     >>"$fixture/tests/site-runtime.test.js"
 /usr/bin/git -C "$fixture" add tests/site-runtime.test.js
 /usr/bin/git -C "$fixture" commit --quiet -m 'sandboxed verifier fixture'
