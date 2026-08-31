@@ -20,6 +20,7 @@ trust_smoke="$repo_root/tests/ci-trust-boundary-smoke.sh"
 sandbox_review_smoke="$repo_root/tests/sandbox-review-checks-smoke.sh"
 review_gate="$repo_root/scripts/review-revision.sh"
 codeowners="$repo_root/.github/CODEOWNERS"
+testing_doc="$repo_root/docs/testing.md"
 
 for owned_path in \
         '/tests/reject-published-change.sh @Valhallab' \
@@ -114,9 +115,17 @@ require_line() {
 }
 
 require_line 'branches: [master, candidate]'
+require_line 'pull_request_target:'
+require_line 'timeout-minutes: 15'
 require_line 'contents: read'
 require_line 'persist-credentials: false'
 require_line 'rustup toolchain install 1.98.0'
+require_line 'rustup target add --toolchain 1.98.0 wasm32-wasip2'
+require_line 'PR_NUMBER: ${{ github.event.pull_request.number }}'
+require_line 'CI_EVENT=pull_request'
+require_line 'refs/pull/$PR_NUMBER/head:refs/overcrow-review/$REVIEW_SHA'
+require_line '--no-tags --no-write-fetch-head'
+require_line 'https://github.com/Valhallab/playervox-overcrow-marketplace.git'
 require_line 'tests/reject-published-change.sh'
 require_line 'tests/reject-trusted-change.sh'
 require_line 'scripts/materialize-git-snapshot.sh'
@@ -144,6 +153,28 @@ if ! /usr/bin/grep -F -x -- \
     printf '%s\n' 'error: hosted CI does not select static admission explicitly' >&2
     exit 1
 fi
+if ! /usr/bin/grep -F -x -- '  pull_request_target:' "$workflow" >/dev/null \
+        || /usr/bin/grep -F -x -- '  pull_request:' "$workflow" >/dev/null \
+        || /usr/bin/grep -F -- 'allow-unsafe-pr-checkout:' "$workflow" >/dev/null \
+        || /usr/bin/grep -E -- '^[[:space:]]+(ref|repository):' \
+            "$workflow" >/dev/null; then
+    printf '%s\n' 'error: pull-request admission workflow is candidate-controlled' >&2
+    exit 1
+fi
+if ! /usr/bin/awk '
+        /case "\$PR_NUMBER" in/ { number = NR }
+        /if test "\$\{#PR_NUMBER\}" -gt 20/ { length_check = NR }
+        /ci_git fetch --no-tags --no-write-fetch-head/ { fetch = NR }
+        /fetched_revision=\$\(ci_git rev-parse --verify/ { resolve = NR }
+        /if test "\$fetched_revision" != "\$REVIEW_SHA"/ { compare = NR }
+        END {
+            exit !(number > 0 && length_check > number && fetch > length_check \
+                && resolve > fetch && compare > resolve)
+        }
+    ' "$workflow"; then
+    printf '%s\n' 'error: pull-request object fetch is not bounded and verified' >&2
+    exit 1
+fi
 if ! /usr/bin/grep -F -- \
         'show "$trust_sha:scripts/materialize-git-snapshot.sh"' \
         "$review_gate" >/dev/null \
@@ -153,9 +184,25 @@ if ! /usr/bin/grep -F -- \
     exit 1
 fi
 if /usr/bin/grep -E \
-        'apt-get|bubblewrap|shellcheck|systemctl|wasm32-wasip2' \
+        'apt-get|bubblewrap|shellcheck|systemctl' \
         "$workflow" >/dev/null; then
     printf '%s\n' 'error: hosted admission installs or starts sandbox tooling' >&2
+    exit 1
+fi
+
+if ! /usr/bin/awk '
+        /current_head=/ { head = NR }
+        /status_size=/ { clean = NR }
+        /sh "\$bootstrap" --bootstrap/ { materialized = NR }
+        /cargo fetch --locked/ { fetches += 1; fetch = NR }
+        /sh "\$trusted_root\/scripts\/ci-verify[.]sh"/ { verify = NR }
+        END {
+            exit !(head > 0 && clean > head && materialized > clean \
+                && fetches == 1 && fetch > materialized && verify > fetch)
+        }
+    ' "$review_gate" \
+        || /usr/bin/grep -F -- 'cargo fetch' "$testing_doc" >/dev/null; then
+    printf '%s\n' 'error: maintainer dependency bootstrap precedes trust checks' >&2
     exit 1
 fi
 if ! /usr/bin/awk '
@@ -249,7 +296,7 @@ if /usr/bin/grep -Eq \
 fi
 
 if /usr/bin/grep -Eq \
-        'pull_request_target|pull-requests: write|contents: write|id-token: write|secrets\.|github\.token|GITHUB_TOKEN|upload-artifact|deploy|[Cc]oolify|build-production\.sh|--private-key' \
+        'pull-requests: write|contents: write|id-token: write|secrets\.|github\.token|GITHUB_TOKEN|upload-artifact|deploy|[Cc]oolify|build-production\.sh|--private-key' \
         "$workflow" "$ci_driver" "$sandbox_driver"; then
     printf '%s\n' 'error: CI has publication authority' >&2
     exit 1

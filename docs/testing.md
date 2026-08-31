@@ -59,25 +59,27 @@ sh -n scripts/*.sh tests/*.sh
 
 Creators may run those commands directly on code they authored. A maintainer
 must not run contributor code directly on the host. From a clean checkout of
-the exact trusted `candidate` base, first populate the pinned dependency cache,
-then run the reviewed full gate against the proposed Git object:
+the exact trusted `candidate` base, run the reviewed full gate against the
+proposed Git object:
 
 ```sh
-cargo fetch --locked --manifest-path tools/marketplace-tool/Cargo.toml
 scripts/review-revision.sh TRUST_SHA REVIEW_SHA
 ```
 
-The wrapper requires `HEAD` to equal `TRUST_SHA`, materializes both revisions
-from Git rather than the working tree, and invokes `ci-verify.sh` in `full`
-mode. Candidate compilation and tests then run only inside the bounded
-sandboxes. Missing cached inputs or unsupported sandbox primitives fail closed.
+The wrapper requires `HEAD` to equal `TRUST_SHA` and the checkout to be clean
+before it fetches pinned dependencies from the exact trusted snapshot. It then
+materializes the proposed revision from Git and invokes `ci-verify.sh` in
+`full` mode. Candidate compilation and tests run only inside the bounded
+sandboxes. Missing inputs or unsupported sandbox primitives fail closed.
 
-Hosted CI has read-only permissions and no credentials. It materializes the
-actual candidate tree and applies trusted-base metadata, path, manifest, and
-private-material admission, but exits before staging, compilation, tests, or
-any other candidate execution. This keeps public pull requests off a persistent
-self-hosted runner and avoids weakening confinement for GitHub-hosted kernels
-that reject Bubblewrap's required user namespace.
+Hosted CI has read-only permissions and no secrets or publication credentials.
+Its job definition comes from the default branch. It fetches and verifies the
+exact proposed commit as data, without checking it out, then applies
+trusted-base metadata, path, manifest, and private-material admission. It exits
+before staging, compilation, tests, or any other candidate execution. This
+keeps public pull requests off a persistent self-hosted runner and avoids
+weakening confinement for GitHub-hosted kernels that reject Bubblewrap's
+required user namespace.
 
 The full wrapper covers sandboxed native tests and builds, both static-site
 suites, deterministic output, and malicious fixtures. A maintainer records that

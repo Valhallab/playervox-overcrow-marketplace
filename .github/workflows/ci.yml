@@ -1,7 +1,7 @@
 name: marketplace-ci
 
 on:
-  pull_request:
+  pull_request_target:
   push:
     branches: [master, candidate]
 
@@ -11,6 +11,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -19,6 +20,7 @@ jobs:
       - name: Install pinned admission toolchain
         run: |
           rustup toolchain install 1.98.0 --profile minimal
+          rustup target add --toolchain 1.98.0 wasm32-wasip2
           rustup default 1.98.0
       - name: Admit through the reviewed base
         env:
@@ -28,16 +30,19 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           REPOSITORY: ${{ github.repository }}
           PUSH_REF: ${{ github.ref_name }}
           PUSH_SHA: ${{ github.sha }}
         run: |
           case "$EVENT_NAME" in
-            pull_request)
+            pull_request_target)
+              CI_EVENT=pull_request
               TRUST_SHA=$BASE_SHA
               REVIEW_SHA=$HEAD_SHA
               ;;
             push)
+              CI_EVENT=push
               TRUST_SHA=$PUSH_SHA
               REVIEW_SHA=$PUSH_SHA
               BASE_REF=$PUSH_REF
@@ -61,19 +66,48 @@ jobs:
                 ;;
             esac
           done
+          ci_git() {
+            /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
+              GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+              GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 \
+              /usr/bin/timeout --signal=TERM --kill-after=5 60 \
+              /usr/bin/prlimit --cpu=30 --as=1073741824 --nofile=128 \
+                --fsize=67108864 -- \
+              /usr/bin/git --no-replace-objects \
+                -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+                -c core.attributesFile=/dev/null -c core.excludesFile=/dev/null \
+                -c credential.helper= -c protocol.file.allow=never \
+                -c protocol.ext.allow=never -C "$PWD" "$@"
+          }
+          if test "$CI_EVENT" = pull_request; then
+            case "$PR_NUMBER" in
+              ''|*[!0-9]*)
+                printf '%s\n' 'error: pull-request metadata is malformed' >&2
+                exit 1
+                ;;
+            esac
+            if test "${#PR_NUMBER}" -gt 20; then
+              printf '%s\n' 'error: pull-request metadata is malformed' >&2
+              exit 1
+            fi
+            ci_git fetch --no-tags --no-write-fetch-head --force --depth=1 \
+              https://github.com/Valhallab/playervox-overcrow-marketplace.git \
+              "refs/pull/$PR_NUMBER/head:refs/overcrow-review/$REVIEW_SHA"
+            fetched_revision=$(ci_git rev-parse --verify \
+              "refs/overcrow-review/$REVIEW_SHA^{commit}" 2>/dev/null) \
+              || fetched_revision=''
+            if test "$fetched_revision" != "$REVIEW_SHA"; then
+              printf '%s\n' 'error: pull-request revision is unavailable' >&2
+              exit 1
+            fi
+          fi
           private_root=$(/usr/bin/mktemp -d "${RUNNER_TEMP:?}/marketplace-ci.XXXXXXXXXX")
           cleanup() {
             /usr/bin/rm -rf -- "$private_root"
           }
           trap cleanup EXIT HUP INT TERM
           bootstrap="$private_root/materialize-git-snapshot.sh"
-          /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
-            GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
-            GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 \
-            /usr/bin/git --no-replace-objects \
-              -c core.fsmonitor=false -c core.hooksPath=/dev/null \
-              -c core.attributesFile=/dev/null -c core.excludesFile=/dev/null \
-              show "$TRUST_SHA:scripts/materialize-git-snapshot.sh" >"$bootstrap"
+          ci_git show "$TRUST_SHA:scripts/materialize-git-snapshot.sh" >"$bootstrap"
           /usr/bin/chmod 0700 "$bootstrap"
           trusted_root="$private_root/trusted"
           sh "$bootstrap" --bootstrap "$PWD" "$TRUST_SHA" "$trusted_root"
@@ -91,6 +125,6 @@ jobs:
             exit 1
           fi
           sh "$trusted_root/scripts/ci-verify.sh" \
-            "$PWD" "$TRUST_SHA" "$REVIEW_SHA" "$EVENT_NAME" \
+            "$PWD" "$TRUST_SHA" "$REVIEW_SHA" "$CI_EVENT" \
             "$REPOSITORY" "$BASE_REF" "$HEAD_REPOSITORY" "$HEAD_REF" \
             "$private_root" admission

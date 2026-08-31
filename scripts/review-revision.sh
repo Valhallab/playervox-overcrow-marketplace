@@ -95,6 +95,15 @@ trusted_git show "$trust_sha:scripts/materialize-git-snapshot.sh" >"$bootstrap"
 trusted_root="$private_root/trusted"
 sh "$bootstrap" --bootstrap "$repo_root" "$trust_sha" "$trusted_root"
 
+# Populate the shared Cargo cache only after the checkout and exact trusted
+# snapshot have been validated. Candidate manifests are never passed to Cargo.
+(
+    CDPATH='' cd -- "$trusted_root"
+    /usr/bin/timeout --signal=TERM --kill-after=5 300 \
+        cargo fetch --locked \
+            --manifest-path tools/marketplace-tool/Cargo.toml
+)
+
 sh "$trusted_root/scripts/ci-verify.sh" \
     "$repo_root" "$trust_sha" "$review_sha" pull_request \
     Valhallab/playervox-overcrow-marketplace candidate \

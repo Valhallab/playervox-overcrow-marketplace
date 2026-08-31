@@ -11,15 +11,17 @@ credentials.
 This repository supplies the read-only check and CODEOWNERS declarations, but
 GitHub branch protection, the required check, and required CODEOWNER review are
 separate operational configuration. Until those controls are configured, CI
-output is evidence rather than stand-alone enforcement against a pull request
-that changes the workflow itself.
+output is evidence rather than stand-alone enforcement of merge policy.
 
-The pull-request job bootstraps only from the exact base commit. It materializes
-bounded private base and candidate snapshots, compiles the base marketplace
-validator offline, and admits candidate metadata and repository policy through
-reviewed parsers. It exits before production staging, compilation, tests, or
-any other candidate execution. Changes under `.github/`, `scripts`, `tests`, or
-`tools` are rejected by this path until a maintainer lands those trusted bytes
+The `pull_request_target` job definition comes from the default branch. It does
+not check out the proposed revision: it obtains the exact head through the
+fixed public repository URL, verifies the expected commit, and treats that Git
+object only as input data. The job materializes bounded private base and
+candidate snapshots, compiles the exact target-base marketplace validator
+offline, and admits candidate metadata and repository policy through reviewed
+parsers. It exits before production staging, compilation, tests, or any other
+candidate execution. Changes under `.github/`, `scripts`, `tests`, or `tools`
+are rejected by this path until a maintainer lands those trusted bytes
 separately. The first rollout of a new trusted driver therefore fails closed
 until that driver exists in the base commit; CI never falls back to a copy from
 the pull-request head.
