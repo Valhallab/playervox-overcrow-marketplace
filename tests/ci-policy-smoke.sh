@@ -132,6 +132,28 @@ require_line 'diff --recursive --no-dereference'
 require_line '--unshare-all --unshare-net'
 require_line 'CARGO_NET_OFFLINE=true'
 
+if ! /usr/bin/awk '
+        /CDPATH='"'"''"'"' cd -- "\$trusted_root"/ { trusted_root_line = NR }
+        /\/usr\/bin\/timeout --signal=TERM --kill-after=5 300/ {
+            timeout_line = NR
+        }
+        /cargo fetch --locked/ {
+            fetches += 1
+            if (trusted_root_line == 0 || timeout_line == 0 \
+                    || trusted_root_line >= timeout_line \
+                    || timeout_line >= NR || NR - trusted_root_line > 3) {
+                invalid = 1
+            }
+        }
+        /cargo[[:space:]]+fetch/ && $0 !~ /cargo fetch --locked/ {
+            invalid = 1
+        }
+        END { exit !(fetches == 1 && invalid == 0) }
+    ' "$workflow"; then
+    printf '%s\n' 'error: trusted dependency bootstrap is unsafe' >&2
+    exit 1
+fi
+
 if /usr/bin/grep -Eq \
         '(^|[[:space:]])(cargo|node|sh)[[:space:]]+(fmt|clippy|test|tests/|scripts/)' \
         "$workflow"; then
