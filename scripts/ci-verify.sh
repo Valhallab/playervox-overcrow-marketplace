@@ -183,8 +183,7 @@ projection_git -c user.name='Marketplace CI' \
 
 stage_parent="$work/stage"
 /usr/bin/install -d -m 0700 -- "$stage_parent"
-sh "$projection/scripts/stage-catalog-repository.sh" --mode production \
-    "$stage_parent/repository"
+sh "$projection/scripts/stage-catalog-repository.sh" --mode production --trusted-tool "$trusted_tool" "$stage_parent/repository"
 
 build_reviewed_catalog() {
     output=$1

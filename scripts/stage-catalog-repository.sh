@@ -2,15 +2,39 @@
 set -eu
 umask 077
 
-if test "$#" -ne 3 || test "$1" != "--mode"; then
-    printf '%s\n' 'usage: stage-catalog-repository.sh --mode development|production OUTPUT-REPOSITORY' >&2
+usage() {
+    printf '%s\n' \
+        'usage: stage-catalog-repository.sh --mode development OUTPUT-REPOSITORY | stage-catalog-repository.sh --mode production [--trusted-tool ABSOLUTE-TOOL] OUTPUT-REPOSITORY' >&2
+}
+
+if test "$#" -lt 3 || test "$1" != "--mode"; then
+    usage
     exit 2
 fi
 mode=$2
-output_repository=$3
 case "$mode" in
     development | production) ;;
     *) printf '%s\n' 'error: invalid staging mode' >&2; exit 1 ;;
+esac
+
+trusted_tool_argument=''
+shift 2
+case "$#" in
+    1)
+        output_repository=$1
+        ;;
+    3)
+        if test "$mode" != production || test "$1" != "--trusted-tool"; then
+            usage
+            exit 2
+        fi
+        trusted_tool_argument=$2
+        output_repository=$3
+        ;;
+    *)
+        usage
+        exit 2
+        ;;
 esac
 case "$output_repository" in
     /*) ;;
@@ -320,6 +344,29 @@ prepare_trusted_marketplace_tool() {
         "$repo_root" "$tool_work") || return 1
 }
 
+use_injected_trusted_marketplace_tool() {
+    tool=$1
+    case "$tool" in
+        /*) ;;
+        *) return 1 ;;
+    esac
+    tool_parent=$(/usr/bin/dirname -- "$tool") || return 1
+    test "$tool" != / \
+        && test -f "$tool" \
+        && test ! -L "$tool" \
+        && test -d "$tool_parent" \
+        && test ! -L "$tool_parent" \
+        && test "$(CDPATH='' cd -- "$tool_parent" && pwd -P)" = "$tool_parent" \
+        && test "$(/usr/bin/stat -c '%u:%a:%h' "$tool")" \
+            = "$(/usr/bin/id -u):700:1" \
+        && test "$(/usr/bin/stat -c '%u:%a' "$tool_parent")" \
+            = "$(/usr/bin/id -u):700" \
+        && test "$(/usr/bin/stat -c '%s' "$tool")" -gt 0 \
+        && test "$(/usr/bin/stat -c '%s' "$tool")" -le 268435456 \
+        || return 1
+    trusted_tool_binary=$tool
+}
+
 /usr/bin/install -d -m 0700 "$source_root" "$target_root"
 case "$mode" in
     development)
@@ -343,7 +390,12 @@ case "$mode" in
                 exit 1
             fi
         done
-        if ! prepare_trusted_marketplace_tool; then
+        if test -n "$trusted_tool_argument"; then
+            if ! use_injected_trusted_marketplace_tool "$trusted_tool_argument"; then
+                printf '%s\n' 'error: trusted marketplace tool is unavailable' >&2
+                exit 1
+            fi
+        elif ! prepare_trusted_marketplace_tool; then
             printf '%s\n' 'error: trusted marketplace tool is unavailable' >&2
             exit 1
         fi
