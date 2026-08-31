@@ -231,7 +231,9 @@ sh "$projection/scripts/sandbox-review-checks.sh" site \
 
 # These are reviewed base scripts. Community smoke remains a maintainer gate:
 # it intentionally exercises local development paths and never runs on PR data.
-sh "$projection/tests/ci-trust-boundary-smoke.sh"
+# The trust-boundary smoke receives the exact root and tool established above;
+# it must never bootstrap trust from the candidate-shaped projection.
+sh "$trusted_root/tests/ci-trust-boundary-smoke.sh" --trusted-root "$trusted_root" --trusted-tool "$trusted_tool"
 sh "$projection/tests/sandbox-review-checks-smoke.sh"
 sh "$projection/tests/sandbox-component-build-smoke.sh"
 sh "$projection/tests/ci-policy-smoke.sh"
