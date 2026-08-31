@@ -5,6 +5,7 @@ use std::{
     process::{Command, Output},
 };
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use image::{ExtendedColorType, ImageEncoder as _, codecs::png::PngEncoder};
 use ring::signature::{Ed25519KeyPair, KeyPair as _};
 use serde_json::Value;
@@ -728,6 +729,13 @@ fn cli_build_is_reproducible_and_verifies_its_complete_source() {
 
     let build = || development_build(fixture.path());
     assert!(build().success(), "first build");
+    let catalog_path = fixture.path().join("public/marketplace/v1/catalog.json");
+    let first = fs::read(&catalog_path).expect("first catalog");
+    let envelope: Value = serde_json::from_slice(&first).expect("catalog envelope");
+    let payload = URL_SAFE_NO_PAD
+        .decode(envelope["payload"].as_str().expect("catalog payload"))
+        .expect("catalog payload encoding");
+    let payload_sha256 = lower_hex(ring::digest::digest(&ring::digest::SHA256, &payload).as_ref());
     assert_eq!(
         fs::read(
             fixture
@@ -735,10 +743,9 @@ fn cli_build_is_reproducible_and_verifies_its_complete_source() {
                 .join("marketplace/development-catalog-state.json")
         )
         .expect("development state"),
-        b"{\"schemaVersion\":1,\"sequence\":1,\"payloadSha256\":\"2ab96a4bf6bb053c7864b01b00448a34182c87bd2f0a8b76c4dea06601a6c9f9\"}\n"
+        format!("{{\"schemaVersion\":1,\"sequence\":1,\"payloadSha256\":\"{payload_sha256}\"}}\n")
+            .as_bytes()
     );
-    let catalog_path = fixture.path().join("public/marketplace/v1/catalog.json");
-    let first = fs::read(&catalog_path).expect("first catalog");
 
     let packages_before = published_package_count(fixture.path());
     let mut changed: Value = serde_json::from_slice(&manifest_bytes).expect("manifest JSON");
@@ -1807,6 +1814,20 @@ fn prepare_fixture(repository: &Path, component: &Path) {
         )
         .expect("source fixture");
     }
+    let manifest_path = source.join("manifest.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&fs::read(&manifest_path).expect("fixture manifest bytes"))
+            .expect("fixture manifest JSON");
+    manifest["files"]["component"]["sha256"] = Value::String(lower_hex(
+        ring::digest::digest(
+            &ring::digest::SHA256,
+            &fs::read(component).expect("component fixture bytes"),
+        )
+        .as_ref(),
+    ));
+    let mut manifest_bytes = serde_json::to_vec_pretty(&manifest).expect("fixture manifest JSON");
+    manifest_bytes.push(b'\n');
+    fs::write(manifest_path, manifest_bytes).expect("fixture manifest");
     let development_key = "fixtures/keys/development-ed25519.key";
     fs::copy(
         Path::new(env!("CARGO_MANIFEST_DIR"))

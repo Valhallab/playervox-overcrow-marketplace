@@ -1,4 +1,4 @@
-use crate::catalog::{generated_catalog_fixture, repository_root};
+use crate::catalog::{generated_catalog_fixture, generated_public_root};
 
 #[test]
 fn generated_packages_match_catalog_digests_and_keep_provider_hidden() {
@@ -19,7 +19,7 @@ fn generated_packages_match_catalog_digests_and_keep_provider_hidden() {
         let relative = package_url
             .strip_prefix("http://127.0.0.1:8787/")
             .expect("loopback package URL");
-        let package = std::fs::read(repository_root().join("public").join(relative))
+        let package = std::fs::read(generated_public_root().join(relative))
             .expect("published package object");
         assert_eq!(
             ring::digest::digest(&ring::digest::SHA256, &package)

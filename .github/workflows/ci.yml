@@ -16,93 +16,78 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Install toolchain and checks
+      - name: Install pinned review tools
         run: |
           rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
           rustup default 1.98.0
           rustup target add --toolchain 1.98.0 wasm32-wasip2
+          cd "${RUNNER_TEMP:?}"
           cargo install wasm-tools --version 1.245.1 --locked
           sudo apt-get update
           sudo apt-get install --yes bubblewrap shellcheck
-      - name: Enforce pull request source boundaries
-        if: github.event_name == 'pull_request'
+      - name: Verify through the reviewed base
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPOSITORY: ${{ github.repository }}
+          PUSH_REF: ${{ github.ref_name }}
+          PUSH_SHA: ${{ github.sha }}
         run: |
-          if test "${#BASE_SHA}" -ne 40 || test "${#HEAD_SHA}" -ne 40; then
-            printf '%s\n' 'error: pull request commit metadata is missing' >&2
-            exit 1
-          fi
-          case "${BASE_SHA}${HEAD_SHA}" in
-            *[!0-9a-f]*)
-              printf '%s\n' 'error: pull request commit metadata is malformed' >&2
+          case "$EVENT_NAME" in
+            pull_request)
+              TRUST_SHA=$BASE_SHA
+              REVIEW_SHA=$HEAD_SHA
+              ;;
+            push)
+              TRUST_SHA=$PUSH_SHA
+              REVIEW_SHA=$PUSH_SHA
+              BASE_REF=$PUSH_REF
+              HEAD_REF=$PUSH_REF
+              HEAD_REPOSITORY=$REPOSITORY
+              ;;
+            *)
+              printf '%s\n' 'error: CI event metadata is missing' >&2
               exit 1
               ;;
           esac
-          base_commit="${BASE_SHA}^{commit}"
-          head_commit="${HEAD_SHA}^{commit}"
-          git cat-file -e "$base_commit"
-          git cat-file -e "$head_commit"
-          trusted_gate=$(/usr/bin/mktemp -- "${RUNNER_TEMP}/publication-gate.XXXXXXXXXX")
-          trusted_community_gate=$(/usr/bin/mktemp -- "${RUNNER_TEMP}/community-gate.XXXXXXXXXX")
-          changed_paths=$(/usr/bin/mktemp -- "${RUNNER_TEMP}/changed-paths.XXXXXXXXXX")
-          build_plan=$(/usr/bin/mktemp -- "${RUNNER_TEMP}/build-plan.XXXXXXXXXX")
+          for revision in "$TRUST_SHA" "$REVIEW_SHA"; do
+            if test "${#revision}" -ne 40; then
+              printf '%s\n' 'error: CI commit metadata is missing' >&2
+              exit 1
+            fi
+            case "$revision" in
+              *[!0-9a-f]*)
+                printf '%s\n' 'error: CI commit metadata is malformed' >&2
+                exit 1
+                ;;
+            esac
+          done
+          private_root=$(/usr/bin/mktemp -d "${RUNNER_TEMP:?}/marketplace-ci.XXXXXXXXXX")
           cleanup() {
-            /usr/bin/rm -f -- \
-              "$trusted_gate" "$trusted_community_gate" "$changed_paths" "$build_plan"
+            /usr/bin/rm -rf -- "$private_root"
           }
           trap cleanup EXIT HUP INT TERM
-          git show "$BASE_SHA:tests/reject-published-change.sh" >"$trusted_gate"
-          git show "$BASE_SHA:tests/check-community-change.mjs" >"$trusted_community_gate"
-          git diff --name-only -z --no-renames "$BASE_SHA" "$HEAD_SHA" -- >"$changed_paths"
-          sh "$trusted_gate" pull_request "$REPOSITORY" \
-            "$BASE_REF" "$HEAD_REPOSITORY" "$HEAD_REF"
-          /usr/bin/xargs -0 -r -- sh "$trusted_gate" \
-            pull_request "$REPOSITORY" "$BASE_REF" "$HEAD_REPOSITORY" \
-            "$HEAD_REF" <"$changed_paths"
-          cargo run -p marketplace-tool --locked --quiet -- build-plan \
-            --repository "$PWD" >"$build_plan"
-          node "$trusted_community_gate" "$PWD" "$build_plan" "$changed_paths"
-      - name: Format, lint, and test
-        run: |
-          cargo fmt --all -- --check
-          cargo clippy --workspace --all-targets --locked -- -D warnings
-          cargo test --workspace --all-targets --locked
-      - name: Run component sandbox canary
-        run: sh tests/sandbox-component-build-smoke.sh
-      - name: Build and inspect the reviewed snapshot
-        run: |
-          stage_parent=$(mktemp -d "${RUNNER_TEMP}/reviewed-stage.XXXXXXXXXX")
-          trap 'rm -rf -- "$stage_parent"' EXIT HUP INT TERM
-          scripts/stage-catalog-repository.sh --mode production \
-            "$stage_parent/repository"
-      - name: Generate deterministic local catalog and site
-        run: |
-          scripts/build-local.sh
-          node tests/site-runtime.test.js public/marketplace/v1/catalog.json
-          cargo run -p marketplace-tool --locked -- verify public/marketplace/v1/catalog.json
-          cp -a public "${RUNNER_TEMP}/public-first"
-          scripts/build-local.sh
-          diff --recursive --no-dereference "${RUNNER_TEMP}/public-first" public
-          cargo run -p marketplace-tool --locked -- verify public/marketplace/v1/catalog.json
-          node --test tests/landing/*.test.mjs
-          node tests/site-runtime.test.js public/marketplace/v1/catalog.json
-          cargo test -p marketplace-tool --test marketplace \
-            catalog::generated_catalog_has_five_visible_packages_and_one_hidden_provider --locked -- --exact
-          cargo test -p marketplace-tool --test marketplace \
-            packages::generated_packages_match_catalog_digests_and_keep_provider_hidden --locked -- --exact
-          cargo test -p marketplace-tool --test marketplace \
-            site::marketplace_site_is_localized_dom_safe_and_hides_providers --locked -- --exact
-      - name: Policy and shell checks
-        run: |
-          sh tests/ci-policy-smoke.sh
-          sh tests/community-submission-smoke.sh
-          scripts/check-policy.sh
-          sh tests/check-policy-smoke.sh
-          shellcheck scripts/*.sh tests/*.sh
-          sh -n scripts/*.sh tests/*.sh
+          bootstrap="$private_root/materialize-git-snapshot.sh"
+          /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
+            GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+            GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 \
+            /usr/bin/git --no-replace-objects \
+              -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+              -c core.attributesFile=/dev/null -c core.excludesFile=/dev/null \
+              show "$TRUST_SHA:scripts/materialize-git-snapshot.sh" >"$bootstrap"
+          /usr/bin/chmod 0700 "$bootstrap"
+          trusted_root="$private_root/trusted"
+          sh "$bootstrap" --bootstrap "$PWD" "$TRUST_SHA" "$trusted_root"
+          if test ! -f "$trusted_root/scripts/ci-verify.sh" \
+              || test -L "$trusted_root/scripts/ci-verify.sh"; then
+            printf '%s\n' 'error: reviewed CI driver is unavailable' >&2
+            exit 1
+          fi
+          sh "$trusted_root/scripts/ci-verify.sh" \
+            "$PWD" "$TRUST_SHA" "$REVIEW_SHA" "$EVENT_NAME" \
+            "$REPOSITORY" "$BASE_REF" "$HEAD_REPOSITORY" "$HEAD_REF" \
+            "$private_root"

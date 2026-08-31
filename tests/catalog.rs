@@ -16,20 +16,28 @@ pub(crate) fn repository_root() -> &'static Path {
     })
 }
 
+pub(crate) fn generated_public_root() -> PathBuf {
+    std::env::var_os("OVERCROW_MARKETPLACE_TEST_PUBLIC")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repository_root().join("public"))
+}
+
 pub(crate) fn generated_catalog_fixture() -> &'static Value {
     static CATALOG: OnceLock<Value> = OnceLock::new();
     CATALOG.get_or_init(|| {
-        let status = Command::new("sh")
-            .arg("scripts/build-local.sh")
-            .current_dir(repository_root())
-            .status()
-            .expect("start local marketplace generation");
-        assert!(
-            status.success(),
-            "local marketplace generation must succeed"
-        );
+        if std::env::var_os("OVERCROW_MARKETPLACE_TEST_PUBLIC").is_none() {
+            let status = Command::new("sh")
+                .arg("scripts/build-local.sh")
+                .current_dir(repository_root())
+                .status()
+                .expect("start local marketplace generation");
+            assert!(
+                status.success(),
+                "local marketplace generation must succeed"
+            );
+        }
 
-        let catalog = std::fs::read(repository_root().join("public/marketplace/v1/catalog.json"))
+        let catalog = std::fs::read(generated_public_root().join("marketplace/v1/catalog.json"))
             .expect("generated catalog");
         serde_json::from_slice(&catalog).expect("catalog envelope JSON")
     })

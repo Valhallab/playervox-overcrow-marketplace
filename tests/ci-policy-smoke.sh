@@ -8,15 +8,23 @@ fi
 
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 workflow="$repo_root/.github/workflows/ci.yml"
+ci_driver="$repo_root/scripts/ci-verify.sh"
+sandbox_driver="$repo_root/scripts/sandbox-review-checks.sh"
 gate="$repo_root/tests/reject-published-change.sh"
 community_gate="$repo_root/tests/check-community-change.mjs"
 community_smoke="$repo_root/tests/community-submission-smoke.sh"
+trusted_gate="$repo_root/tests/reject-trusted-change.sh"
+trust_smoke="$repo_root/tests/ci-trust-boundary-smoke.sh"
+sandbox_review_smoke="$repo_root/tests/sandbox-review-checks-smoke.sh"
 codeowners="$repo_root/.github/CODEOWNERS"
 
 for owned_path in \
         '/tests/reject-published-change.sh @Valhallab' \
+        '/tests/reject-trusted-change.sh @Valhallab' \
         '/tests/check-community-change.mjs @Valhallab' \
         '/tests/community-submission-smoke.sh @Valhallab' \
+        '/tests/ci-trust-boundary-smoke.sh @Valhallab' \
+        '/tests/sandbox-review-checks-smoke.sh @Valhallab' \
         '/tests/ci-policy-smoke.sh @Valhallab'; do
     if ! /usr/bin/grep -F -x -- "$owned_path" "$codeowners" >/dev/null; then
         printf '%s\n' 'error: CI policy gates are not explicitly owned' >&2
@@ -24,12 +32,15 @@ for owned_path in \
     fi
 done
 
-if ! test -x "$gate" || test -L "$gate"; then
+if ! test -x "$gate" || test -L "$gate" \
+        || ! test -x "$trusted_gate" || test -L "$trusted_gate"; then
     printf '%s\n' 'error: published-change gate is missing or unsafe' >&2
     exit 1
 fi
 if ! test -f "$community_gate" || test -L "$community_gate" \
-        || ! test -x "$community_smoke" || test -L "$community_smoke"; then
+        || ! test -x "$community_smoke" || test -L "$community_smoke" \
+        || ! test -x "$trust_smoke" || test -L "$trust_smoke" \
+        || ! test -x "$sandbox_review_smoke" || test -L "$sandbox_review_smoke"; then
     printf '%s\n' 'error: community-change policy tests are missing or unsafe' >&2
     exit 1
 fi
@@ -74,8 +85,22 @@ ambiguous_path=$(printf 'community/creator/widget/src/lib.rs\npublished/catalog.
 expect_reject pull_request "$repository" candidate creator/widget-fix \
     creator/widget-fork "$ambiguous_path"
 
+if ! "$trusted_gate" community/creator/widget/src/lib.rs Cargo.toml web/marketplace/app.js; then
+    printf '%s\n' 'error: trusted-path gate rejected submission data' >&2
+    exit 1
+fi
+for trusted_path in \
+        .github/workflows/ci.yml scripts/ci-verify.sh tests/ci-policy-smoke.sh \
+        tools/marketplace-tool/src/main.rs; do
+    if "$trusted_gate" "$trusted_path" >/dev/null 2>&1; then
+        printf '%s\n' 'error: trusted-path gate accepted executable policy changes' >&2
+        exit 1
+    fi
+done
+
 require_line() {
-    if ! /usr/bin/grep -F "$1" "$workflow" >/dev/null; then
+    if ! /usr/bin/grep -F -- "$1" \
+            "$workflow" "$ci_driver" "$sandbox_driver" >/dev/null; then
         printf '%s\n' "error: CI policy is missing: $1" >&2
         exit 1
     fi
@@ -89,27 +114,40 @@ require_line 'cargo install wasm-tools --version 1.245.1 --locked'
 require_line 'bubblewrap'
 require_line 'shellcheck'
 require_line 'tests/reject-published-change.sh'
-require_line 'git show "$BASE_SHA:tests/reject-published-change.sh" >"$trusted_gate"'
-require_line 'sh "$trusted_gate" pull_request "$REPOSITORY"'
-require_line 'git show "$BASE_SHA:tests/check-community-change.mjs" >"$trusted_community_gate"'
-require_line 'cargo run -p marketplace-tool --locked --quiet -- build-plan'
-require_line 'node "$trusted_community_gate" "$PWD" "$build_plan" "$changed_paths"'
-require_line 'sh tests/community-submission-smoke.sh'
+require_line 'tests/reject-trusted-change.sh'
+require_line 'scripts/materialize-git-snapshot.sh'
+require_line 'scripts/ci-verify.sh'
+require_line 'scripts/sandbox-review-checks.sh'
+require_line 'show "$TRUST_SHA:scripts/materialize-git-snapshot.sh"'
+require_line 'sh "$trusted_root/scripts/ci-verify.sh"'
 require_line 'tests/sandbox-component-build-smoke.sh'
-require_line 'scripts/stage-catalog-repository.sh --mode production'
-require_line 'node --test tests/landing/*.test.mjs'
-require_line 'node tests/site-runtime.test.js public/marketplace/v1/catalog.json'
-require_line 'diff --recursive --no-dereference "${RUNNER_TEMP}/public-first" public'
+require_line 'stage-catalog-repository.sh" --mode production'
+require_line '/usr/bin/node --test /source/tests/landing/*.test.mjs'
+require_line '/usr/bin/node /source/tests/site-runtime.test.js'
+require_line 'sandbox-review-checks.sh" workspace'
+require_line 'sh "$trusted_root/scripts/sandbox-review-checks.sh" workspace "$projection" "$first_build/public"'
+require_line 'sandbox-review-checks.sh" site'
+require_line 'diff --recursive --no-dereference'
+require_line '--unshare-all --unshare-net'
+require_line 'CARGO_NET_OFFLINE=true'
 
-if test "$(/usr/bin/grep -Fc 'scripts/build-local.sh' "$workflow")" -ne 2; then
-    printf '%s\n' 'error: CI must build the local output exactly twice' >&2
+if /usr/bin/grep -Eq \
+        '(^|[[:space:]])(cargo|node|sh)[[:space:]]+(fmt|clippy|test|tests/|scripts/)' \
+        "$workflow"; then
+    printf '%s\n' 'error: CI executes pull-request code outside the trusted driver' >&2
     exit 1
 fi
 
 if /usr/bin/grep -Eq \
         'pull_request_target|pull-requests: write|contents: write|id-token: write|secrets\.|github\.token|GITHUB_TOKEN|upload-artifact|deploy|[Cc]oolify|build-production\.sh|--private-key' \
-        "$workflow"; then
+        "$workflow" "$ci_driver" "$sandbox_driver"; then
     printf '%s\n' 'error: CI has publication authority' >&2
+    exit 1
+fi
+
+if /usr/bin/grep -F 'community-submission-smoke.sh' "$ci_driver" >/dev/null \
+        || /usr/bin/grep -F 'scripts/build-local.sh' "$ci_driver" >/dev/null; then
+    printf '%s\n' 'error: CI runs a local development path on pull-request data' >&2
     exit 1
 fi
 

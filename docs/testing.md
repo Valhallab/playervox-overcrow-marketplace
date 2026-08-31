@@ -50,12 +50,17 @@ Before opening a widget pull request, also run:
 scripts/check-policy.sh
 sh tests/check-policy-smoke.sh
 sh tests/ci-policy-smoke.sh
+sh tests/ci-trust-boundary-smoke.sh
 sh tests/community-submission-smoke.sh
 sh tests/sandbox-component-build-smoke.sh
+sh tests/sandbox-review-checks-smoke.sh
 sh -n scripts/*.sh tests/*.sh
 ```
 
 CI repeats the repository suites with read-only permissions, no credentials,
-the community admission fixture, sandboxed builds of every target, both
-static-site suites, and two deterministic local builds. Its results are review
-evidence, not publication authority or live desktop/game acceptance.
+trusted-base admission of the actual candidate tree, sandboxed native tests and
+builds of every target, both static-site suites, and two deterministic builds
+of the reviewed snapshot. The standalone malicious community fixtures remain a
+maintainer validation gate; CI never executes a pull-request smoke script on
+the host. Its results are review evidence, not publication authority or live
+desktop/game acceptance.

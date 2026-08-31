@@ -39,12 +39,14 @@ fn marketplace_site_is_localized_dom_safe_and_hides_providers() {
     }
     assert!(!styles.is_empty());
 
-    let status = Command::new("node")
-        .arg("tests/site-runtime.test.js")
-        .current_dir(repository_root())
-        .status()
-        .expect("start site runtime tests");
-    assert!(status.success(), "site runtime tests must pass");
+    if std::env::var_os("OVERCROW_MARKETPLACE_TEST_PUBLIC").is_none() {
+        let status = Command::new("node")
+            .arg("tests/site-runtime.test.js")
+            .current_dir(repository_root())
+            .status()
+            .expect("start site runtime tests");
+        assert!(status.success(), "site runtime tests must pass");
+    }
 }
 
 #[test]

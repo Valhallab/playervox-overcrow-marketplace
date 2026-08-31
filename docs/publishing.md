@@ -13,6 +13,15 @@ separate operational configuration. Until those controls are configured, CI
 output is evidence rather than stand-alone enforcement against a pull request
 that changes the workflow itself.
 
+The pull-request job bootstraps only from the exact base commit. It materializes
+bounded private base and candidate snapshots, compiles the base marketplace
+validator offline, and admits candidate metadata before running candidate code
+inside the review sandboxes. Changes under `.github/`, `scripts/`, `tests/`, or
+`tools/` are rejected by this path until a maintainer lands those trusted bytes
+separately. The first rollout of a new trusted driver therefore fails closed
+until that driver exists in the base commit; CI never falls back to a copy from
+the pull-request head.
+
 One validated source record generates both the human site and machine catalog.
 Packages bind exact IDs, versions, digests, and sizes; the catalog is canonical,
 monotonic, expiring, and signed only after automated checks plus human approval.
