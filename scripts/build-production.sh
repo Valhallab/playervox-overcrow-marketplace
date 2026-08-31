@@ -369,7 +369,7 @@ if ! "$trusted_tool" verify "$catalog" --public-key "$staged_public_key" \
     printf '%s\n' 'error: production verification failed' >&2
     exit 1
 fi
-if ! sh "$script_dir/verify-published.sh" "$source_root/public" \
+if ! sh "$source_root/scripts/verify-published.sh" "$source_root/public" \
         "$staged_public_key" "$key_id" >/dev/null 2>&1; then
     printf '%s\n' 'error: production static tree rejected' >&2
     exit 1
@@ -410,7 +410,7 @@ fi
 
 next_published="$repo_root/.published-next.$$"
 previous_published="$repo_root/.published-previous.$$"
-if ! sh "$script_dir/publish-directory.sh" \
+if ! sh "$source_root/scripts/publish-directory.sh" \
         "$source_root/public" "$repo_root/published" \
         "$next_published" "$previous_published" \
         /usr/bin/mv /usr/bin/mv /usr/bin/mv /usr/bin/mv \

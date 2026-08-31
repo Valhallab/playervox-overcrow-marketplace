@@ -3,15 +3,18 @@ set -eu
 
 if test "$#" -gt 1; then
     printf '%s\n' \
-        'usage: build-local-rollback-smoke.sh [validation|signal|post-move|race-next|race-previous|rollback|final-move-fail|final-move-signal|verified-race|publish-noop|restore-failure]' >&2
+        'usage: build-local-rollback-smoke.sh [validation|signal|post-move|race-next|race-previous|identity-race|foreign-next|foreign-public|foreign-previous|cleanup-signal|restore-signal|rollback|final-move-fail|final-move-signal|verified-race|publish-noop|restore-failure]' >&2
     exit 2
 fi
 selected_case=${1:-all}
 case "$selected_case" in
-    all | validation | signal | post-move | race-next | race-previous | rollback | final-move-fail | final-move-signal | verified-race | publish-noop | restore-failure) ;;
+    all | validation | signal | post-move | race-next | race-previous \
+        | identity-race | foreign-next | foreign-public | foreign-previous \
+        | cleanup-signal | restore-signal | rollback | final-move-fail \
+        | final-move-signal | verified-race | publish-noop | restore-failure) ;;
     *)
         printf '%s\n' \
-            'usage: build-local-rollback-smoke.sh [validation|signal|post-move|race-next|race-previous|rollback|final-move-fail|final-move-signal|verified-race|publish-noop|restore-failure]' >&2
+            'usage: build-local-rollback-smoke.sh [validation|signal|post-move|race-next|race-previous|identity-race|foreign-next|foreign-public|foreign-previous|cleanup-signal|restore-signal|rollback|final-move-fail|final-move-signal|verified-race|publish-noop|restore-failure]' >&2
         exit 2
         ;;
 esac
@@ -45,6 +48,18 @@ make_staged_public() {
     /usr/bin/mkdir -p "$staged_public/nested"
     printf '%s\n' next >"$staged_public/next"
     printf '%s\n' 'nested next bytes' >"$staged_public/nested/file with spaces"
+}
+
+make_foreign_tree() {
+    foreign_root=$1
+    foreign_label=$2
+    /usr/bin/mkdir -p "$foreign_root/nested"
+    printf '%s\n' "$foreign_label" >"$foreign_root/foreign.txt"
+    printf '%s\n' 'foreign nested bytes' >"$foreign_root/nested/data"
+    /usr/bin/ln -s -- foreign.txt "$foreign_root/link"
+    /usr/bin/chmod 0711 "$foreign_root"
+    /usr/bin/chmod 0700 "$foreign_root/nested"
+    /usr/bin/chmod 0640 "$foreign_root/foreign.txt" "$foreign_root/nested/data"
 }
 
 snapshot_tree() {
@@ -159,6 +174,104 @@ printf '%s\n' \
     'fi' \
     '/usr/bin/false' >"$old_move_boundary_contender"
 /usr/bin/chmod 0700 "$old_move_boundary_contender"
+
+hide_next_during_old_move="$scratch/hide-next-during-old-move"
+# shellcheck disable=SC2016 # generated helper expands fixture variables when run
+printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    '/usr/bin/mv "$@"' \
+    '/usr/bin/mv -T -- "$NEXT_TREE_TO_HIDE" "$HIDDEN_NEXT_TREE"' \
+    >"$hide_next_during_old_move"
+/usr/bin/chmod 0700 "$hide_next_during_old_move"
+
+restore_hidden_then_move="$scratch/restore-hidden-then-move"
+# shellcheck disable=SC2016 # generated helper expands fixture variables when run
+printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    ': >"$FINAL_MOVE_WAS_CALLED"' \
+    '/usr/bin/mv -T -- "$HIDDEN_NEXT_TREE" "$3"' \
+    '/usr/bin/mv "$@"' \
+    >"$restore_hidden_then_move"
+/usr/bin/chmod 0700 "$restore_hidden_then_move"
+
+substitute_next_then_fail="$scratch/substitute-next-then-fail"
+# shellcheck disable=SC2016 # generated helper expands fixture variables when run
+printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    '/usr/bin/mv "$@"' \
+    '/usr/bin/mv -T -- "$NEXT_WRAPPER_TO_SUBSTITUTE" "$OWNED_NEXT_HIDDEN"' \
+    '/usr/bin/mv -T -- "$FOREIGN_NEXT_SOURCE" "$NEXT_WRAPPER_TO_SUBSTITUTE"' \
+    '/usr/bin/false' \
+    >"$substitute_next_then_fail"
+/usr/bin/chmod 0700 "$substitute_next_then_fail"
+
+substitute_public_verifier="$scratch/substitute-public-verifier"
+# shellcheck disable=SC2016 # generated helper expands fixture variables when run
+printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'test "$#" -eq 7 && test "$1" = verify-tree-ledger && test "$2" = --tree' \
+    'test "$4" = --ledger && test "$6" = --sha256' \
+    'if test "$3" = "$PUBLIC_TO_SUBSTITUTE"; then' \
+    '    /usr/bin/mv -T -- "$PUBLIC_TO_SUBSTITUTE" "$OWNED_PUBLIC_HIDDEN"' \
+    '    /usr/bin/mv -T -- "$FOREIGN_PUBLIC_SOURCE" "$PUBLIC_TO_SUBSTITUTE"' \
+    '    exit 1' \
+    'fi' \
+    'exit 0' \
+    >"$substitute_public_verifier"
+/usr/bin/chmod 0700 "$substitute_public_verifier"
+
+substitute_previous_after_move="$scratch/substitute-previous-after-move"
+# shellcheck disable=SC2016 # generated helper expands fixture variables when run
+printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    '/usr/bin/mv "$@"' \
+    '/usr/bin/mv -T -- "$PREVIOUS_TO_SUBSTITUTE" "$OWNED_PREVIOUS_HIDDEN"' \
+    '/usr/bin/mv -T -- "$FOREIGN_PREVIOUS_SOURCE" "$PREVIOUS_TO_SUBSTITUTE"' \
+    >"$substitute_previous_after_move"
+/usr/bin/chmod 0700 "$substitute_previous_after_move"
+
+signal_during_restore="$scratch/signal-during-restore"
+# shellcheck disable=SC2016 # generated helper expands these variables when run
+printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'parent=$PPID' \
+    '/usr/bin/kill -TERM "$parent"' \
+    '/usr/bin/sleep 0.05' \
+    'if /usr/bin/kill -0 "$parent" 2>/dev/null; then' \
+    '    /usr/bin/mv "$@"' \
+    'else' \
+    '    exit 143' \
+    'fi' \
+    >"$signal_during_restore"
+/usr/bin/chmod 0700 "$signal_during_restore"
+
+signal_during_cleanup_removal="$scratch/signal-during-cleanup-removal"
+# shellcheck disable=SC2016 # generated helper expands fixture variables when run
+printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    '/usr/bin/mv "$@"' \
+    '/usr/bin/mkdir -- "$NEXT_WRAPPER_TO_WATCH/removal-fixture"' \
+    'entry=0' \
+    'while test "$entry" -lt 4096; do' \
+    '    : >"$NEXT_WRAPPER_TO_WATCH/removal-fixture/$entry"' \
+    '    entry=$((entry + 1))' \
+    'done' \
+    'parent=$PPID' \
+    '/usr/bin/kill -TERM "$parent"' \
+    '(' \
+    '    /usr/bin/sleep 0.01' \
+    '    /usr/bin/kill -TERM "$parent" 2>/dev/null || :' \
+    ') &' \
+    '/usr/bin/false' \
+    >"$signal_during_cleanup_removal"
+/usr/bin/chmod 0700 "$signal_during_cleanup_removal"
 
 if should_run validation; then
     staged_public="$scratch/staged-validation/public"
@@ -281,6 +394,161 @@ if should_run race-previous; then
     /usr/bin/rm -rf -- "$previous_public"
 fi
 
+if should_run identity-race; then
+    staged_public="$scratch/staged-identity-race/public"
+    next_public="$copy/.public-next.identity-race"
+    previous_public="$copy/.public-previous.identity-race"
+    next_tree="$next_public/tree"
+    hidden_next_tree="$scratch/hidden-next-tree"
+    final_move_was_called="$scratch/final-move-was-called"
+    make_staged_public "$staged_public"
+    if NEXT_TREE_TO_HIDE="$next_tree" HIDDEN_NEXT_TREE="$hidden_next_tree" \
+            FINAL_MOVE_WAS_CALLED="$final_move_was_called" \
+            sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
+            /usr/bin/mv "$hide_next_during_old_move" \
+            "$restore_hidden_then_move" /usr/bin/mv; then
+        printf '%s\n' 'error: unstable next-tree identity unexpectedly accepted publication' >&2
+        exit 1
+    fi
+    assert_absent "$staged_public"
+    assert_absent "$next_public"
+    assert_absent "$previous_public"
+    assert_absent "$final_move_was_called"
+    test -d "$hidden_next_tree" && test ! -L "$hidden_next_tree"
+    assert_prior_public
+    /usr/bin/rm -rf -- "$hidden_next_tree"
+fi
+
+if should_run foreign-next; then
+    staged_public="$scratch/staged-foreign-next/public"
+    next_public="$copy/.public-next.foreign-next"
+    previous_public="$copy/.public-previous.foreign-next"
+    owned_next_hidden="$scratch/owned-next-hidden"
+    foreign_next_source="$scratch/foreign-next-source"
+    make_staged_public "$staged_public"
+    snapshot_tree "$staged_public" "$scratch/expected-hidden-next.manifest"
+    make_foreign_tree "$foreign_next_source" foreign-next
+    snapshot_tree "$foreign_next_source" "$scratch/expected-foreign-next.manifest"
+    if NEXT_WRAPPER_TO_SUBSTITUTE="$next_public" \
+            OWNED_NEXT_HIDDEN="$owned_next_hidden" \
+            FOREIGN_NEXT_SOURCE="$foreign_next_source" \
+            sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
+            "$substitute_next_then_fail" /usr/bin/mv /usr/bin/mv /usr/bin/mv; then
+        printf '%s\n' 'error: substituted next wrapper unexpectedly accepted publication' >&2
+        exit 1
+    fi
+    assert_absent "$staged_public"
+    snapshot_tree "$next_public" "$scratch/actual-foreign-next.manifest"
+    /usr/bin/cmp -- "$scratch/expected-foreign-next.manifest" \
+        "$scratch/actual-foreign-next.manifest"
+    snapshot_tree "$owned_next_hidden/tree" "$scratch/actual-hidden-next.manifest"
+    /usr/bin/cmp -- "$scratch/expected-hidden-next.manifest" \
+        "$scratch/actual-hidden-next.manifest"
+    assert_absent "$previous_public"
+    assert_prior_public
+    /usr/bin/rm -rf -- "$next_public" "$owned_next_hidden"
+fi
+
+if should_run foreign-public; then
+    staged_public="$scratch/staged-foreign-public/public"
+    next_public="$copy/.public-next.foreign-public"
+    previous_public="$copy/.public-previous.foreign-public"
+    owned_public_hidden="$scratch/owned-public-hidden"
+    foreign_public_source="$scratch/foreign-public-source"
+    make_staged_public "$staged_public"
+    snapshot_tree "$staged_public" "$scratch/expected-new-public.manifest"
+    make_foreign_tree "$foreign_public_source" foreign-public
+    snapshot_tree "$foreign_public_source" "$scratch/expected-foreign-public.manifest"
+    if PUBLIC_TO_SUBSTITUTE="$public" OWNED_PUBLIC_HIDDEN="$owned_public_hidden" \
+            FOREIGN_PUBLIC_SOURCE="$foreign_public_source" \
+            sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
+            /usr/bin/mv /usr/bin/mv /usr/bin/mv /usr/bin/mv \
+            "$substitute_public_verifier" "$final_tree_ledger" \
+            aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; then
+        printf '%s\n' 'error: substituted public tree unexpectedly accepted publication' >&2
+        exit 1
+    fi
+    assert_absent "$staged_public"
+    assert_absent "$next_public"
+    snapshot_tree "$public" "$scratch/actual-foreign-public.manifest"
+    /usr/bin/cmp -- "$scratch/expected-foreign-public.manifest" \
+        "$scratch/actual-foreign-public.manifest"
+    snapshot_tree "$owned_public_hidden" "$scratch/actual-hidden-new.manifest"
+    /usr/bin/cmp -- "$scratch/expected-new-public.manifest" \
+        "$scratch/actual-hidden-new.manifest"
+    snapshot_tree "$previous_public" "$scratch/actual-recoverable-prior.manifest"
+    /usr/bin/cmp -- "$scratch/prior-public.manifest" \
+        "$scratch/actual-recoverable-prior.manifest"
+    /usr/bin/rm -rf -- "$public" "$owned_public_hidden"
+    /usr/bin/mv -T -- "$previous_public" "$public"
+    assert_prior_public
+fi
+
+if should_run foreign-previous; then
+    staged_public="$scratch/staged-foreign-previous/public"
+    next_public="$copy/.public-next.foreign-previous"
+    previous_public="$copy/.public-previous.foreign-previous"
+    owned_previous_hidden="$scratch/owned-previous-hidden"
+    foreign_previous_source="$scratch/foreign-previous-source"
+    make_staged_public "$staged_public"
+    make_foreign_tree "$foreign_previous_source" foreign-previous
+    snapshot_tree "$foreign_previous_source" \
+        "$scratch/expected-foreign-previous.manifest"
+    if PREVIOUS_TO_SUBSTITUTE="$previous_public" \
+            OWNED_PREVIOUS_HIDDEN="$owned_previous_hidden" \
+            FOREIGN_PREVIOUS_SOURCE="$foreign_previous_source" \
+            sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
+            /usr/bin/mv /usr/bin/mv "$substitute_previous_after_move" /usr/bin/mv; then
+        printf '%s\n' 'error: substituted recovery tree incorrectly reported success' >&2
+        exit 1
+    fi
+    assert_absent "$staged_public"
+    assert_absent "$next_public"
+    assert_absent "$public"
+    snapshot_tree "$previous_public" "$scratch/actual-foreign-previous.manifest"
+    /usr/bin/cmp -- "$scratch/expected-foreign-previous.manifest" \
+        "$scratch/actual-foreign-previous.manifest"
+    snapshot_tree "$owned_previous_hidden" "$scratch/actual-hidden-prior.manifest"
+    /usr/bin/cmp -- "$scratch/prior-public.manifest" \
+        "$scratch/actual-hidden-prior.manifest"
+    /usr/bin/rm -rf -- "$previous_public"
+    /usr/bin/mv -T -- "$owned_previous_hidden" "$public"
+    assert_prior_public
+fi
+
+if should_run cleanup-signal; then
+    staged_public="$scratch/staged-cleanup-signal/public"
+    next_public="$copy/.public-next.cleanup-signal"
+    previous_public="$copy/.public-previous.cleanup-signal"
+    make_staged_public "$staged_public"
+    if NEXT_WRAPPER_TO_WATCH="$next_public" \
+            sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
+            /usr/bin/mv /usr/bin/mv "$signal_during_cleanup_removal" /usr/bin/mv; then
+        printf '%s\n' 'error: cleanup-removal signal unexpectedly reported success' >&2
+        exit 1
+    fi
+    assert_absent "$staged_public"
+    assert_absent "$next_public"
+    assert_absent "$previous_public"
+    assert_prior_public
+fi
+
+if should_run restore-signal; then
+    staged_public="$scratch/staged-restore-signal/public"
+    next_public="$copy/.public-next.restore-signal"
+    previous_public="$copy/.public-previous.restore-signal"
+    make_staged_public "$staged_public"
+    if sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
+            /usr/bin/mv /usr/bin/mv /usr/bin/false "$signal_during_restore"; then
+        printf '%s\n' 'error: restore-boundary signal unexpectedly reported success' >&2
+        exit 1
+    fi
+    assert_absent "$staged_public"
+    assert_absent "$next_public"
+    assert_absent "$previous_public"
+    assert_prior_public
+fi
+
 if should_run rollback; then
     staged_public="$scratch/staged-rollback/public"
     next_public="$copy/.public-next.rollback"
@@ -386,7 +654,8 @@ if should_run restore-failure; then
 fi
 
 if /usr/bin/find "$copy" -maxdepth 1 \
-        \( -name '.public-next.*' -o -name '.public-previous.*' \) \
+        \( -name '.public-next.*' -o -name '.public-previous.*' \
+            -o -name '.public-quarantine.*' \) \
         -print -quit | /usr/bin/grep .; then
     printf '%s\n' 'error: publication transient remains' >&2
     exit 1

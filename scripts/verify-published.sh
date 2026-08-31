@@ -23,7 +23,7 @@ if test "$key_id" != overcrow-production-2026-01 \
     exit 1
 fi
 
-if test "$tree" = "$repo_root/published"; then
+if test "$tree" = "$repo_root/published" || test "$tree" = "$repo_root/public"; then
     verification_repository=$repo_root
 else
     verification_repository=${tree%/public}

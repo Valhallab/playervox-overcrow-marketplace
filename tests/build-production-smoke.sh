@@ -205,10 +205,15 @@ printf '%s\n' '#!/bin/sh' "printf '%s\\n' ran >'$scratch/ambient-cargo-ran'" 'ex
 # only the already-staged trusted tool bytes.
 fixture=$(make_fixture staged-publisher-tool)
 secrets=$(make_secrets staged-publisher-tool)
+live_verify_marker="$scratch/live-verify-helper-ran"
+live_publish_marker="$scratch/live-publish-helper-ran"
 printf '%s\n' \
     '' \
     '# Fixture-only post-staging mutation; never copied into production code.' \
     'printf "%s\n" fixture_live_tool_source_must_not_compile >>"$repo_root/tools/marketplace-tool/src/main.rs"' \
+    'printf "%s\n" "#!/bin/sh" "printf helper-ran >'"'"$live_verify_marker"'"'" "exit 0" >"$repo_root/scripts/verify-published.sh"' \
+    'printf "%s\n" "#!/bin/sh" "printf helper-ran >'"'"$live_publish_marker"'"'" "exit 97" >"$repo_root/scripts/publish-directory.sh"' \
+    '/usr/bin/chmod 0755 "$repo_root/scripts/verify-published.sh" "$repo_root/scripts/publish-directory.sh"' \
     >>"$fixture/scripts/stage-catalog-repository.sh"
 /usr/bin/git -C "$fixture" add scripts/stage-catalog-repository.sh
 /usr/bin/git -C "$fixture" commit --quiet -m 'post-staging live tool mutation fixture'
@@ -229,6 +234,8 @@ if /usr/bin/git -C "$fixture" diff --quiet -- tools/marketplace-tool/src/main.rs
     printf '%s\n' 'error: post-staging live tool mutation fixture did not run' >&2
     exit 1
 fi
+test ! -e "$live_verify_marker" && test ! -L "$live_verify_marker"
+test ! -e "$live_publish_marker" && test ! -L "$live_publish_marker"
 test -f "$fixture/published/marketplace/v1/catalog.json"
 test "$(/usr/bin/cat "$secrets/sequence.txt")" = 2
 test ! -e "$secrets/state.json.receipt" && test ! -L "$secrets/state.json.receipt"
