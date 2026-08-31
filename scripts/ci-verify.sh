@@ -61,7 +61,7 @@ for required in \
         scripts/materialize-git-snapshot.sh scripts/prepare-marketplace-tool.sh \
         scripts/ci-verify.sh scripts/sandbox-review-checks.sh \
         scripts/sandbox-component-build.sh scripts/sandbox-supervisor.c \
-        scripts/resolve-system-gcc.sh \
+        scripts/resolve-system-gcc.sh scripts/resolve-system-node.sh \
         tests/reject-published-change.sh tests/reject-trusted-change.sh \
         tests/check-community-change.mjs; do
     if test ! -f "$trusted_root/$required" || test -L "$trusted_root/$required"; then
@@ -142,7 +142,8 @@ if ! "$trusted_tool" build-plan --repository "$head_root" >"$build_plan" \
     exit 1
 fi
 if test "$event_name" = pull_request; then
-    /usr/bin/node "$trusted_root/tests/check-community-change.mjs" \
+    node_path=$(sh "$trusted_root/scripts/resolve-system-node.sh") || exit 1
+    "$node_path" "$trusted_root/tests/check-community-change.mjs" \
         "$head_root" "$build_plan" "$changed_paths"
 fi
 

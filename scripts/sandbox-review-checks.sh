@@ -60,6 +60,7 @@ for program in \
     fi
 done
 system_gcc=$(sh "$script_dir/resolve-system-gcc.sh") || exit 1
+node_path=$(sh "$script_dir/resolve-system-node.sh") || exit 1
 
 runtime_directory="/run/user/$invoking_uid"
 session_bus="$runtime_directory/bus"
@@ -125,6 +126,7 @@ set -- \
     --ro-bind "$cargo_cache" /build/cargo-home/registry/cache \
     --ro-bind "$cargo_sources" /build/cargo-home/registry/src \
     --ro-bind "$toolchain_root" /rust-toolchain \
+    --ro-bind "$node_path" /system-node \
     --ro-bind "$supervisor" /sandbox-supervisor \
     --ro-bind "$source_root" /source
 if test -n "$public_root"; then
@@ -152,6 +154,7 @@ if ! /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
             --landlock-access fs:execute,write-file,read-file,read-dir,remove-dir,remove-file,make-dir,make-reg,make-sock,make-fifo,make-sym,refer,truncate \
             --landlock-rule path-beneath:execute,read-file,read-dir:/usr \
             --landlock-rule path-beneath:execute,read-file,read-dir:/rust-toolchain \
+            --landlock-rule path-beneath:execute,read-file:/system-node \
             --landlock-rule path-beneath:read-file,read-dir:/source \
             --landlock-rule path-beneath:read-file,read-dir:/public \
             --landlock-rule path-beneath:execute,write-file,read-file,read-dir,remove-dir,remove-file,make-dir,make-reg,make-sock,make-fifo,make-sym,refer,truncate:/build \
@@ -181,13 +184,13 @@ if ! /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
                                 --workspace --all-targets --locked --offline
                         ;;
                     site)
-                        /usr/bin/node --test /source/tests/landing/*.test.mjs \
-                            && /usr/bin/node /source/tests/site-runtime.test.js \
+                        "$2" --test /source/tests/landing/*.test.mjs \
+                            && "$2" /source/tests/site-runtime.test.js \
                                 /public/marketplace/v1/catalog.json
                         ;;
                     *) exit 1 ;;
                 esac
-            ' sh "$mode" </dev/null; then
+            ' sh "$mode" /system-node </dev/null; then
     printf '%s\n' 'error: sandboxed review checks failed' >&2
     exit 1
 fi

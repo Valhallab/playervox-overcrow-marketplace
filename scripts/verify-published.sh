@@ -69,41 +69,13 @@ fi
 
 bwrap_path=$(command -v bwrap 2>/dev/null || :)
 case "$bwrap_path" in /usr/bin/bwrap | /bin/bwrap) ;; *) bwrap_path='' ;; esac
-node_candidate=$(command -v node 2>/dev/null || :)
-case "$node_candidate" in /*) ;; *) node_candidate='' ;; esac
-node_path=$(/usr/bin/readlink -f -- "$node_candidate" 2>/dev/null || :)
+node_path=$(sh "$verification_repository/scripts/resolve-system-node.sh") || exit 1
 if test -z "$bwrap_path" || test ! -f "$bwrap_path" || test -L "$bwrap_path" \
         || test "$(/usr/bin/stat -c '%u:%a:%h' "$bwrap_path" 2>/dev/null || :)" \
-            != 0:755:1 \
-        || test -z "$node_path" || test "$node_candidate" != "$node_path" \
-        || test ! -f "$node_path" || test -L "$node_path" \
-        || test ! -x "$node_path" \
-        || test "$(/usr/bin/stat -c '%u:%h' "$node_path" 2>/dev/null || :)" != 0:1 \
-        || test "$(/usr/bin/stat -c '%s' "$node_path" 2>/dev/null || :)" \
-            -gt 268435456 \
-        || /usr/bin/find "$node_path" -maxdepth 0 -perm /0022 -print -quit \
-            | /usr/bin/grep . >/dev/null; then
+            != 0:755:1; then
     printf '%s\n' 'error: published tree rejected' >&2
     exit 1
 fi
-node_directory=${node_path%/*}
-while :; do
-    if test ! -d "$node_directory" || test -L "$node_directory" \
-            || test "$(/usr/bin/stat -c '%u' "$node_directory" 2>/dev/null || :)" != 0 \
-            || /usr/bin/find "$node_directory" -maxdepth 0 -perm /0022 \
-                -print -quit | /usr/bin/grep . >/dev/null; then
-        printf '%s\n' 'error: published tree rejected' >&2
-        exit 1
-    fi
-    test "$node_directory" = / && break
-    node_parent=${node_directory%/*}
-    test -n "$node_parent" || node_parent=/
-    if test "$node_parent" = "$node_directory"; then
-        printf '%s\n' 'error: published tree rejected' >&2
-        exit 1
-    fi
-    node_directory=$node_parent
-done
 for program in /usr/bin/env /usr/bin/prlimit /usr/bin/systemd-run \
         /usr/bin/setpriv /usr/bin/timeout /usr/bin/unshare; do
     if test ! -f "$program" || test -L "$program" \

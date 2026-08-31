@@ -19,6 +19,7 @@ trusted_gate="$repo_root/tests/reject-trusted-change.sh"
 trust_smoke="$repo_root/tests/ci-trust-boundary-smoke.sh"
 sandbox_review_smoke="$repo_root/tests/sandbox-review-checks-smoke.sh"
 review_gate="$repo_root/scripts/review-revision.sh"
+node_resolver="$repo_root/scripts/resolve-system-node.sh"
 codeowners="$repo_root/.github/CODEOWNERS"
 testing_doc="$repo_root/docs/testing.md"
 
@@ -51,6 +52,10 @@ if ! test -f "$community_gate" || test -L "$community_gate" \
 fi
 if ! test -x "$review_gate" || test -L "$review_gate"; then
     printf '%s\n' 'error: maintainer review gate is missing or unsafe' >&2
+    exit 1
+fi
+if ! test -x "$node_resolver" || test -L "$node_resolver"; then
+    printf '%s\n' 'error: trusted Node resolver is missing or unsafe' >&2
     exit 1
 fi
 expect_accept() {
@@ -137,8 +142,10 @@ require_line 'tests/sandbox-component-build-smoke.sh'
 require_line 'stage-catalog-repository.sh" --mode production'
 require_line '--mode production --trusted-tool "$trusted_tool"'
 require_line 'sh "$trusted_root/tests/ci-trust-boundary-smoke.sh" --trusted-root "$trusted_root" --trusted-tool "$trusted_tool"'
-require_line '/usr/bin/node --test /source/tests/landing/*.test.mjs'
-require_line '/usr/bin/node /source/tests/site-runtime.test.js'
+require_line 'node_path=$(sh "$trusted_root/scripts/resolve-system-node.sh") || exit 1'
+require_line 'node_path=$(sh "$script_dir/resolve-system-node.sh") || exit 1'
+require_line '"$2" --test /source/tests/landing/*.test.mjs'
+require_line '&& "$2" /source/tests/site-runtime.test.js'
 require_line 'sandbox-review-checks.sh" workspace'
 require_line 'sh "$trusted_root/scripts/sandbox-review-checks.sh" workspace "$projection" "$first_build/public"'
 require_line 'sandbox-review-checks.sh" site'
@@ -340,6 +347,18 @@ fi
 if /usr/bin/grep -F 'community-submission-smoke.sh' "$ci_driver" >/dev/null \
         || /usr/bin/grep -F 'scripts/build-local.sh' "$ci_driver" >/dev/null; then
     printf '%s\n' 'error: CI runs a local development path on pull-request data' >&2
+    exit 1
+fi
+
+if /usr/bin/grep -F -- '/usr/bin/node' "$ci_driver" "$sandbox_driver" \
+        >/dev/null \
+        || ! /usr/bin/grep -F -- \
+            'node_path=$(sh "$verification_repository/scripts/resolve-system-node.sh") || exit 1' \
+            "$published_verifier" >/dev/null \
+        || ! /usr/bin/grep -F -- \
+            'test "$(/usr/bin/stat -c '\''%u:%h'\'' "$node_path"' \
+            "$node_resolver" >/dev/null; then
+    printf '%s\n' 'error: Node execution does not use the trusted resolver' >&2
     exit 1
 fi
 
