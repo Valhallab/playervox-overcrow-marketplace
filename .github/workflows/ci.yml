@@ -55,6 +55,13 @@ jobs:
               exit 1
               ;;
           esac
+          case "$BASE_REF" in
+            master | candidate) ;;
+            *)
+              printf '%s\n' 'error: CI base branch is not trusted' >&2
+              exit 1
+              ;;
+          esac
           for revision in "$TRUST_SHA" "$REVIEW_SHA"; do
             if test "${#revision}" -ne 40; then
               printf '%s\n' 'error: CI commit metadata is missing' >&2

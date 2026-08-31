@@ -169,27 +169,40 @@ if ! /usr/bin/grep -F -x -- '  pull_request_target:' "$workflow" >/dev/null \
     exit 1
 fi
 if ! /usr/bin/awk '
-        /^  pull_request_target:$/ { section = "pull"; next }
-        /^  push:$/ { section = "push"; next }
+        /^  pull_request_target:$/ {
+            pull_sections += 1
+            section = "pull"
+            next
+        }
+        /^  push:$/ { push_sections += 1; section = "push"; next }
         /^  [^ ]/ { section = "" }
         /^    branches: \[master, candidate\]$/ {
             if (section == "pull") pull_branches += 1
             if (section == "push") push_branches += 1
         }
-        END { exit !(pull_branches == 1 && push_branches == 1) }
+        END {
+            exit !(pull_sections == 1 && push_sections == 1 \
+                && pull_branches == 1 && push_branches == 1)
+        }
     ' "$workflow"; then
     printf '%s\n' 'error: CI branch admission scope is not explicit' >&2
     exit 1
 fi
 if ! /usr/bin/awk '
+        /case "\$BASE_REF" in/ { base = NR }
+        /master \| candidate/ { base_scope = NR }
         /case "\$PR_NUMBER" in/ { number = NR }
         /if test "\$\{#PR_NUMBER\}" -gt 20/ { length_check = NR }
         /ci_git fetch --no-tags --no-write-fetch-head/ { fetch = NR }
         /fetched_revision=\$\(ci_git rev-parse --verify/ { resolve = NR }
         /if test "\$fetched_revision" != "\$REVIEW_SHA"/ { compare = NR }
+        /ci_git show "\$TRUST_SHA:scripts\/materialize-git-snapshot[.]sh"/ {
+            bootstrap = NR
+        }
         END {
-            exit !(number > 0 && length_check > number && fetch > length_check \
-                && resolve > fetch && compare > resolve)
+            exit !(base > 0 && base_scope > base && number > base_scope \
+                && length_check > number && fetch > length_check \
+                && resolve > fetch && compare > resolve && bootstrap > compare)
         }
     ' "$workflow"; then
     printf '%s\n' 'error: pull-request object fetch is not bounded and verified' >&2
