@@ -53,6 +53,8 @@ class Element {
 const catalogPath = process.env.MARKETPLACE_CATALOG_PATH
   || process.argv[2]
   || "tests/fixtures/development-catalog.json";
+const productionPolicyPath = process.env.MARKETPLACE_POLICY_PATH
+  || "web/marketplace/policies/production.js";
 
 function generated() {
   return fs.readFileSync(catalogPath, "utf8");
@@ -249,7 +251,7 @@ test("development mode renders the catalog and hides providers", async () => {
 
 test("production mode renders complete catalog metadata without a development claim", async () => {
   const page = await run(productionCatalog(), {
-    policy: "web/marketplace/policies/production.js",
+    policy: productionPolicyPath,
   });
   assert.equal(
     page.trust.textContent,

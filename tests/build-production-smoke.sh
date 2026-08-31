@@ -15,6 +15,23 @@ for required in scripts/build-production.sh scripts/verify-published.sh \
         exit 1
     fi
 done
+trusted_node=''
+for candidate in /usr/bin/node /usr/local/bin/node \
+        /usr/lib/chatgpt/resources/cua_node/bin/node; do
+    if test -f "$candidate" && test ! -L "$candidate" \
+            && test "$(/usr/bin/stat -c '%u:%a:%h' "$candidate" 2>/dev/null || :)" \
+                = 0:755:1; then
+        trusted_node=$candidate
+        break
+    fi
+done
+if test -z "$trusted_node"; then
+    printf '%s\n' 'error: trusted fixture Node is unavailable' >&2
+    exit 1
+fi
+trusted_node_directory=${trusted_node%/*}
+PATH="$trusted_node_directory:$PATH"
+export PATH
 
 scratch=$(/usr/bin/mktemp -d /tmp/marketplace-production.XXXXXXXXXX)
 cleanup() { /usr/bin/rm -rf -- "$scratch"; }
@@ -32,22 +49,32 @@ done
 /usr/bin/git -C "$base" checkout --quiet -b release/fixture
 /usr/bin/install -d -m 0755 "$base/published"
 printf '%s\n' prior >"$base/published/prior.txt"
-/usr/bin/git -C "$base" add --all
-/usr/bin/git -C "$base" commit --quiet -m 'production fixture'
 
 tool_work="$scratch/trusted-tool"
 /usr/bin/install -d -m 0700 "$tool_work"
 trusted_tool=$(sh "$base/scripts/prepare-marketplace-tool.sh" "$base" "$tool_work")
+fixture_authority="$scratch/fixture-authority"
+/usr/bin/install -d -m 0700 "$fixture_authority" "$base/keys"
+printf '%s\n' 2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a \
+    >"$fixture_authority/signing.key"
+/usr/bin/chmod 0600 "$fixture_authority/signing.key"
+"$trusted_tool" derive-public-key --repository "$base" \
+    --signing-key "$fixture_authority/signing.key" \
+    --key-id overcrow-production-2026-01 \
+    --output "$base/keys/overcrow-production-2026-01.pub" >/dev/null
+/usr/bin/git -C "$base" add --all
+/usr/bin/git -C "$base" commit --quiet -m 'production fixture with pinned fixture key'
 
-make_fixture() {
+make_fixture() (
     name=$1
     fixture="$scratch/$name"
     /usr/bin/git clone --quiet --no-hardlinks "$base" "$fixture"
     /usr/bin/git -C "$fixture" checkout --quiet release/fixture
+    /usr/bin/chmod 0644 "$fixture/keys/overcrow-production-2026-01.pub"
     printf '%s\n' "$fixture"
-}
+)
 
-make_secrets() {
+make_secrets() (
     name=$1
     seed=${2:-2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a}
     secrets="$scratch/secrets-$name"
@@ -55,32 +82,47 @@ make_secrets() {
     printf '%s\n' 1 >"$secrets/sequence.txt"
     printf '%s\n' "$seed" >"$secrets/signing.key"
     /usr/bin/chmod 0600 "$secrets/sequence.txt" "$secrets/signing.key"
-    "$trusted_tool" derive-public-key --repository "$base" \
-        --signing-key "$secrets/signing.key" \
-        --key-id overcrow-production-2026-01 \
-        --output "$secrets/signing.pub" >/dev/null
     printf '%s\n' "$secrets"
-}
+)
 
-snapshot_published() {
+snapshot_published() (
     fixture=$1
     destination=$2
-    /usr/bin/cp -a -- "$fixture/published" "$destination"
-}
+    root="$fixture/published"
+    unsorted="$destination.unsorted"
+    : >"$unsorted"
+    /usr/bin/find "$root" -xdev -type d \
+        -printf 'directory\t%P\t%U\t%G\t%m\t%n\n' >>"$unsorted"
+    /usr/bin/find "$root" -xdev -type f -printf '%P\n' \
+        | LC_ALL=C /usr/bin/sort \
+        | while IFS= read -r relative; do
+            metadata=$(/usr/bin/stat -c '%u\t%g\t%a\t%h\t%s' "$root/$relative")
+            digest=$(/usr/bin/sha256sum "$root/$relative" | /usr/bin/cut -d ' ' -f 1)
+            printf 'file\t%s\t%b\t%s\n' "$relative" "$metadata" "$digest"
+        done >>"$unsorted"
+    /usr/bin/find "$root" -xdev ! -type d ! -type f \
+        -printf 'other\t%P\t%y\t%U\t%G\t%m\t%n\t%l\n' >>"$unsorted"
+    LC_ALL=C /usr/bin/sort "$unsorted" >"$destination"
+    /usr/bin/rm -f -- "$unsorted"
+)
 
-assert_unchanged() {
+assert_unchanged() (
     fixture=$1
     before=$2
-    /usr/bin/diff --recursive --no-dereference "$before" "$fixture/published"
-}
+    after="$before.after"
+    snapshot_published "$fixture" "$after"
+    /usr/bin/cmp -- "$before" "$after"
+    /usr/bin/rm -f -- "$after"
+)
 
-run_publisher() {
+run_publisher() (
     fixture=$1
     secrets=$2
     revision=$3
     key_id=${4:-overcrow-production-2026-01}
     stdout=$5
     stderr=$6
+    publisher_public_key=${7:-"$fixture/keys/overcrow-production-2026-01.pub"}
     (
         cd "$fixture"
         PATH="$scratch/fake-path:$PATH" \
@@ -89,23 +131,25 @@ run_publisher() {
                 --sequence-file "$secrets/sequence.txt" \
                 --sequence-state "$secrets/state.json" \
                 --signing-key "$secrets/signing.key" \
-                --public-key "$secrets/signing.pub" \
+                --public-key "$publisher_public_key" \
                 --key-id "$key_id"
     ) >"$stdout" 2>"$stderr"
-}
+)
 
-assert_fixed_failure() {
+assert_fixed_failure() (
     label=$1
     fixture=$2
     secrets=$3
     revision=$4
     expected=$5
     key_id=${6:-overcrow-production-2026-01}
+    publisher_public_key=${7:-"$fixture/keys/overcrow-production-2026-01.pub"}
     before="$scratch/$label-published-before"
     stdout="$scratch/$label.stdout"
     stderr="$scratch/$label.stderr"
     snapshot_published "$fixture" "$before"
-    if run_publisher "$fixture" "$secrets" "$revision" "$key_id" "$stdout" "$stderr"; then
+    if run_publisher "$fixture" "$secrets" "$revision" "$key_id" "$stdout" "$stderr" \
+            "$publisher_public_key"; then
         printf '%s\n' "error: $label was accepted" >&2
         exit 1
     fi
@@ -149,7 +193,7 @@ assert_fixed_failure() {
         exit 1
     fi
     assert_unchanged "$fixture" "$before"
-}
+)
 
 /usr/bin/install -d -m 0700 "$scratch/fake-path"
 printf '%s\n' '#!/bin/sh' "printf '%s\\n' ran >'$scratch/ambient-cargo-ran'" 'exit 99' \
@@ -187,7 +231,7 @@ if (
             --sequence-file relative-sequence \
             --sequence-state "$secrets/state.json" \
             --signing-key "$secrets/signing.key" \
-            --public-key "$secrets/signing.pub" \
+            --public-key "$fixture/keys/overcrow-production-2026-01.pub" \
             --key-id overcrow-production-2026-01
     ) >"$scratch/relative.stdout" 2>"$scratch/relative.stderr"; then
     printf '%s\n' 'error: relative private path was accepted' >&2
@@ -208,7 +252,7 @@ if (
             --sequence-file "$secrets/sequence.txt" \
             --sequence-state "$secrets/sequence.txt" \
             --signing-key "$secrets/signing.key" \
-            --public-key "$secrets/signing.pub" \
+            --public-key "$fixture/keys/overcrow-production-2026-01.pub" \
             --key-id overcrow-production-2026-01
     ) >"$scratch/coincident.stdout" 2>"$scratch/coincident.stderr"; then
     printf '%s\n' 'error: coincident private paths were accepted' >&2
@@ -233,7 +277,7 @@ if (
             --sequence-file "$fixture/inside.tmp" \
             --sequence-state "$secrets/state.json" \
             --signing-key "$secrets/signing.key" \
-            --public-key "$secrets/signing.pub" \
+            --public-key "$fixture/keys/overcrow-production-2026-01.pub" \
             --key-id overcrow-production-2026-01
     ) >"$scratch/in-repository.stdout" 2>"$scratch/in-repository.stderr"; then
     printf '%s\n' 'error: repository-local private path was accepted' >&2
@@ -264,6 +308,16 @@ if test "$in_repository_error" != 'error: production signing failed'; then
 fi
 assert_unchanged "$fixture" "$before"
 
+fixture=$(make_fixture alternate-public-key-path)
+secrets=$(make_secrets alternate-public-key-path)
+/usr/bin/cp -- "$fixture/keys/overcrow-production-2026-01.pub" \
+    "$secrets/alternate.pub"
+/usr/bin/chmod 0644 "$secrets/alternate.pub"
+assert_fixed_failure alternate-public-key-path "$fixture" "$secrets" \
+    "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" \
+    'production key identity rejected' overcrow-production-2026-01 \
+    "$secrets/alternate.pub"
+
 fixture=$(make_fixture symlink)
 secrets=$(make_secrets symlink)
 /usr/bin/mv "$secrets/signing.key" "$secrets/signing.real"
@@ -293,10 +347,15 @@ assert_fixed_failure development-key-id "$fixture" "$secrets" \
 fixture=$(make_fixture bad-expiry-receipt)
 secrets=$(make_secrets bad-expiry-receipt)
 revision=$(/usr/bin/git -C "$fixture" rev-parse HEAD)
+public_key_fingerprint=$(
+    /usr/bin/sha256sum "$fixture/keys/overcrow-production-2026-01.pub" \
+        | /usr/bin/cut -d ' ' -f 1
+)
 printf '%s\n' \
     'schemaVersion=1' \
     "candidateRevision=$revision" \
     'keyId=overcrow-production-2026-01' \
+    "publicKeySha256=$public_key_fingerprint" \
     'sequence=1' \
     'generatedAt=2026-08-30T00:00:00Z' \
     'expiresAt=2026-09-28T23:59:59Z' \
@@ -306,13 +365,11 @@ assert_fixed_failure bad-expiry-receipt "$fixture" "$secrets" "$revision" \
     'production receipt rejected'
 
 fixture=$(make_fixture verifier)
-secrets=$(make_secrets verifier)
-other=$(make_secrets verifier-other \
+secrets=$(make_secrets verifier \
     2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b)
-/usr/bin/cp -- "$other/signing.pub" "$secrets/signing.pub"
 assert_fixed_failure verifier "$fixture" "$secrets" \
-    "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" 'production verification failed'
-test -f "$secrets/state.json.receipt"
+    "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" 'production signing failed'
+test ! -e "$secrets/state.json.receipt"
 
 fixture=$(make_fixture static)
 secrets=$(make_secrets static)
@@ -322,6 +379,88 @@ printf '%s\n' '<script>globalThis.bad = true</script>' >>"$fixture/web/landing/i
 assert_fixed_failure static "$fixture" "$secrets" \
     "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" 'production static tree rejected'
 
+# A user-controlled PATH entry must never become the executable verifier.
+fixture=$(make_fixture node-trust)
+secrets=$(make_secrets node-trust)
+printf '%s\n' '#!/bin/sh' \
+    "printf '%s\\n' ran >'$scratch/untrusted-node-ran'" \
+    'exit 0' >"$scratch/fake-path/node"
+/usr/bin/chmod 0700 "$scratch/fake-path/node"
+assert_fixed_failure node-trust "$fixture" "$secrets" \
+    "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" \
+    'production static tree rejected'
+test ! -e "$scratch/untrusted-node-ran" && test ! -L "$scratch/untrusted-node-ran"
+/usr/bin/rm -f -- "$scratch/fake-path/node"
+
+# V8 needs a generous virtual-address limit, but resident memory for the whole
+# verifier scope must remain independently bounded.
+fixture=$(make_fixture resident-memory)
+secrets=$(make_secrets resident-memory)
+printf '%s\n' \
+    'const residentMemoryProbe = Buffer.alloc(544 * 1024 * 1024);' \
+    'for (let offset = 0; offset < residentMemoryProbe.length; offset += 4096) {' \
+    '  residentMemoryProbe[offset] = 1;' \
+    '}' >>"$fixture/tests/site-runtime.test.js"
+/usr/bin/git -C "$fixture" add tests/site-runtime.test.js
+/usr/bin/git -C "$fixture" commit --quiet -m 'resident memory exhaustion fixture'
+assert_fixed_failure resident-memory "$fixture" "$secrets" \
+    "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" \
+    'production static tree rejected'
+test -f "$secrets/state.json.receipt"
+
+fixture=$(make_fixture receipt-candidate-a)
+secrets=$(make_secrets receipt-candidate-a)
+/usr/bin/install -d -m 0700 "$secrets/state.json"
+candidate_a=$(/usr/bin/git -C "$fixture" rev-parse HEAD)
+assert_fixed_failure receipt-candidate-a "$fixture" "$secrets" "$candidate_a" \
+    'production signing failed'
+test "$(/usr/bin/wc -l <"$secrets/state.json.receipt")" -eq 8
+/usr/bin/grep -F -x "candidateRevision=$candidate_a" \
+    "$secrets/state.json.receipt" >/dev/null
+/usr/bin/grep -F -x "publicKeySha256=$(/usr/bin/sha256sum \
+    "$fixture/keys/overcrow-production-2026-01.pub" | /usr/bin/cut -d ' ' -f 1)" \
+    "$secrets/state.json.receipt" >/dev/null
+/usr/bin/cp -p -- "$secrets/state.json.receipt" "$scratch/candidate-a.receipt"
+/usr/bin/rmdir -- "$secrets/state.json"
+fixture_b=$(make_fixture receipt-candidate-b)
+printf '%s\n' '/* candidate B */' >>"$fixture_b/web/marketplace/styles.css"
+/usr/bin/git -C "$fixture_b" add web/marketplace/styles.css
+/usr/bin/git -C "$fixture_b" commit --quiet -m 'distinct candidate B'
+candidate_b=$(/usr/bin/git -C "$fixture_b" rev-parse HEAD)
+assert_fixed_failure receipt-candidate-b "$fixture_b" "$secrets" "$candidate_b" \
+    'production receipt rejected'
+/usr/bin/cmp -- "$scratch/candidate-a.receipt" "$secrets/state.json.receipt"
+test "$(/usr/bin/stat -c '%a:%h:%s' "$scratch/candidate-a.receipt")" = \
+    "$(/usr/bin/stat -c '%a:%h:%s' "$secrets/state.json.receipt")"
+if ! run_publisher "$fixture" "$secrets" "$candidate_a" \
+        overcrow-production-2026-01 \
+        "$scratch/candidate-a-retry.stdout" \
+        "$scratch/candidate-a-retry.stderr"; then
+    retry_error=$(/usr/bin/cat "$scratch/candidate-a-retry.stderr")
+    case "$retry_error" in
+        'error: production candidate rejected' \
+        | 'error: private publisher paths rejected' \
+        | 'error: production key identity rejected' \
+        | 'error: production staging failed' \
+        | 'error: production signing failed' \
+        | 'error: production receipt rejected' \
+        | 'error: production verification failed' \
+        | 'error: production static tree rejected' \
+        | 'error: production sequence advance failed' \
+        | 'error: production publication failed')
+            printf 'error: receipt A retry failed: %s\n' "$retry_error" >&2
+            ;;
+        *)
+            printf '%s\n' 'error: receipt A retry returned a non-fixed diagnostic' >&2
+            ;;
+    esac
+    exit 1
+fi
+test ! -s "$scratch/candidate-a-retry.stdout"
+test ! -s "$scratch/candidate-a-retry.stderr"
+test "$(/usr/bin/cat "$secrets/sequence.txt")" = 2
+test ! -e "$secrets/state.json.receipt" && test ! -L "$secrets/state.json.receipt"
+
 fixture=$(make_fixture advance)
 secrets=$(make_secrets advance)
 printf '%s\n' 9007199254740991 >"$secrets/sequence.txt"
@@ -330,6 +469,13 @@ assert_fixed_failure advance "$fixture" "$secrets" \
 
 fixture=$(make_fixture success)
 secrets=$(make_secrets success)
+node_host_marker="/tmp/marketplace-node-sandbox-host-marker.$$"
+/usr/bin/rm -f -- "$node_host_marker"
+printf '%s\n' \
+    "fs.writeFileSync(\"$node_host_marker\", \"sandbox escape\");" \
+    >>"$fixture/tests/site-runtime.test.js"
+/usr/bin/git -C "$fixture" add tests/site-runtime.test.js
+/usr/bin/git -C "$fixture" commit --quiet -m 'sandboxed verifier fixture'
 revision=$(/usr/bin/git -C "$fixture" rev-parse HEAD)
 run_publisher "$fixture" "$secrets" "$revision" overcrow-production-2026-01 \
     "$scratch/success.stdout" "$scratch/success.stderr"
@@ -343,6 +489,21 @@ test ! -e "$fixture/published/marketplace/policies"
 test "$(/usr/bin/cat "$secrets/sequence.txt")" = 2
 test ! -e "$secrets/state.json.receipt" && test ! -L "$secrets/state.json.receipt"
 test ! -e "$scratch/ambient-cargo-ran" && test ! -L "$scratch/ambient-cargo-ran"
+test ! -e "$node_host_marker" && test ! -L "$node_host_marker"
+
+# Absolute verification must execute the assembled application, never mutable
+# repository web sources, and must remain independent of the caller's cwd.
+printf '%s\n' 'throw new Error("repository source must be ignored");' \
+    >"$fixture/web/marketplace/app.js"
+(
+    cd /tmp
+    sh "$fixture/scripts/verify-published.sh" \
+        "$fixture/published" \
+        "$fixture/keys/overcrow-production-2026-01.pub" \
+        overcrow-production-2026-01
+) >"$scratch/absolute-verify.stdout" 2>"$scratch/absolute-verify.stderr"
+test ! -s "$scratch/absolute-verify.stdout"
+test ! -s "$scratch/absolute-verify.stderr"
 
 fixture=$(make_fixture publication-move)
 secrets=$(make_secrets publication-move)
@@ -357,7 +518,7 @@ snapshot_published "$fixture" "$before"
             --sequence-file "$secrets/sequence.txt" \
             --sequence-state "$secrets/state.json" \
             --signing-key "$secrets/signing.key" \
-            --public-key "$secrets/signing.pub" \
+            --public-key "$fixture/keys/overcrow-production-2026-01.pub" \
             --key-id overcrow-production-2026-01
 ) >"$scratch/publication-move.stdout" 2>"$scratch/publication-move.stderr" &
 publisher_pid=$!

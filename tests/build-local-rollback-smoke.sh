@@ -3,15 +3,15 @@ set -eu
 
 if test "$#" -gt 1; then
     printf '%s\n' \
-        'usage: build-local-rollback-smoke.sh [validation|signal|post-move|race-next|race-previous|rollback|publish-noop|restore-failure]' >&2
+        'usage: build-local-rollback-smoke.sh [validation|signal|post-move|race-next|race-previous|rollback|verified-race|publish-noop|restore-failure]' >&2
     exit 2
 fi
 selected_case=${1:-all}
 case "$selected_case" in
-    all | validation | signal | post-move | race-next | race-previous | rollback | publish-noop | restore-failure) ;;
+    all | validation | signal | post-move | race-next | race-previous | rollback | verified-race | publish-noop | restore-failure) ;;
     *)
         printf '%s\n' \
-            'usage: build-local-rollback-smoke.sh [validation|signal|post-move|race-next|race-previous|rollback|publish-noop|restore-failure]' >&2
+            'usage: build-local-rollback-smoke.sh [validation|signal|post-move|race-next|race-previous|rollback|verified-race|publish-noop|restore-failure]' >&2
         exit 2
         ;;
 esac
@@ -47,10 +47,33 @@ make_staged_public() {
     printf '%s\n' 'nested next bytes' >"$staged_public/nested/file with spaces"
 }
 
+snapshot_tree() {
+    root=$1
+    destination=$2
+    unsorted="$destination.unsorted"
+    : >"$unsorted"
+    /usr/bin/find "$root" -xdev -type d \
+        -printf 'directory\t%P\t%U\t%G\t%m\t%n\n' >>"$unsorted"
+    /usr/bin/find "$root" -xdev -type f -printf '%P\n' \
+        | LC_ALL=C /usr/bin/sort \
+        | while IFS= read -r relative; do
+            metadata=$(/usr/bin/stat -c '%u\t%g\t%a\t%h\t%s' "$root/$relative")
+            digest=$(/usr/bin/sha256sum "$root/$relative" | /usr/bin/cut -d ' ' -f 1)
+            printf 'file\t%s\t%b\t%s\n' "$relative" "$metadata" "$digest"
+        done >>"$unsorted"
+    /usr/bin/find "$root" -xdev ! -type d ! -type f \
+        -printf 'other\t%P\t%y\t%U\t%G\t%m\t%n\t%l\n' >>"$unsorted"
+    LC_ALL=C /usr/bin/sort "$unsorted" >"$destination"
+    /usr/bin/rm -f -- "$unsorted"
+}
+
 assert_prior_public() {
-    /usr/bin/diff --recursive --no-dereference "$scratch/prior-public" "$public"
     test ! -L "$public"
     test "$(CDPATH='' cd -- "$public" && pwd -P)" = "$public"
+    actual="$scratch/actual-public.manifest"
+    snapshot_tree "$public" "$actual"
+    /usr/bin/cmp -- "$scratch/prior-public.manifest" "$actual"
+    /usr/bin/rm -f -- "$actual"
 }
 
 assert_absent() {
@@ -66,6 +89,7 @@ should_run() {
 printf '%s\n' prior >"$public/prior"
 printf '%s\n' 'nested prior bytes' >"$public/nested/file with spaces"
 /usr/bin/cp -a -- "$public" "$scratch/prior-public"
+snapshot_tree "$scratch/prior-public" "$scratch/prior-public.manifest"
 snapshot_tracked "$tracked_before"
 
 move_then_signal="$scratch/move-then-signal"
@@ -96,6 +120,30 @@ printf '%s\n' \
     'printf "%s\n" racer >"$destination/racer"' \
     '/usr/bin/mv "$@"' >"$move_into_raced_destination"
 /usr/bin/chmod 0700 "$move_into_raced_destination"
+
+move_then_mutate="$scratch/move-then-mutate"
+# shellcheck disable=SC2016 # generated helper expands these variables when run
+printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    '/usr/bin/mv "$@"' \
+    'printf "%s\n" raced >"$4/raced-after-verification"' >"$move_then_mutate"
+/usr/bin/chmod 0700 "$move_then_mutate"
+
+final_tree_verifier="$scratch/final-tree-verifier"
+# shellcheck disable=SC2016 # generated helper expands these variables when run
+printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'test "$#" -eq 7 && test "$1" = verify-tree-ledger && test "$2" = --tree' \
+    'test "$4" = --ledger && test "$6" = --sha256' \
+    'test -f "$5" && test "$7" = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    'test ! -e "$3/raced-after-verification" && test ! -L "$3/raced-after-verification"' \
+    >"$final_tree_verifier"
+/usr/bin/chmod 0700 "$final_tree_verifier"
+final_tree_ledger="$scratch/final-tree.ledger"
+printf '%s\n' fixture-ledger >"$final_tree_ledger"
+/usr/bin/chmod 0600 "$final_tree_ledger"
 
 # Mutation helper for the old ordering, where ownership was claimed before this
 # staged-move boundary without first reserving the wrapper.
@@ -198,6 +246,7 @@ if should_run race-next; then
     printf '%s\n' foreign-owned >"$foreign_marker"
     preexisting_next="$scratch/preexisting-next"
     /usr/bin/cp -a -- "$next_public" "$preexisting_next"
+    snapshot_tree "$preexisting_next" "$scratch/preexisting-next.manifest"
     if sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
             /usr/bin/mv /usr/bin/mv /usr/bin/mv /usr/bin/mv; then
         printf '%s\n' 'error: pre-existing next wrapper unexpectedly accepted publication' >&2
@@ -206,7 +255,9 @@ if should_run race-next; then
     test -f "$staged_public/next"
     test -f "$foreign_marker"
     test "$(/usr/bin/cat "$foreign_marker")" = foreign-owned
-    /usr/bin/diff --recursive --no-dereference "$preexisting_next" "$next_public"
+    snapshot_tree "$next_public" "$scratch/actual-next.manifest"
+    /usr/bin/cmp -- "$scratch/preexisting-next.manifest" \
+        "$scratch/actual-next.manifest"
     assert_absent "$previous_public"
     assert_prior_public
     /usr/bin/rm -rf -- "$next_public"
@@ -246,6 +297,24 @@ if should_run rollback; then
     assert_prior_public
 fi
 
+if should_run verified-race; then
+    staged_public="$scratch/staged-verified-race/public"
+    next_public="$copy/.public-next.verified-race"
+    previous_public="$copy/.public-previous.verified-race"
+    make_staged_public "$staged_public"
+    if sh "$helper" "$staged_public" "$public" "$next_public" "$previous_public" \
+            /usr/bin/mv /usr/bin/mv "$move_then_mutate" /usr/bin/mv \
+            "$final_tree_verifier" "$final_tree_ledger" \
+            aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; then
+        printf '%s\n' 'error: mutation after final verification was published' >&2
+        exit 1
+    fi
+    assert_absent "$staged_public"
+    assert_absent "$next_public"
+    assert_absent "$previous_public"
+    assert_prior_public
+fi
+
 if should_run publish-noop; then
     staged_public="$scratch/staged-publish-noop/public"
     next_public="$copy/.public-next.publish-noop"
@@ -276,7 +345,9 @@ if should_run restore-failure; then
     assert_absent "$public"
     assert_absent "$next_public"
     test -d "$previous_public" && test ! -L "$previous_public"
-    /usr/bin/diff --recursive --no-dereference "$scratch/prior-public" "$previous_public"
+    snapshot_tree "$previous_public" "$scratch/previous-public.manifest"
+    /usr/bin/cmp -- "$scratch/prior-public.manifest" \
+        "$scratch/previous-public.manifest"
     /usr/bin/mv -T -- "$previous_public" "$public"
     assert_absent "$previous_public"
     assert_prior_public

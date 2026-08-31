@@ -22,6 +22,7 @@ use crate::{
 
 pub(crate) const DEVELOPMENT_KEY_ID: &str = "overcrow-development-2026";
 pub(crate) const PRODUCTION_KEY_ID: &str = "overcrow-production-2026-01";
+pub(crate) const PRODUCTION_PUBLIC_KEY_PATH: &str = "keys/overcrow-production-2026-01.pub";
 pub(crate) const DEV_SEED: [u8; 32] = [
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
     0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
@@ -75,7 +76,26 @@ struct CatalogPayload<'a> {
     sequence: u64,
     generated_at: &'a str,
     expires_at: &'a str,
+    #[serde(skip_serializing_if = "static_tree_is_empty")]
+    static_tree: &'a [StaticTreeEntry],
     targets: Vec<CatalogTarget<'a>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct StaticTreeEntry {
+    path: String,
+    kind: StaticTreeKind,
+    mode: u32,
+    size: u64,
+    sha256: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum StaticTreeKind {
+    Directory,
+    File,
 }
 
 #[derive(Serialize)]
@@ -159,7 +179,13 @@ struct VerifiedPayload {
     sequence: u64,
     generated_at: String,
     expires_at: String,
+    #[serde(default)]
+    static_tree: Vec<StaticTreeEntry>,
     targets: Vec<VerifiedTarget>,
+}
+
+fn static_tree_is_empty(entries: &&[StaticTreeEntry]) -> bool {
+    entries.is_empty()
 }
 
 #[derive(Deserialize)]
@@ -598,12 +624,39 @@ pub(crate) fn build_catalog(
     key_id: &str,
     seed: &[u8; 32],
 ) -> Result<CatalogBuild, CatalogCode> {
+    build_catalog_with_static_tree(
+        inputs,
+        sequence,
+        generated_at,
+        expires_at,
+        origin,
+        key_id,
+        seed,
+        &[],
+    )
+}
+
+// Keeping one shared signature prevents production-only catalog construction
+// from drifting from the development path when the signed static tree is added.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_catalog_with_static_tree(
+    inputs: &[PreparedTarget<'_>],
+    sequence: u64,
+    generated_at: &str,
+    expires_at: &str,
+    origin: CatalogOrigin,
+    key_id: &str,
+    seed: &[u8; 32],
+    static_tree: &[StaticTreeEntry],
+) -> Result<CatalogBuild, CatalogCode> {
     if sequence == 0
         || (matches!(origin, CatalogOrigin::Production) && sequence > MAX_BROWSER_SEQUENCE)
         || inputs.len() > 500
+        || static_tree.len() > 1_000
     {
         return Err(CatalogCode::Target);
     }
+    validate_static_tree_manifest(static_tree)?;
     let generated = parse_time(generated_at)?;
     let expires = parse_time(expires_at)?;
     if expires <= generated {
@@ -666,6 +719,7 @@ pub(crate) fn build_catalog(
         sequence,
         generated_at,
         expires_at,
+        static_tree,
         targets,
     })
     .map_err(|_| CatalogCode::Payload)?;
@@ -674,6 +728,132 @@ pub(crate) fn build_catalog(
     }
     let envelope = sign_payload(key_id, &payload, seed)?;
     Ok(CatalogBuild { payload, envelope })
+}
+
+pub(crate) fn collect_static_tree(repository: &Path) -> Result<Vec<StaticTreeEntry>, CatalogCode> {
+    let root = repository.join("public");
+    if !root.is_dir() || root.is_symlink() {
+        return Ok(Vec::new());
+    }
+    let mut entries = BTreeMap::new();
+    collect_static_entries(&root, &root, &mut entries, 0, &mut 0_u64)?;
+    let entries: Vec<_> = entries.into_values().collect();
+    validate_static_tree_manifest(&entries)?;
+    Ok(entries)
+}
+
+fn collect_static_entries(
+    root: &Path,
+    directory: &Path,
+    entries: &mut BTreeMap<String, StaticTreeEntry>,
+    depth: usize,
+    aggregate: &mut u64,
+) -> Result<(), CatalogCode> {
+    if depth > 16 || entries.len() > 1_000 {
+        return Err(CatalogCode::Target);
+    }
+    for entry in std::fs::read_dir(directory).map_err(|_| CatalogCode::Target)? {
+        let entry = entry.map_err(|_| CatalogCode::Target)?;
+        let path = entry.path();
+        let relative = normalized_tree_path(root, &path)?;
+        if relative == "marketplace/v1" {
+            continue;
+        }
+        let metadata = std::fs::symlink_metadata(&path).map_err(|_| CatalogCode::Target)?;
+        let mode = metadata.permissions().mode() & 0o7777;
+        let manifest_entry = if metadata.is_dir() {
+            if metadata.uid() != rustix::process::geteuid().as_raw() || mode != 0o755 {
+                return Err(CatalogCode::Target);
+            }
+            collect_static_entries(root, &path, entries, depth + 1, aggregate)?;
+            StaticTreeEntry {
+                path: relative.clone(),
+                kind: StaticTreeKind::Directory,
+                mode,
+                size: 0,
+                sha256: crate::lower_hex(&crate::sha256(&[])),
+            }
+        } else if metadata.is_file() {
+            if metadata.uid() != rustix::process::geteuid().as_raw()
+                || metadata.nlink() != 1
+                || mode != 0o644
+                || metadata.len() > 16 * 1024 * 1024
+            {
+                return Err(CatalogCode::Target);
+            }
+            let bytes = crate::package::read_source_file(root, &relative, 16 * 1024 * 1024)
+                .map_err(|_| CatalogCode::Target)?;
+            if bytes.len() as u64 != metadata.len() {
+                return Err(CatalogCode::Target);
+            }
+            *aggregate = aggregate
+                .checked_add(metadata.len())
+                .filter(|total| *total <= 128 * 1024 * 1024)
+                .ok_or(CatalogCode::Target)?;
+            StaticTreeEntry {
+                path: relative.clone(),
+                kind: StaticTreeKind::File,
+                mode,
+                size: metadata.len(),
+                sha256: crate::lower_hex(&crate::sha256(&bytes)),
+            }
+        } else {
+            return Err(CatalogCode::Target);
+        };
+        if entries.insert(relative, manifest_entry).is_some() || entries.len() > 1_000 {
+            return Err(CatalogCode::Target);
+        }
+    }
+    Ok(())
+}
+
+fn validate_static_tree_manifest(entries: &[StaticTreeEntry]) -> Result<(), CatalogCode> {
+    let empty_digest = crate::lower_hex(&crate::sha256(&[]));
+    let mut previous: Option<&str> = None;
+    let mut aggregate = 0_u64;
+    for entry in entries {
+        validate_tree_path(&entry.path)?;
+        if entry.path == "marketplace/v1" || entry.path.starts_with("marketplace/v1/") {
+            return Err(CatalogCode::Target);
+        }
+        if previous.is_some_and(|value| value >= entry.path.as_str()) {
+            return Err(CatalogCode::Target);
+        }
+        previous = Some(&entry.path);
+        match entry.kind {
+            StaticTreeKind::Directory => {
+                if entry.mode != 0o755 || entry.size != 0 || entry.sha256 != empty_digest {
+                    return Err(CatalogCode::Target);
+                }
+            }
+            StaticTreeKind::File => {
+                if entry.mode != 0o644
+                    || entry.size > 16 * 1024 * 1024
+                    || !valid_digest(&entry.sha256)
+                {
+                    return Err(CatalogCode::Target);
+                }
+                aggregate = aggregate
+                    .checked_add(entry.size)
+                    .filter(|total| *total <= 128 * 1024 * 1024)
+                    .ok_or(CatalogCode::Target)?;
+            }
+        }
+    }
+    let directories: BTreeSet<_> = entries
+        .iter()
+        .filter(|entry| entry.kind == StaticTreeKind::Directory)
+        .map(|entry| entry.path.as_str())
+        .collect();
+    for entry in entries {
+        if let Some(parent) = Path::new(&entry.path).parent()
+            && !parent.as_os_str().is_empty()
+            && !directories.contains(parent.to_str().ok_or(CatalogCode::Target)?)
+        {
+            return Err(CatalogCode::Target);
+        }
+    }
+    Ok(())
 }
 
 fn validate_dependencies(inputs: &[&PreparedTarget<'_>]) -> Result<(), CatalogCode> {
@@ -889,22 +1069,19 @@ fn verify_catalog_payload(
     Ok(payload)
 }
 
-pub(crate) fn accepted_catalog_identity(bytes: &[u8]) -> Result<(u64, [u8; 32]), CatalogCode> {
-    if bytes.len() > MAX_ENVELOPE_BYTES {
-        return Err(CatalogCode::Envelope);
-    }
-    let envelope: SignedEnvelope =
-        serde_json::from_slice(bytes).map_err(|_| CatalogCode::Envelope)?;
-    if envelope.schema_version != 1 || envelope.key_id != PRODUCTION_KEY_ID {
-        return Err(CatalogCode::Envelope);
-    }
-    let payload = decode_canonical(&envelope.payload, MAX_PAYLOAD_BYTES)?;
-    let decoded: VerifiedPayload =
-        serde_json::from_slice(&payload).map_err(|_| CatalogCode::Payload)?;
-    if decoded.schema_version != 1 || decoded.sequence == 0 {
-        return Err(CatalogCode::Payload);
-    }
-    Ok((decoded.sequence, crate::sha256(&payload)))
+pub(crate) fn accepted_catalog_identity(
+    bytes: &[u8],
+    public_key: &[u8; 32],
+) -> Result<(u64, [u8; 32]), CatalogCode> {
+    let verified = verify_catalog_payload(
+        bytes,
+        PRODUCTION_KEY_ID,
+        public_key,
+        CatalogOrigin::Production,
+        chrono::Utc::now(),
+    )?;
+    let payload = verify_envelope(bytes, PRODUCTION_KEY_ID, public_key)?;
+    Ok((verified.sequence, crate::sha256(&payload)))
 }
 
 pub(crate) fn derive_public_key(
@@ -926,6 +1103,40 @@ pub(crate) fn derive_public_key(
     write_public_output(output, bytes.as_bytes())
 }
 
+pub(crate) fn production_signing_key(
+    repository: &Path,
+    signing_key: &Path,
+) -> Result<[u8; 32], CatalogCode> {
+    let seed = read_private_input(repository, signing_key, 65)
+        .and_then(|bytes| decode_hex_seed(&bytes))?;
+    if seed == DEV_SEED {
+        return Err(CatalogCode::Signature);
+    }
+    let pinned = production_public_key(repository)?;
+    let pair = Ed25519KeyPair::from_seed_unchecked(&seed).map_err(|_| CatalogCode::Signature)?;
+    if !bytes_match(pair.public_key().as_ref(), &pinned) {
+        return Err(CatalogCode::Signature);
+    }
+    Ok(seed)
+}
+
+fn bytes_match(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut difference = 0_u8;
+    for (left, right) in left.iter().zip(right) {
+        difference |= left ^ right;
+    }
+    difference == 0
+}
+
+pub(crate) fn production_public_key(repository: &Path) -> Result<[u8; 32], CatalogCode> {
+    let pinned = crate::package::read_source_file(repository, PRODUCTION_PUBLIC_KEY_PATH, 65)
+        .map_err(|_| CatalogCode::Signature)?;
+    decode_hex_seed(&pinned)
+}
+
 fn decode_hex_seed(bytes: &[u8]) -> Result<[u8; 32], CatalogCode> {
     let value = bytes.strip_suffix(b"\n").ok_or(CatalogCode::Signature)?;
     if value.len() != 64 {
@@ -945,6 +1156,19 @@ fn decode_hex_seed(bytes: &[u8]) -> Result<[u8; 32], CatalogCode> {
 }
 
 fn write_public_output(path: &Path, bytes: &[u8]) -> Result<(), CatalogCode> {
+    write_output(path, bytes, 0o644)
+}
+
+fn write_private_output(path: &Path, bytes: &[u8]) -> Result<(), CatalogCode> {
+    write_output(path, bytes, 0o600)
+}
+
+fn write_output(path: &Path, bytes: &[u8], expected_mode: u32) -> Result<(), CatalogCode> {
+    let create_mode = match expected_mode {
+        0o600 => Mode::RUSR | Mode::WUSR,
+        0o644 => Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::ROTH,
+        _ => return Err(CatalogCode::State),
+    };
     let parent = path.parent().ok_or(CatalogCode::State)?;
     let name = path.file_name().ok_or(CatalogCode::State)?;
     let directory = File::from(
@@ -964,18 +1188,17 @@ fn write_public_output(path: &Path, bytes: &[u8]) -> Result<(), CatalogCode> {
         &directory,
         name,
         OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-        Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::ROTH,
+        create_mode,
     )
     .map_err(|_| CatalogCode::State)?;
     let mut file = File::from(descriptor);
     let result = (|| {
-        fchmod(&file, Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::ROTH)
-            .map_err(|_| CatalogCode::State)?;
+        fchmod(&file, create_mode).map_err(|_| CatalogCode::State)?;
         let metadata = file.metadata().map_err(|_| CatalogCode::State)?;
         if !metadata.is_file()
             || metadata.uid() != rustix::process::geteuid().as_raw()
             || metadata.nlink() != 1
-            || metadata.permissions().mode() & 0o7777 != 0o644
+            || metadata.permissions().mode() & 0o7777 != expected_mode
         {
             return Err(CatalogCode::State);
         }
@@ -987,6 +1210,131 @@ fn write_public_output(path: &Path, bytes: &[u8]) -> Result<(), CatalogCode> {
         let _ = unlinkat(&directory, name, AtFlags::empty());
     }
     result
+}
+
+pub(crate) fn write_verified_tree_ledger(
+    repository: &Path,
+    tree: &Path,
+    catalog_bytes: &[u8],
+    public_key: &[u8; 32],
+    output: &Path,
+) -> Result<(), CatalogCode> {
+    verify_published_tree(
+        repository,
+        tree,
+        catalog_bytes,
+        PRODUCTION_KEY_ID,
+        public_key,
+    )?;
+    let first = encode_tree_ledger(tree)?;
+    verify_published_tree(
+        repository,
+        tree,
+        catalog_bytes,
+        PRODUCTION_KEY_ID,
+        public_key,
+    )?;
+    let second = encode_tree_ledger(tree)?;
+    if first != second {
+        return Err(CatalogCode::Target);
+    }
+    write_private_output(output, &first)
+}
+
+pub(crate) fn verify_tree_ledger(
+    tree: &Path,
+    ledger: &[u8],
+    expected_sha256: &str,
+) -> Result<(), CatalogCode> {
+    if !valid_digest(expected_sha256)
+        || crate::lower_hex(&crate::sha256(ledger)) != expected_sha256
+        || encode_tree_ledger(tree)? != ledger
+    {
+        return Err(CatalogCode::Target);
+    }
+    Ok(())
+}
+
+fn encode_tree_ledger(tree: &Path) -> Result<Vec<u8>, CatalogCode> {
+    let root = std::fs::symlink_metadata(tree).map_err(|_| CatalogCode::Target)?;
+    if !root.is_dir()
+        || root.uid() != rustix::process::geteuid().as_raw()
+        || root.permissions().mode() & 0o7777 != 0o755
+    {
+        return Err(CatalogCode::Target);
+    }
+    let mut entries = BTreeMap::new();
+    walk_public_tree(tree, tree, &mut entries, 0, &mut 0_u64)?;
+    let mut bytes = Vec::new();
+    append_ledger_entry(
+        &mut bytes,
+        ".",
+        StaticTreeKind::Directory,
+        &root,
+        &crate::sha256(&[]),
+    )?;
+    for (relative, entry) in entries {
+        let metadata =
+            std::fs::symlink_metadata(tree.join(&relative)).map_err(|_| CatalogCode::Target)?;
+        let digest = decode_hex_digest(&entry.sha256)?;
+        append_ledger_entry(&mut bytes, &relative, entry.kind, &metadata, &digest)?;
+    }
+    if bytes.len() > 1024 * 1024 {
+        return Err(CatalogCode::Target);
+    }
+    Ok(bytes)
+}
+
+fn append_ledger_entry(
+    output: &mut Vec<u8>,
+    path: &str,
+    kind: StaticTreeKind,
+    metadata: &std::fs::Metadata,
+    digest: &[u8; 32],
+) -> Result<(), CatalogCode> {
+    use std::fmt::Write as _;
+    let kind = match kind {
+        StaticTreeKind::Directory => "directory",
+        StaticTreeKind::File => "file",
+    };
+    let size = if metadata.is_file() {
+        metadata.len()
+    } else {
+        0
+    };
+    let mut line = String::new();
+    writeln!(
+        line,
+        "{kind}\t{path}\t{}\t{}\t{:o}\t{}\t{size}\t{}",
+        metadata.uid(),
+        metadata.gid(),
+        metadata.permissions().mode() & 0o7777,
+        metadata.nlink(),
+        crate::lower_hex(digest),
+    )
+    .map_err(|_| CatalogCode::Target)?;
+    output
+        .try_reserve(line.len())
+        .map_err(|_| CatalogCode::Target)?;
+    output.extend_from_slice(line.as_bytes());
+    Ok(())
+}
+
+fn decode_hex_digest(value: &str) -> Result<[u8; 32], CatalogCode> {
+    if !valid_digest(value) {
+        return Err(CatalogCode::Target);
+    }
+    let mut output = [0_u8; 32];
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
+        let digit = |byte| match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            _ => None,
+        };
+        output[index] = (digit(pair[0]).ok_or(CatalogCode::Target)? << 4)
+            | digit(pair[1]).ok_or(CatalogCode::Target)?;
+    }
+    Ok(output)
 }
 
 pub(crate) fn verify_published_tree(
@@ -1006,7 +1354,21 @@ pub(crate) fn verify_published_tree(
         CatalogOrigin::Production,
         chrono::Utc::now(),
     )?;
-    let mut expected = BTreeMap::new();
+    validate_static_tree_manifest(&payload.static_tree)?;
+    let mut expected: BTreeMap<String, StaticTreeEntry> = payload
+        .static_tree
+        .iter()
+        .cloned()
+        .map(|entry| (entry.path.clone(), entry))
+        .collect();
+    add_expected_file(
+        &mut expected,
+        "marketplace/v1/catalog.json",
+        catalog_bytes.len() as u64,
+        crate::lower_hex(&crate::sha256(catalog_bytes)),
+    )?;
+    add_expected_directory(&mut expected, "marketplace/v1/packages")?;
+    add_expected_directory(&mut expected, "marketplace/v1/previews")?;
     for target in &payload.targets {
         let package = format!(
             "marketplace/v1/packages/{}/{}/{}.ocpkg",
@@ -1014,15 +1376,12 @@ pub(crate) fn verify_published_tree(
             target.manifest.version(),
             target.package_sha256
         );
-        if expected
-            .insert(
-                package,
-                (target.package_size, target.package_sha256.as_str()),
-            )
-            .is_some()
-        {
-            return Err(CatalogCode::Target);
-        }
+        add_expected_file(
+            &mut expected,
+            &package,
+            target.package_size,
+            target.package_sha256.clone(),
+        )?;
         if let Some(preview) = &target.preview {
             let path = format!(
                 "marketplace/v1/previews/{}/{}/{}.png",
@@ -1030,31 +1389,79 @@ pub(crate) fn verify_published_tree(
                 target.manifest.version(),
                 preview.sha256
             );
-            if expected
-                .insert(path, (preview.size, preview.sha256.as_str()))
-                .is_some()
-            {
-                return Err(CatalogCode::Target);
-            }
+            add_expected_file(&mut expected, &path, preview.size, preview.sha256.clone())?;
         }
     }
-    let mut object_files = BTreeSet::new();
-    walk_public_tree(tree, tree, &mut object_files, 0, &mut 0_u64)?;
-    if object_files != expected.keys().cloned().collect() {
+    if expected.len() > 1_000 {
         return Err(CatalogCode::Target);
     }
-    for (relative, (size, digest)) in expected {
-        let maximum = if relative.ends_with(".png") {
-            256 * 1024
-        } else {
-            16 * 1024 * 1024
-        };
-        let bytes = crate::package::read_source_file(tree, &relative, maximum)
-            .map_err(|_| CatalogCode::Target)?;
-        if bytes.len() as u64 != size || crate::lower_hex(&crate::sha256(&bytes)) != digest {
-            return Err(CatalogCode::Target);
-        }
+    let root_metadata = std::fs::symlink_metadata(tree).map_err(|_| CatalogCode::Target)?;
+    if !root_metadata.is_dir()
+        || root_metadata.uid() != rustix::process::geteuid().as_raw()
+        || root_metadata.permissions().mode() & 0o7777 != 0o755
+    {
+        return Err(CatalogCode::Target);
     }
+    let mut actual = BTreeMap::new();
+    walk_public_tree(tree, tree, &mut actual, 0, &mut 0_u64)?;
+    if actual != expected {
+        return Err(CatalogCode::Target);
+    }
+    Ok(())
+}
+
+fn add_expected_file(
+    expected: &mut BTreeMap<String, StaticTreeEntry>,
+    path: &str,
+    size: u64,
+    sha256: String,
+) -> Result<(), CatalogCode> {
+    validate_tree_path(path)?;
+    if size > 16 * 1024 * 1024 || !valid_digest(&sha256) {
+        return Err(CatalogCode::Target);
+    }
+    let file_path = path.to_owned();
+    let mut parent = Path::new(&file_path).parent().map(Path::to_path_buf);
+    while let Some(directory_path) = parent {
+        let directory = directory_path.as_path();
+        if directory.as_os_str().is_empty() {
+            break;
+        }
+        let directory = directory.to_str().ok_or(CatalogCode::Target)?.to_owned();
+        add_expected_directory(expected, &directory)?;
+        parent = directory_path.parent().map(Path::to_path_buf);
+    }
+    let entry = StaticTreeEntry {
+        path: file_path.clone(),
+        kind: StaticTreeKind::File,
+        mode: 0o644,
+        size,
+        sha256,
+    };
+    if expected.insert(file_path, entry).is_some() {
+        return Err(CatalogCode::Target);
+    }
+    Ok(())
+}
+
+fn add_expected_directory(
+    expected: &mut BTreeMap<String, StaticTreeEntry>,
+    path: &str,
+) -> Result<(), CatalogCode> {
+    validate_tree_path(path)?;
+    let entry = StaticTreeEntry {
+        path: path.to_owned(),
+        kind: StaticTreeKind::Directory,
+        mode: 0o755,
+        size: 0,
+        sha256: crate::lower_hex(&crate::sha256(&[])),
+    };
+    if let Some(existing) = expected.get(path)
+        && existing != &entry
+    {
+        return Err(CatalogCode::Target);
+    }
+    expected.entry(path.to_owned()).or_insert(entry);
     Ok(())
 }
 
@@ -1088,7 +1495,7 @@ fn safe_tree_location(repository: &Path, tree: &Path) -> bool {
     {
         return false;
     }
-    if tree == repository.join("published") {
+    if tree == repository.join("published") || tree == repository.join("public") {
         return true;
     }
     let Ok(relative) = tree.strip_prefix(repository) else {
@@ -1106,44 +1513,35 @@ fn safe_tree_location(repository: &Path, tree: &Path) -> bool {
 fn walk_public_tree(
     root: &Path,
     directory: &Path,
-    objects: &mut BTreeSet<String>,
+    entries: &mut BTreeMap<String, StaticTreeEntry>,
     depth: usize,
     aggregate: &mut u64,
 ) -> Result<(), CatalogCode> {
-    if depth > 16 || objects.len() > 1_000 {
-        return Err(CatalogCode::Target);
-    }
-    let metadata = std::fs::symlink_metadata(directory).map_err(|_| CatalogCode::Target)?;
-    let mode = metadata.permissions().mode() & 0o7777;
-    if !metadata.is_dir()
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-        || !matches!(mode, 0o700 | 0o755)
-    {
+    if depth > 16 || entries.len() > 1_000 {
         return Err(CatalogCode::Target);
     }
     for entry in std::fs::read_dir(directory).map_err(|_| CatalogCode::Target)? {
         let entry = entry.map_err(|_| CatalogCode::Target)?;
         let path = entry.path();
-        let relative = path.strip_prefix(root).map_err(|_| CatalogCode::Target)?;
-        let relative = relative.to_str().ok_or(CatalogCode::Target)?;
-        if relative.is_empty()
-            || relative.len() > 240
-            || !relative.bytes().all(|byte| {
-                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'/')
-            })
-            || relative
-                .split('/')
-                .any(|component| component.is_empty() || matches!(component, "." | ".."))
-        {
-            return Err(CatalogCode::Target);
-        }
+        let relative = normalized_tree_path(root, &path)?;
         let metadata = std::fs::symlink_metadata(&path).map_err(|_| CatalogCode::Target)?;
-        if metadata.is_dir() {
-            walk_public_tree(root, &path, objects, depth + 1, aggregate)?;
+        let mode = metadata.permissions().mode() & 0o7777;
+        let observed = if metadata.is_dir() {
+            if metadata.uid() != rustix::process::geteuid().as_raw() || mode != 0o755 {
+                return Err(CatalogCode::Target);
+            }
+            walk_public_tree(root, &path, entries, depth + 1, aggregate)?;
+            StaticTreeEntry {
+                path: relative.clone(),
+                kind: StaticTreeKind::Directory,
+                mode,
+                size: 0,
+                sha256: crate::lower_hex(&crate::sha256(&[])),
+            }
         } else if metadata.is_file() {
             if metadata.uid() != rustix::process::geteuid().as_raw()
                 || metadata.nlink() != 1
-                || metadata.permissions().mode() & 0o7777 != 0o644
+                || mode != 0o644
                 || metadata.len() > 16 * 1024 * 1024
             {
                 return Err(CatalogCode::Target);
@@ -1152,17 +1550,53 @@ fn walk_public_tree(
                 .checked_add(metadata.len())
                 .filter(|total| *total <= 128 * 1024 * 1024)
                 .ok_or(CatalogCode::Target)?;
-            if (relative.starts_with("marketplace/v1/packages/")
-                || relative.starts_with("marketplace/v1/previews/"))
-                && !objects.insert(relative.to_owned())
-            {
+            let bytes = crate::package::read_source_file(root, &relative, 16 * 1024 * 1024)
+                .map_err(|_| CatalogCode::Target)?;
+            if bytes.len() as u64 != metadata.len() {
                 return Err(CatalogCode::Target);
             }
+            StaticTreeEntry {
+                path: relative.clone(),
+                kind: StaticTreeKind::File,
+                mode,
+                size: metadata.len(),
+                sha256: crate::lower_hex(&crate::sha256(&bytes)),
+            }
         } else {
+            return Err(CatalogCode::Target);
+        };
+        if entries.insert(relative, observed).is_some() || entries.len() > 1_000 {
             return Err(CatalogCode::Target);
         }
     }
     Ok(())
+}
+
+fn normalized_tree_path(root: &Path, path: &Path) -> Result<String, CatalogCode> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| CatalogCode::Target)?
+        .to_str()
+        .ok_or(CatalogCode::Target)?
+        .to_owned();
+    validate_tree_path(&relative)?;
+    Ok(relative)
+}
+
+fn validate_tree_path(relative: &str) -> Result<(), CatalogCode> {
+    if relative.is_empty()
+        || relative.len() > 240
+        || !relative
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'/'))
+        || relative
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        Err(CatalogCode::Target)
+    } else {
+        Ok(())
+    }
 }
 
 fn development_public_key() -> Result<[u8; 32], CatalogCode> {

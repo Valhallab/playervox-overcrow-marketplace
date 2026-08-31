@@ -663,7 +663,9 @@ fn cli_build_is_reproducible_and_verifies_its_complete_source() {
     let counter = secrets.path().join("sequence.txt");
     let state = secrets.path().join("state.json");
     let signing_key = secrets.path().join("signing.key");
-    let public_key = secrets.path().join("signing.pub");
+    let public_key = fixture.path().join("keys/overcrow-production-2026-01.pub");
+    fs::create_dir_all(public_key.parent().expect("pinned key directory"))
+        .expect("pinned key directory");
     let seed = [42; 32];
     write_private(&counter, b"1\n");
     write_private(&signing_key, format!("{}\n", lower_hex(&seed)).as_bytes());
@@ -740,6 +742,32 @@ fn production_authority_commands_are_private_atomic_and_payload_bound() {
             .path()
             .join("wasm32-wasip2/release/hello_widget.wasm"),
     );
+    fs::create_dir_all(repository.path().join("public/marketplace"))
+        .expect("marketplace static directory");
+    for directory in ["public", "public/marketplace"] {
+        fs::set_permissions(
+            repository.path().join(directory),
+            Permissions::from_mode(0o755),
+        )
+        .expect("reviewed static directory mode");
+    }
+    for (relative, bytes) in [
+        ("index.html", b"reviewed static\n".as_slice()),
+        ("marketplace/app.js", b"reviewed application\n".as_slice()),
+        ("marketplace/styles.css", b"reviewed styles\n".as_slice()),
+        (
+            "marketplace/catalog-policy.js",
+            b"reviewed content policy\n".as_slice(),
+        ),
+    ] {
+        fs::write(repository.path().join("public").join(relative), bytes)
+            .expect("reviewed static file");
+        fs::set_permissions(
+            repository.path().join("public").join(relative),
+            Permissions::from_mode(0o644),
+        )
+        .expect("reviewed static mode");
+    }
 
     let secrets = tempfile::tempdir().expect("external production secrets");
     fs::set_permissions(secrets.path(), Permissions::from_mode(0o700))
@@ -782,6 +810,35 @@ fn production_authority_commands_are_private_atomic_and_payload_bound() {
             .any(|window| key_bytes.windows(16).any(|key| key == window))
     );
 
+    let pinned_key = repository
+        .path()
+        .join("keys/overcrow-production-2026-01.pub");
+    fs::create_dir_all(pinned_key.parent().expect("pinned key directory"))
+        .expect("pinned key directory");
+    fs::copy(&public_key, &pinned_key).expect("fixture pinned public key");
+    fs::set_permissions(&pinned_key, Permissions::from_mode(0o644))
+        .expect("pinned public key mode");
+
+    let mismatched_key = secrets.path().join("mismatched.key");
+    let mismatched_state = secrets.path().join("mismatched-state.json");
+    write_private(
+        &mismatched_key,
+        format!("{}\n", lower_hex(&[43; 32])).as_bytes(),
+    );
+    let mismatched = production_build(
+        repository.path(),
+        &sequence,
+        &mismatched_state,
+        &mismatched_key,
+        FIXED_GENERATED,
+        PRODUCTION_EXPIRES,
+    );
+    assert!(
+        !mismatched.status.success(),
+        "production signing seed must match the repository-pinned public key"
+    );
+    assert!(!mismatched_state.exists());
+
     let development_seed = secrets.path().join("development.key");
     write_private(
         &development_seed,
@@ -821,6 +878,60 @@ fn production_authority_commands_are_private_atomic_and_payload_bound() {
     );
     assert!(built.status.success(), "production signer fixture");
     let catalog = repository.path().join("public/marketplace/v1/catalog.json");
+
+    let tampered_catalog = secrets.path().join("tampered-catalog.json");
+    let mut tampered: Value = serde_json::from_slice(&fs::read(&catalog).expect("signed catalog"))
+        .expect("catalog envelope");
+    tampered["signature"] = Value::String("A".repeat(86));
+    fs::write(
+        &tampered_catalog,
+        serde_json::to_vec(&tampered).expect("tampered envelope"),
+    )
+    .expect("tampered catalog");
+    let rejected_signature = tool()
+        .args(["advance-sequence", "--repository"])
+        .arg(repository.path())
+        .arg("--sequence-file")
+        .arg(&sequence)
+        .arg("--sequence-state")
+        .arg(&state)
+        .arg("--catalog")
+        .arg(&tampered_catalog)
+        .output()
+        .expect("reject unsigned accepted identity");
+    assert!(
+        !rejected_signature.status.success(),
+        "counter advancement must cryptographically verify the accepted identity"
+    );
+    assert_eq!(fs::read(&sequence).expect("unchanged counter"), b"1\n");
+
+    fs::write(
+        repository.path().join("public/index.html"),
+        b"raced static\n",
+    )
+    .expect("mutate accepted tree");
+    let rejected_tree = tool()
+        .args(["advance-sequence", "--repository"])
+        .arg(repository.path())
+        .arg("--sequence-file")
+        .arg(&sequence)
+        .arg("--sequence-state")
+        .arg(&state)
+        .arg("--catalog")
+        .arg(&catalog)
+        .output()
+        .expect("reject changed accepted tree");
+    assert!(
+        !rejected_tree.status.success(),
+        "counter advancement must reverify the complete signed tree"
+    );
+    assert_eq!(fs::read(&sequence).expect("unchanged counter"), b"1\n");
+    fs::write(
+        repository.path().join("public/index.html"),
+        b"reviewed static\n",
+    )
+    .expect("restore accepted tree");
+
     let advanced = tool()
         .args(["advance-sequence", "--repository"])
         .arg(repository.path())
@@ -890,13 +1001,28 @@ fn verify_tree_accepts_only_the_exact_public_key_bound_object_tree() {
             .path()
             .join("wasm32-wasip2/release/hello_widget.wasm"),
     );
+    fs::create_dir_all(repository.path().join("public")).expect("static tree root");
+    fs::write(
+        repository.path().join("public/index.html"),
+        b"reviewed static\n",
+    )
+    .expect("reviewed static file");
+    fs::set_permissions(
+        repository.path().join("public/index.html"),
+        Permissions::from_mode(0o644),
+    )
+    .expect("reviewed static mode");
     let secrets = tempfile::tempdir().expect("external production secrets");
     fs::set_permissions(secrets.path(), Permissions::from_mode(0o700))
         .expect("private secrets directory");
     let sequence = secrets.path().join("sequence.txt");
     let state = secrets.path().join("state.json");
     let signing_key = secrets.path().join("signing.key");
-    let public_key = secrets.path().join("signing.pub");
+    let public_key = repository
+        .path()
+        .join("keys/overcrow-production-2026-01.pub");
+    fs::create_dir_all(public_key.parent().expect("pinned key directory"))
+        .expect("pinned key directory");
     write_private(&sequence, b"1\n");
     write_private(
         &signing_key,
@@ -954,6 +1080,117 @@ fn verify_tree_accepts_only_the_exact_public_key_bound_object_tree() {
     assert_eq!(accepted.stdout, b"tree=verified\n");
     assert!(accepted.stderr.is_empty());
 
+    let ledger = secrets.path().join("tree.ledger");
+    let written = tool()
+        .args(["write-tree-ledger", "--repository"])
+        .arg(repository.path())
+        .arg("--tree")
+        .arg(&tree)
+        .arg("--output")
+        .arg(&ledger)
+        .output()
+        .expect("write verified tree ledger");
+    assert!(written.status.success(), "verified ledger is written");
+    assert_eq!(written.stdout, b"tree-ledger=written\n");
+    assert!(written.stderr.is_empty());
+    assert_eq!(
+        fs::metadata(&ledger)
+            .expect("tree ledger metadata")
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o600
+    );
+    let ledger_digest = lower_hex(
+        ring::digest::digest(
+            &ring::digest::SHA256,
+            &fs::read(&ledger).expect("tree ledger"),
+        )
+        .as_ref(),
+    );
+    let verify_ledger = |candidate: &Path| {
+        tool()
+            .args(["verify-tree-ledger", "--tree"])
+            .arg(candidate)
+            .arg("--ledger")
+            .arg(&ledger)
+            .arg("--sha256")
+            .arg(&ledger_digest)
+            .output()
+            .expect("verify exact tree ledger")
+    };
+    assert!(verify_ledger(&tree).status.success());
+
+    fs::write(tree.join("unexpected.js"), b"unexpected\n").expect("extra static file");
+    fs::set_permissions(tree.join("unexpected.js"), Permissions::from_mode(0o644))
+        .expect("extra static mode");
+    assert!(
+        !verify(&tree).status.success(),
+        "extra non-object static files must be rejected"
+    );
+    assert!(
+        !verify_ledger(&tree).status.success(),
+        "post-verification static mutation must violate the final ledger"
+    );
+    fs::remove_file(tree.join("unexpected.js")).expect("remove extra static file");
+
+    for (relative, original) in [
+        ("index.html", b"reviewed static\n".as_slice()),
+        ("marketplace/app.js", b"reviewed application\n".as_slice()),
+        ("marketplace/styles.css", b"reviewed styles\n".as_slice()),
+        (
+            "marketplace/catalog-policy.js",
+            b"reviewed content policy\n".as_slice(),
+        ),
+    ] {
+        fs::write(tree.join(relative), b"modified static\n")
+            .unwrap_or_else(|error| panic!("modify static file {relative}: {error}"));
+        assert!(
+            !verify(&tree).status.success(),
+            "modified static file must be rejected: {relative}"
+        );
+        fs::write(tree.join(relative), original).expect("restore static file");
+    }
+    fs::remove_file(tree.join("index.html")).expect("remove static file");
+    assert!(
+        !verify(&tree).status.success(),
+        "missing static files must be rejected"
+    );
+    fs::write(tree.join("index.html"), b"reviewed static\n").expect("restore static file");
+    fs::set_permissions(tree.join("index.html"), Permissions::from_mode(0o644))
+        .expect("restore static mode");
+
+    fs::create_dir(tree.join("extra-directory")).expect("extra static directory");
+    fs::set_permissions(tree.join("extra-directory"), Permissions::from_mode(0o755))
+        .expect("extra directory mode");
+    assert!(
+        !verify(&tree).status.success(),
+        "extra empty directories must be rejected"
+    );
+    fs::remove_dir(tree.join("extra-directory")).expect("remove extra directory");
+    fs::set_permissions(tree.join("marketplace"), Permissions::from_mode(0o700))
+        .expect("unsafe static directory mode");
+    assert!(
+        !verify(&tree).status.success(),
+        "unsafe static directory modes must be rejected"
+    );
+    fs::set_permissions(tree.join("marketplace"), Permissions::from_mode(0o755))
+        .expect("restore static directory mode");
+    fs::remove_file(tree.join("marketplace/app.js")).expect("remove static JavaScript");
+    symlink("../index.html", tree.join("marketplace/app.js")).expect("static symlink");
+    assert!(
+        !verify(&tree).status.success(),
+        "static symlinks must be rejected"
+    );
+    fs::remove_file(tree.join("marketplace/app.js")).expect("remove static symlink");
+    fs::write(tree.join("marketplace/app.js"), b"reviewed application\n")
+        .expect("restore static JavaScript");
+    fs::set_permissions(
+        tree.join("marketplace/app.js"),
+        Permissions::from_mode(0o644),
+    )
+    .expect("restore static JavaScript mode");
+
     let package = fs::read_dir(
         tree.join("marketplace/v1/packages/com.playervox.overcrow.example.hello/0.1.0"),
     )
@@ -979,6 +1216,22 @@ fn verify_tree_accepts_only_the_exact_public_key_bound_object_tree() {
         "extra content-addressed object rejected"
     );
     fs::remove_file(extra).expect("remove extra package");
+
+    let preview = fs::read_dir(
+        tree.join("marketplace/v1/previews/com.playervox.overcrow.example.hello/0.1.0"),
+    )
+    .expect("preview directory")
+    .next()
+    .expect("preview object")
+    .expect("preview entry")
+    .path();
+    let original_preview = fs::read(&preview).expect("preview bytes");
+    fs::write(&preview, b"tampered image").expect("tamper preview image");
+    assert!(
+        !verify(&tree).status.success(),
+        "modified preview image must be rejected"
+    );
+    fs::write(&preview, original_preview).expect("restore preview image");
 
     let outside = tempfile::tempdir().expect("outside tree");
     assert!(
@@ -1032,6 +1285,18 @@ fn production_build_requires_the_exact_key_and_thirty_day_window() {
         &signing_key,
         format!("{}\n", lower_hex(&[42; 32])).as_bytes(),
     );
+    let public_key = repository
+        .path()
+        .join("keys/overcrow-production-2026-01.pub");
+    fs::create_dir_all(public_key.parent().expect("pinned key directory"))
+        .expect("pinned key directory");
+    let pair = Ed25519KeyPair::from_seed_unchecked(&[42; 32]).expect("fixture key");
+    fs::write(
+        &public_key,
+        format!("{}\n", lower_hex(pair.public_key().as_ref())),
+    )
+    .expect("pinned public key");
+    fs::set_permissions(&public_key, Permissions::from_mode(0o644)).expect("pinned key mode");
 
     let wrong_expiry = production_build(
         repository.path(),
@@ -1066,6 +1331,33 @@ fn production_build_requires_the_exact_key_and_thirty_day_window() {
     assert!(!wrong_key.status.success());
     assert!(!repository.path().join("public").exists());
 
+    write_private(&sequence, b"9007199254740991\n");
+    let browser_maximum = production_build(
+        repository.path(),
+        &sequence,
+        &state,
+        &signing_key,
+        FIXED_GENERATED,
+        PRODUCTION_EXPIRES,
+    );
+    assert!(
+        browser_maximum.status.success(),
+        "maximum exact JavaScript sequence must build"
+    );
+    let verified_maximum = tool()
+        .args(["verify-tree", "--repository"])
+        .arg(repository.path())
+        .arg("--tree")
+        .arg(repository.path().join("public"))
+        .arg("--public-key")
+        .arg(&public_key)
+        .args(["--key-id", PRODUCTION_KEY_ID])
+        .output()
+        .expect("verify maximum-sequence tree");
+    assert!(
+        verified_maximum.status.success(),
+        "maximum exact JavaScript sequence must verify"
+    );
     write_private(&sequence, b"9007199254740992\n");
     let browser_unsafe_sequence = production_build(
         repository.path(),

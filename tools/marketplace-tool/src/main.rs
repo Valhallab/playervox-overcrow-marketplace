@@ -17,8 +17,10 @@ use std::{
 use crate::{
     catalog::{
         CatalogOrigin, DEV_SEED, DEVELOPMENT_KEY_ID, PRODUCTION_KEY_ID, PreparedTarget,
-        PublisherState, accepted_catalog_identity, build_catalog, derive_public_key, parse_counter,
-        read_private_input, verify_catalog, verify_published_tree,
+        PublisherState, accepted_catalog_identity, build_catalog, build_catalog_with_static_tree,
+        collect_static_tree, derive_public_key, parse_counter, production_public_key,
+        production_signing_key, read_private_input, verify_catalog, verify_published_tree,
+        verify_tree_ledger, write_verified_tree_ledger,
     },
     metadata::{
         TargetSpec, bind_manifest_digests, inspect_component, validate_build_bindings,
@@ -121,8 +123,11 @@ fn run(arguments: Vec<OsString>) -> Result<(), AppError> {
         Some("bind-build") => bind_build(&arguments),
         Some("snapshot-plan") => snapshot_plan(&arguments),
         Some("derive-public-key") => derive_public(&arguments),
+        Some("verify-signing-key") => verify_signing_key(&arguments),
         Some("advance-sequence") => advance_sequence(&arguments),
         Some("verify-tree") => verify_tree(&arguments),
+        Some("write-tree-ledger") => write_tree_ledger(&arguments),
+        Some("verify-tree-ledger") => verify_final_tree_ledger(&arguments),
         _ => Err(AppError::Arguments),
     }
 }
@@ -215,12 +220,8 @@ fn build(options: BuildOptions) -> Result<(), AppError> {
                 .map_err(|_| AppError::State)?;
             let counter = read_private_input(&options.repository, &sequence_file, 32)
                 .map_err(|_| AppError::Input)?;
-            let seed = read_private_input(&options.repository, &signing_key, 65)
-                .map_err(|_| AppError::Input)
-                .and_then(|bytes| decode_hex_32(&bytes).ok_or(AppError::Input))?;
-            if seed == DEV_SEED {
-                return Err(AppError::Input);
-            }
+            let seed = production_signing_key(&options.repository, &signing_key)
+                .map_err(|_| AppError::Input)?;
             (
                 state,
                 parse_counter(&counter).map_err(|_| AppError::State)?,
@@ -238,15 +239,30 @@ fn build(options: BuildOptions) -> Result<(), AppError> {
             status: target.status(),
         })
         .collect();
-    let catalog = build_catalog(
-        &prepared,
-        sequence,
-        &options.generated_at,
-        &options.expires_at,
-        origin,
-        &key_id,
-        &seed,
-    )
+    let catalog = if matches!(origin, CatalogOrigin::Production) {
+        let static_tree =
+            collect_static_tree(&options.repository).map_err(|_| AppError::Catalog)?;
+        build_catalog_with_static_tree(
+            &prepared,
+            sequence,
+            &options.generated_at,
+            &options.expires_at,
+            origin,
+            &key_id,
+            &seed,
+            &static_tree,
+        )
+    } else {
+        build_catalog(
+            &prepared,
+            sequence,
+            &options.generated_at,
+            &options.expires_at,
+            origin,
+            &key_id,
+            &seed,
+        )
+    }
     .map_err(|_| AppError::Catalog)?;
     state
         .accept(sequence, sha256(&catalog.payload))
@@ -304,6 +320,22 @@ fn derive_public(arguments: &[String]) -> Result<(), AppError> {
         .map_err(|_| AppError::Output)
 }
 
+fn verify_signing_key(arguments: &[String]) -> Result<(), AppError> {
+    if arguments.len() != 7
+        || arguments[1] != "--repository"
+        || arguments[3] != "--signing-key"
+        || arguments[5] != "--key-id"
+        || arguments[6] != PRODUCTION_KEY_ID
+    {
+        return Err(AppError::Arguments);
+    }
+    production_signing_key(Path::new(&arguments[2]), Path::new(&arguments[4]))
+        .map_err(|_| AppError::State)?;
+    std::io::stdout()
+        .write_all(b"signing-key=verified\n")
+        .map_err(|_| AppError::Output)
+}
+
 fn advance_sequence(arguments: &[String]) -> Result<(), AppError> {
     if arguments.len() != 9
         || arguments[1] != "--repository"
@@ -321,7 +353,17 @@ fn advance_sequence(arguments: &[String]) -> Result<(), AppError> {
         return Err(AppError::Arguments);
     }
     let bytes = read_cli_file(catalog, 1024 * 1024).map_err(|_| AppError::Input)?;
-    let (sequence, digest) = accepted_catalog_identity(&bytes).map_err(|_| AppError::State)?;
+    let public_key = production_public_key(repository).map_err(|_| AppError::State)?;
+    let tree = catalog
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .filter(|tree| tree.join("marketplace/v1/catalog.json") == catalog)
+        .ok_or(AppError::Arguments)?;
+    verify_published_tree(repository, tree, &bytes, PRODUCTION_KEY_ID, &public_key)
+        .map_err(|_| AppError::Verification)?;
+    let (sequence, digest) =
+        accepted_catalog_identity(&bytes, &public_key).map_err(|_| AppError::State)?;
     let state =
         PublisherState::production(repository, sequence_state).map_err(|_| AppError::State)?;
     state
@@ -343,15 +385,59 @@ fn verify_tree(arguments: &[String]) -> Result<(), AppError> {
     }
     let repository = Path::new(&arguments[2]);
     let tree = Path::new(&arguments[4]);
-    let public_key = read_cli_file(Path::new(&arguments[6]), 65)
-        .map_err(|_| AppError::Input)
-        .and_then(|bytes| decode_hex_32(&bytes).ok_or(AppError::Input))?;
+    if Path::new(&arguments[6]) != repository.join(crate::catalog::PRODUCTION_PUBLIC_KEY_PATH) {
+        return Err(AppError::Arguments);
+    }
+    let public_key = production_public_key(repository).map_err(|_| AppError::Input)?;
     let catalog = read_source_file(tree, "marketplace/v1/catalog.json", 1024 * 1024)
         .map_err(|_| AppError::Input)?;
     verify_published_tree(repository, tree, &catalog, &arguments[8], &public_key)
         .map_err(|_| AppError::Verification)?;
     std::io::stdout()
         .write_all(b"tree=verified\n")
+        .map_err(|_| AppError::Output)
+}
+
+fn write_tree_ledger(arguments: &[String]) -> Result<(), AppError> {
+    if arguments.len() != 7
+        || arguments[1] != "--repository"
+        || arguments[3] != "--tree"
+        || arguments[5] != "--output"
+    {
+        return Err(AppError::Arguments);
+    }
+    let repository = Path::new(&arguments[2]);
+    let tree = Path::new(&arguments[4]);
+    let public_key = production_public_key(repository).map_err(|_| AppError::Input)?;
+    let catalog = read_source_file(tree, "marketplace/v1/catalog.json", 1024 * 1024)
+        .map_err(|_| AppError::Input)?;
+    write_verified_tree_ledger(
+        repository,
+        tree,
+        &catalog,
+        &public_key,
+        Path::new(&arguments[6]),
+    )
+    .map_err(|_| AppError::Verification)?;
+    std::io::stdout()
+        .write_all(b"tree-ledger=written\n")
+        .map_err(|_| AppError::Output)
+}
+
+fn verify_final_tree_ledger(arguments: &[String]) -> Result<(), AppError> {
+    if arguments.len() != 7
+        || arguments[1] != "--tree"
+        || arguments[3] != "--ledger"
+        || arguments[5] != "--sha256"
+    {
+        return Err(AppError::Arguments);
+    }
+    let ledger =
+        read_private_file(Path::new(&arguments[4]), 1024 * 1024).map_err(|_| AppError::Input)?;
+    verify_tree_ledger(Path::new(&arguments[2]), &ledger, &arguments[6])
+        .map_err(|_| AppError::Verification)?;
+    std::io::stdout()
+        .write_all(b"tree-ledger=verified\n")
         .map_err(|_| AppError::Output)
 }
 

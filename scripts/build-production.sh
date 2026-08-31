@@ -49,7 +49,7 @@ valid_absolute_syntax() {
         *) return 1 ;;
     esac
 }
-for private_path in "$sequence_file" "$sequence_state" "$signing_key" "$public_key"; do
+for private_path in "$sequence_file" "$sequence_state" "$signing_key"; do
     if ! valid_absolute_syntax "$private_path"; then
         printf '%s\n' 'error: private publisher paths rejected' >&2
         exit 1
@@ -57,11 +57,12 @@ for private_path in "$sequence_file" "$sequence_state" "$signing_key" "$public_k
 done
 if test "$sequence_file" = "$sequence_state" \
         || test "$sequence_file" = "$signing_key" \
-        || test "$sequence_state" = "$signing_key" \
-        || test "$public_key" = "$sequence_file" \
-        || test "$public_key" = "$sequence_state" \
-        || test "$public_key" = "$signing_key"; then
+        || test "$sequence_state" = "$signing_key"; then
     printf '%s\n' 'error: private publisher paths rejected' >&2
+    exit 1
+fi
+if test "$public_key" != "$repo_root/keys/overcrow-production-2026-01.pub"; then
+    printf '%s\n' 'error: production key identity rejected' >&2
     exit 1
 fi
 
@@ -125,6 +126,7 @@ trusted_tool=$(sh "$script_dir/prepare-marketplace-tool.sh" \
 
 # Assemble only reviewed staged bytes before any private publisher file is
 # opened. The signer then adds immutable objects and catalog.json below v1.
+/usr/bin/rm -rf -- "$source_root/public"
 /usr/bin/install -d -m 0755 "$source_root/public"
 /usr/bin/cp -R -- "$source_root/web/landing/." "$source_root/public/"
 /usr/bin/install -d -m 0755 "$source_root/public/marketplace"
@@ -139,7 +141,7 @@ done
 
 # Path containment is checked only after immutable staging has completed. This
 # does not dereference or open any private publisher argument.
-for private_path in "$sequence_file" "$sequence_state" "$signing_key" "$public_key"; do
+for private_path in "$sequence_file" "$sequence_state" "$signing_key"; do
     case "$private_path" in
         "$repo_root" | "$repo_root"/*)
             printf '%s\n' 'error: production signing failed' >&2
@@ -148,10 +150,43 @@ for private_path in "$sequence_file" "$sequence_state" "$signing_key" "$public_k
     esac
 done
 
+staged_public_key="$source_root/keys/overcrow-production-2026-01.pub"
+if test ! -f "$public_key" || test -L "$public_key" \
+        || test "$(/usr/bin/stat -c '%u' "$public_key" 2>/dev/null || :)" \
+            != "$(/usr/bin/id -u)" \
+        || test "$(/usr/bin/stat -c '%a:%h:%s' "$public_key" 2>/dev/null || :)" \
+            != 644:1:65 \
+        || test ! -f "$staged_public_key" || test -L "$staged_public_key" \
+        || test "$(/usr/bin/stat -c '%u:%a:%h:%s' "$staged_public_key" 2>/dev/null || :)" \
+            != "$(/usr/bin/id -u):600:1:65" \
+        || ! /usr/bin/cmp -- "$public_key" "$staged_public_key"; then
+    printf '%s\n' 'error: production key identity rejected' >&2
+    exit 1
+fi
+public_key_fingerprint=$(
+    /usr/bin/sha256sum "$staged_public_key" 2>/dev/null | /usr/bin/cut -d ' ' -f 1
+) || {
+    printf '%s\n' 'error: production key identity rejected' >&2
+    exit 1
+}
+case "$public_key_fingerprint" in
+    *[!0-9a-f]* | '')
+        printf '%s\n' 'error: production key identity rejected' >&2
+        exit 1
+        ;;
+esac
+if test "${#public_key_fingerprint}" -ne 64 \
+        || ! "$trusted_tool" verify-signing-key \
+            --repository "$source_root" --signing-key "$signing_key" \
+            --key-id "$key_id" >/dev/null 2>&1; then
+    printf '%s\n' 'error: production signing failed' >&2
+    exit 1
+fi
+
 private_parent=${sequence_state%/*}
 receipt="$sequence_state.receipt"
 if test "$private_parent" = "$sequence_state" || test "$receipt" = "$sequence_file" \
-        || test "$receipt" = "$signing_key" || test "$receipt" = "$public_key" \
+        || test "$receipt" = "$signing_key" \
         || test ! -d "$private_parent" || test -L "$private_parent" \
         || test "$(CDPATH='' cd -- "$private_parent" 2>/dev/null && pwd -P || :)" \
             != "$private_parent" \
@@ -203,6 +238,7 @@ write_receipt() {
                 'schemaVersion=1' \
                 "candidateRevision=$candidate_revision" \
                 "keyId=$key_id" \
+                "publicKeySha256=$public_key_fingerprint" \
                 "sequence=$sequence" \
                 "generatedAt=$generated_at" \
                 "expiresAt=$expires_at" \
@@ -218,17 +254,33 @@ write_receipt() {
 receipt_copy="$stage/receipt"
 if test -e "$receipt" || test -L "$receipt"; then
     if ! copy_private_file "$receipt" "$receipt_copy" 1024 \
-            || test "$(/usr/bin/wc -l <"$receipt_copy")" -ne 7 \
+            || test "$(/usr/bin/wc -l <"$receipt_copy")" -ne 8 \
             || test "$(/usr/bin/sed -n '1p' "$receipt_copy")" != schemaVersion=1; then
         printf '%s\n' 'error: production receipt rejected' >&2
         exit 1
     fi
     receipt_candidate=$(/usr/bin/sed -n 's/^candidateRevision=//p' "$receipt_copy")
     receipt_key=$(/usr/bin/sed -n 's/^keyId=//p' "$receipt_copy")
+    receipt_public_key=$(/usr/bin/sed -n 's/^publicKeySha256=//p' "$receipt_copy")
     receipt_sequence=$(/usr/bin/sed -n 's/^sequence=//p' "$receipt_copy")
-    if test "$receipt_candidate" = "$candidate_revision" \
-            && test "$receipt_key" = "$key_id" \
-            && test "$receipt_sequence" = "$sequence"; then
+    case "$receipt_sequence:$receipt_public_key" in
+        *[!0-9:abcdef]* | 0:* | 0*:* | :*)
+            printf '%s\n' 'error: production receipt rejected' >&2
+            exit 1
+            ;;
+    esac
+    if test "${#receipt_sequence}" -gt 16 \
+            || test "${#receipt_public_key}" -ne 64; then
+        printf '%s\n' 'error: production receipt rejected' >&2
+        exit 1
+    fi
+    if test "$receipt_sequence" -eq "$sequence"; then
+        if test "$receipt_candidate" != "$candidate_revision" \
+                || test "$receipt_key" != "$key_id" \
+                || test "$receipt_public_key" != "$public_key_fingerprint"; then
+            printf '%s\n' 'error: production receipt rejected' >&2
+            exit 1
+        fi
         generated_at=$(/usr/bin/sed -n 's/^generatedAt=//p' "$receipt_copy")
         expires_at=$(/usr/bin/sed -n 's/^expiresAt=//p' "$receipt_copy")
         receipt_payload=$(/usr/bin/sed -n 's/^payloadSha256=//p' "$receipt_copy")
@@ -244,7 +296,7 @@ if test -e "$receipt" || test -L "$receipt"; then
             printf '%s\n' 'error: production receipt rejected' >&2
             exit 1
         fi
-    else
+    elif test "$receipt_sequence" -lt "$sequence"; then
         generated_at=$(/usr/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')
         expires_at=$(/usr/bin/date -u -d "$generated_at +30 days" '+%Y-%m-%dT%H:%M:%SZ')
         receipt_payload=pending
@@ -252,6 +304,9 @@ if test -e "$receipt" || test -L "$receipt"; then
             printf '%s\n' 'error: production receipt rejected' >&2
             exit 1
         }
+    else
+        printf '%s\n' 'error: production receipt rejected' >&2
+        exit 1
     fi
 else
     generated_at=$(/usr/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')
@@ -272,6 +327,14 @@ if ! "$trusted_tool" build \
         --sequence-state "$sequence_state" \
         --signing-key "$signing_key" \
         --key-id "$key_id" >/dev/null 2>&1; then
+    printf '%s\n' 'error: production signing failed' >&2
+    exit 1
+fi
+# Generated object directories are created under this script's private umask.
+# Normalize the complete public result to its reviewed serving modes before it
+# can be verified, ledgered, or accepted by the sequence authority.
+if ! /usr/bin/find "$source_root/public" -type d -exec /usr/bin/chmod 0755 {} + \
+        || ! /usr/bin/find "$source_root/public" -type f -exec /usr/bin/chmod 0644 {} +; then
     printf '%s\n' 'error: production signing failed' >&2
     exit 1
 fi
@@ -299,13 +362,32 @@ if test "$receipt_payload" = pending; then
 fi
 
 catalog="$source_root/public/marketplace/v1/catalog.json"
-if ! "$trusted_tool" verify "$catalog" --public-key "$public_key" \
+if ! "$trusted_tool" verify "$catalog" --public-key "$staged_public_key" \
         --key-id "$key_id" >/dev/null 2>&1; then
     printf '%s\n' 'error: production verification failed' >&2
     exit 1
 fi
 if ! sh "$script_dir/verify-published.sh" "$source_root/public" \
-        "$public_key" "$key_id" >/dev/null 2>&1; then
+        "$staged_public_key" "$key_id" >/dev/null 2>&1; then
+    printf '%s\n' 'error: production static tree rejected' >&2
+    exit 1
+fi
+tree_ledger="$stage/final-tree.ledger"
+if ! "$trusted_tool" write-tree-ledger --repository "$source_root" \
+        --tree "$source_root/public" --output "$tree_ledger" >/dev/null 2>&1; then
+    printf '%s\n' 'error: production static tree rejected' >&2
+    exit 1
+fi
+tree_ledger_sha256=$(
+    /usr/bin/sha256sum "$tree_ledger" 2>/dev/null | /usr/bin/cut -d ' ' -f 1
+) || {
+    printf '%s\n' 'error: production static tree rejected' >&2
+    exit 1
+}
+case "$tree_ledger_sha256" in
+    *[!0-9a-f]* | '') tree_ledger_sha256='' ;;
+esac
+if test "${#tree_ledger_sha256}" -ne 64; then
     printf '%s\n' 'error: production static tree rejected' >&2
     exit 1
 fi
@@ -329,7 +411,8 @@ previous_published="$repo_root/.published-previous.$$"
 if ! sh "$script_dir/publish-directory.sh" \
         "$source_root/public" "$repo_root/published" \
         "$next_published" "$previous_published" \
-        /usr/bin/mv /usr/bin/mv /usr/bin/mv /usr/bin/mv >/dev/null 2>&1; then
+        /usr/bin/mv /usr/bin/mv /usr/bin/mv /usr/bin/mv \
+        "$trusted_tool" "$tree_ledger" "$tree_ledger_sha256" >/dev/null 2>&1; then
     printf '%s\n' 'error: production publication failed' >&2
     exit 1
 fi

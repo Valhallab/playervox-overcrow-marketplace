@@ -1,9 +1,9 @@
 #!/bin/sh
 set -eu
 
-if test "$#" -ne 8; then
+if test "$#" -ne 8 && test "$#" -ne 11; then
     printf '%s\n' \
-        'usage: publish-directory.sh STAGED PUBLIC NEXT PREVIOUS MOVE-STAGED MOVE-OLD MOVE-NEXT MOVE-RESTORE' >&2
+        'usage: publish-directory.sh STAGED PUBLIC NEXT PREVIOUS MOVE-STAGED MOVE-OLD MOVE-NEXT MOVE-RESTORE [VERIFY-TOOL LEDGER LEDGER-SHA256]' >&2
     exit 2
 fi
 
@@ -15,6 +15,14 @@ move_staged=$5
 move_old=$6
 move_next=$7
 move_restore=$8
+verify_tool=''
+ledger=''
+ledger_sha256=''
+if test "$#" -eq 11; then
+    verify_tool=$9
+    ledger=${10}
+    ledger_sha256=${11}
+fi
 
 case "$staged_public" in
     /*/public) ;;
@@ -60,12 +68,24 @@ for operation in "$move_staged" "$move_old" "$move_next" "$move_restore"; do
         exit 1
     fi
 done
+if test -n "$verify_tool"; then
+    case "$ledger_sha256" in *[!0-9a-f]* | '') ledger_sha256='' ;; esac
+    if test ! -f "$verify_tool" || test -L "$verify_tool" || test ! -x "$verify_tool" \
+            || test ! -f "$ledger" || test -L "$ledger" \
+            || test "$(/usr/bin/stat -c '%u:%a:%h' "$ledger" 2>/dev/null || :)" \
+                != "$(/usr/bin/id -u):600:1" \
+            || test "${#ledger_sha256}" -ne 64; then
+        printf '%s\n' 'error: publication verifier is unavailable' >&2
+        exit 1
+    fi
+fi
 
 next_owned=0
 prior_at_recovery=0
 published=0
 mutation_active=0
 interrupted=0
+new_at_public=0
 
 cleanup() {
     result=$?
@@ -73,6 +93,14 @@ cleanup() {
     if test "$next_owned" -eq 1 \
             && { test -e "$next_public" || test -L "$next_public"; }; then
         if ! /usr/bin/rm -rf -- "$next_public"; then
+            result=1
+        fi
+    fi
+    if test "$published" -eq 0 && test "$new_at_public" -eq 1 \
+            && { test -e "$public" || test -L "$public"; }; then
+        if /usr/bin/rm -rf -- "$public"; then
+            new_at_public=0
+        else
             result=1
         fi
     fi
@@ -141,6 +169,13 @@ else
     exit 1
 fi
 
+if test -n "$verify_tool" \
+        && ! "$verify_tool" verify-tree-ledger --tree "$next_tree" \
+            --ledger "$ledger" --sha256 "$ledger_sha256" >/dev/null 2>&1; then
+    printf '%s\n' 'error: staged publication verification failed' >&2
+    exit 1
+fi
+
 if test -e "$public" || test -L "$public"; then
     if test ! -d "$public" || test -L "$public"; then
         printf '%s\n' 'error: existing public path is unsafe' >&2
@@ -168,12 +203,20 @@ mutation_active=1
 if "$move_next" -T -- "$next_tree" "$public"; then
     mutation_active=0
     abort_if_interrupted
+    new_at_public=1
     if test -e "$next_tree" || test -L "$next_tree" \
             || test ! -d "$public" || test -L "$public"; then
         printf '%s\n' 'error: publication move was incomplete' >&2
         exit 1
     fi
+    if test -n "$verify_tool" \
+            && ! "$verify_tool" verify-tree-ledger --tree "$public" \
+                --ledger "$ledger" --sha256 "$ledger_sha256" >/dev/null 2>&1; then
+        printf '%s\n' 'error: published tree verification failed' >&2
+        exit 1
+    fi
     published=1
+    new_at_public=0
 else
     mutation_active=0
     abort_if_interrupted

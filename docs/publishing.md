@@ -29,9 +29,26 @@ objects. A changed payload requires a strictly higher development sequence;
 never reset or reuse one. Source package directories never retain
 `component.wasm` after publication.
 
-No command in this repository performs production signing. Do not add a
-private key, passphrase, key path, deployment credential, or publishing
-endpoint to local configuration, generated output, CI logs, or a commit.
+The reviewed offline publisher is `scripts/build-production.sh`. It remains
+disabled until the production ceremony commits the reviewed public key at
+`keys/overcrow-production-2026-01.pub`; no private authority material belongs
+in this repository. It accepts only an exact clean `release/*` commit and
+external private files with the required ownership and modes, stages and
+verifies the complete tree, advances the sequence, and atomically replaces
+`published/`. This is a local build operation and does not deploy or push.
+
+Production verification also requires Bubblewrap, a delegated user systemd
+scope, and a canonical regular Node executable selected from `PATH`. Node and
+every directory in its resolved absolute path must be root-owned and not
+group- or world-writable; the executable must be single-link. A user-managed
+version-manager shim is intentionally rejected. The Node checks run without
+network or a process view and under fixed CPU, task, virtual-address, resident
+memory, swap, file, and wall-time limits. Release and CI hosts must provide
+that system Node installation or production verification fails closed.
+
+Do not add a private key, passphrase, private key path, deployment credential,
+or publishing endpoint to local configuration, generated output, CI logs, or
+a commit.
 
 Public launch additionally requires the security gates in
 [SECURITY.md](../SECURITY.md), a key-operations and recovery procedure, and an
