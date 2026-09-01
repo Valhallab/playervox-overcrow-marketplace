@@ -81,7 +81,9 @@ available locale. Minimal-permission hosted CI supplies static admission
 evidence without executing the submission; a maintainer runs the sandboxed
 build gate and reviews the exact revision. Merge acceptance does not publish
 the widget. Publication is a later offline promotion, and every update is
-reviewed again.
+reviewed again. An unrelated submission does not rebuild or retest an already
+accepted widget; only changes to that widget or a shared SDK, WIT, or toolchain
+input invalidate its evidence.
 
 The Rust SDK is the current authoring path. A later visual builder will target
 the same manifest, component, capability, and review contracts rather than a

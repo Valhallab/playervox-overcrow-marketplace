@@ -1,99 +1,124 @@
-# Testing widgets
+# Validation and review
 
-Run native SDK and widget behavior tests first:
+Validation is split by trust boundary. Hosted CI admits untrusted submissions
+without executing them. A maintainer sandbox compiles and tests the affected
+widget once. Acceptance, signing, and deployment consume the reviewed artifact
+and do not repeat source validation.
 
-```sh
-cargo test -p overcrow-widget-sdk -p hello-widget \
-  -p warframe-worldstate-provider -p warframe-widget-data \
-  -p warframe-status-widget -p warframe-fissures-widget \
-  -p warframe-sortie-archon-widget -p warframe-invasions-widget \
-  -p warframe-market-widget --locked
-cargo clippy -p overcrow-widget-sdk -p hello-widget \
-  -p warframe-worldstate-provider -p warframe-widget-data \
-  -p warframe-status-widget -p warframe-fissures-widget \
-  -p warframe-sortie-archon-widget -p warframe-invasions-widget \
-  -p warframe-market-widget --all-targets --locked -- -D warnings
-```
+## Contributor checks
 
-`WidgetHarness` initializes real widget state, routes scoped semantic events,
-updates context before locale/settings/session handlers, and exposes the current
-rendered view for assertions. Test passive behavior, locale fallback, malformed
-or oversized values, unavailable provider/API data, and every state transition.
-
-Synchronize and verify the contract before a component build:
+Run the behavior tests for the package being changed, then build its component
+once. For the example widget:
 
 ```sh
-scripts/sync-wit.sh /absolute/path/to/the/approved/overcrow-worktree
-digest=$(cat wit/widget-v1.sha256)
-printf '%s  %s\n' "$digest" wit/widget-v1.wit | /usr/bin/sha256sum -c -
+cargo fmt --all -- --check
+cargo test -p hello-widget --locked
 cargo build -p hello-widget --release --target wasm32-wasip2 --locked
-OVERCROW_HELLO_COMPONENT="$PWD/target/wasm32-wasip2/release/hello_widget.wasm" \
-  cargo test -p hello-widget \
-  tests::built_component_has_no_imports_and_exact_lifecycle_exports \
-  --locked -- --ignored --exact
-```
-
-The ignored test uses Bytecode Alliance's component-model parser. It requires
-exactly the `init`, `handle`, and `stop` function exports and zero imports,
-including zero `wasi:` imports. A normal core-Wasm symbol dumper is not a
-substitute for component-model inspection.
-
-Use fixed toolchain/dependency versions, a clean checkout, deterministic input
-files, and remapped source paths for reproducible package builds. Validate the
-manifest with the matching OverCrow parser and confirm that its capabilities
-are exactly the commands the widget can emit. Local test fixtures must never
-contain production signing material.
-
-Before opening a widget pull request, also run:
-
-```sh
+cargo run -p marketplace-tool --locked -- inspect-component \
+  target/wasm32-wasip2/release/hello_widget.wasm
 scripts/check-policy.sh
-sh tests/check-policy-smoke.sh
-sh tests/ci-policy-smoke.sh
-sh tests/ci-trust-boundary-smoke.sh
-sh tests/release-snapshot-gate-smoke.sh
-sh tests/community-submission-smoke.sh
-sh tests/sandbox-component-build-smoke.sh
-sh tests/sandbox-review-checks-smoke.sh
-sh -n scripts/*.sh tests/*.sh
 ```
 
-Creators may run those commands directly on code they authored. A maintainer
-must not run contributor code directly on the host. From a clean checkout of
-the exact trusted `candidate` base, run the reviewed full gate against the
-proposed Git object:
+`inspect-component` is the single component-model boundary check. It verifies
+the supported lifecycle exports and forbidden imports directly on the built
+WASM. There is no ignored environment-dependent unit test that repeats this
+inspection.
+
+Widget tests should exercise observable state transitions, malformed and
+bounded inputs, capability denial, locale fallback, and provider failure. Do
+not duplicate parser assertions, assert implementation text, or repeat the
+same success case through multiple wrappers.
+
+## Hosted admission
+
+The `pull_request_target` workflow uses reviewed base scripts and treats the
+proposed Git tree only as data. Path ownership, forbidden `published/` or
+trusted-tool changes, repository shape, metadata, and private-material checks
+run before any candidate execution. Hosted CI has no signing, deployment, or
+merge authority.
+
+Operational objectives, measured from runner start, are:
+
+| Case | Normal target | Diagnostic deadline |
+| --- | ---: | ---: |
+| Forbidden path or publication edit | under 30 seconds | 1 minute |
+| Valid static admission with warm Cargo cache | under 90 seconds | 5 minutes |
+| Obsolete commit on the same PR | cancelled | 30 seconds |
+
+The five-minute workflow timeout is a failure, not permission to fall back to
+an unreviewed or unsandboxed path.
+
+## Maintainer review
+
+Create review evidence outside the repository in a private `0700` directory:
 
 ```sh
-scripts/review-revision.sh TRUST_SHA REVIEW_SHA
+review_parent=/absolute/private/path/review
+review_bundle="$review_parent/proposed.bundle"
+accepted_base_bundle=/absolute/private/path/current-accepted.bundle
+/usr/bin/install -d -m 0700 -- "$review_parent"
+
+scripts/review-revision.sh TRUST_SHA REVIEW_SHA "$review_bundle" \
+  "$accepted_base_bundle"
 ```
 
-The wrapper requires `HEAD` to equal `TRUST_SHA` and the checkout to be clean
-before it fetches pinned dependencies from the exact trusted snapshot. It then
-materializes the proposed revision from Git and invokes `ci-verify.sh` in
-`full` mode. Candidate compilation and tests run only inside the bounded
-sandboxes. Missing inputs or unsupported sandbox primitives fail closed.
+Omit `accepted_base_bundle` only for the first reviewed catalog or after an
+explicit full invalidation. The wrapper requires a clean checkout at
+`TRUST_SHA`, prepares dependencies from that trusted snapshot, materializes the
+exact proposed Git object, and runs candidate code only inside the bounded,
+networkless sandbox.
 
-Hosted CI uses split, minimal permissions. The verification job has only
-`contents: read`, and checkout does not persist its token. The pending and
-final reporter jobs have no checkout or content access; only they receive
-`statuses: write`, solely for the base-specific admission context on the exact
-reviewed pull-request head. No repository or organization secret or
-publication credential is passed to a step. The job definition comes from the
-default branch. It fetches and verifies the exact proposed commit as data,
-without checking it out, then applies trusted-base Cargo/target metadata, path,
-repository-policy, and private-material admission. Candidate PRs and ordinary
-non-publication changes exit before staging, package-manifest validation,
-compilation, tests, or any other candidate execution. An authorized
-same-repository `release/*` PR to `master` that changes `published/` first runs
-the base-owned, non-executing release-snapshot gate. That gate authenticates
-the complete head tree, exact reviewed key, freshness, 90-day lifetime, and
-strictly advancing sequence before the same early exit. The complete
-maintainer gate validates package manifests and listings before merge. This
-keeps public pull requests off a persistent self-hosted runner and avoids
-weakening confinement for GitHub-hosted kernels that reject Bubblewrap's
-required user namespace.
+The affected build plan is deliberately narrow:
 
-The full wrapper covers sandboxed native tests and builds, both static-site
-suites, deterministic output, and malicious fixtures. A maintainer records that
-result before merge or promotion. Neither hosted admission nor the full local
-gate has publication authority or constitutes live desktop/game acceptance.
+| Change | Component work |
+| --- | --- |
+| One widget/provider source tree | test and compile that target only |
+| Web or documentation only | no widget test or compilation |
+| SDK, WIT, shared widget data, toolchain, or unknown shared input | full component review |
+| Workspace, lockfile, or target metadata | full component review |
+
+Unchanged `component.wasm` files are copied byte-for-byte from the verified
+accepted bundle. They are integrity-checked and rebound into the new catalog,
+but they are not recompiled, unit-tested, linted, or component-inspected again.
+Shared workspace, lockfile, or target metadata is the exception because the
+current monorepo cannot prove that another target's dependency graph is
+unchanged. A future per-widget lock format may narrow that invalidation safely.
+The changed package receives formatting, native behavior tests, one WASM build,
+component inspection, catalog assembly, and static-site verification. Clippy
+is not a submission security gate; maintainers may run it when changing trusted
+repository code.
+
+Normal warm-cache objectives are under two minutes for web-only reviews, under
+five minutes for one widget, and under ten minutes for a deliberate full ABI or
+bootstrap review. A useful failure should appear within five minutes; the
+outer operational deadline is ten minutes. Exceeding it is a performance defect
+to diagnose, not a reason to add another validation pass.
+
+The resulting bundle contains the exact staged repository, a canonical ledger,
+the trusted/reviewed revisions, and the reviewed Git tree. Keep it private and
+outside repositories, CI artifacts, release output, and project temporary
+directories.
+
+## Acceptance and publication
+
+After a protected merge, verify ancestry and identical tree without rerunning
+the gate:
+
+```sh
+scripts/accept-candidate-revision.sh \
+  TRUST_SHA REVIEW_SHA CANDIDATE_SHA "$review_bundle"
+```
+
+Acceptance atomically rebinds the bundle receipt from `REVIEW_SHA` to the
+protected `CANDIDATE_SHA`; its ledger and component bytes do not change. That
+accepted bundle becomes the base evidence for the next submission and the
+input to offline publication. `build-production.sh` verifies it before and
+after copying, compares the private copy against the ledger, then signs and
+verifies the static tree without invoking the component staging compiler.
+
+Promotion should diagnose a tree, ancestry, or bundle mismatch in under ten
+seconds. Offline signing and static verification should normally finish within
+two minutes and must not exceed five minutes without investigation.
+
+Neither hosted admission nor local review proves live OverCrow installation or
+desktop/game behavior. Those remain separate application acceptance checks.

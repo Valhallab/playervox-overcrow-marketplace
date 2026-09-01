@@ -566,13 +566,21 @@ fn build_plan(arguments: &[String]) -> Result<(), AppError> {
     }
     let repository = Path::new(&arguments[2]);
     let targets = load_build_plan(repository)?;
-    if arguments.len() == 5 {
-        community_change::validate(repository, Path::new(&arguments[4]), &targets)
-            .map_err(|()| AppError::Policy)?;
-    }
+    let affected = if arguments.len() == 5 {
+        community_change::affected_sources(repository, Path::new(&arguments[4]), &targets)
+            .map_err(|()| AppError::Policy)?
+    } else {
+        None
+    };
     let mut output = String::new();
     for target in &targets {
         let entry = target.build_plan_entry();
+        if affected
+            .as_ref()
+            .is_some_and(|sources| !sources.contains(entry.source_directory))
+        {
+            continue;
+        }
         use std::fmt::Write as _;
         writeln!(
             output,

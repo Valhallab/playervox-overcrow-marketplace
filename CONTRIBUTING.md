@@ -32,7 +32,8 @@ applies the complete [review policy](docs/review-policy.md) to the exact
 revision. Merge to `candidate` records review acceptance but does not publish
 the package. A separate maintainer-owned offline promotion is required;
 creators never receive signing or deployment credentials. Updates repeat the
-applicable review.
+applicable review for changed code, dependencies, ABI, or permissions;
+unchanged accepted widgets are not retested for another submission.
 
 Test a local `.ocpkg` through the Control Center's explicit unverified flow. It
 must install disabled, remain disabled until enabled by the user, and uninstall
