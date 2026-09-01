@@ -195,10 +195,15 @@ For the one-time production bootstrap, land the reviewed public key, trusted
 release-snapshot driver, and verifier on `master` while `published/` is absent.
 Only after that exact base revision is present may the technical and human
 protections in section 2 be enabled and validated. The first signed snapshot
-is then a separate same-repository `release/1` PR to protected `master`; its
-base-owned gate requires sequence `1`. Never combine bootstrap trust changes
-with the first snapshot, temporarily relax an active protection, use a head
-copy of the driver or verifier, or create an unsigned bootstrap snapshot.
+is then a separate same-repository `release/<sequence>` PR to protected
+`master`. Its base-owned gate accepts any already-validated positive sequence
+when `master` has no published snapshot. Aborted or otherwise unpublished
+offline publisher runs can advance the private authority counter, so sequence
+gaps before or between published snapshots are valid. Once a verified base
+snapshot exists, every later release must remain strictly higher. Never combine
+bootstrap trust changes with the first snapshot, temporarily relax an active
+protection, use a head copy of the driver or verifier, or create an unsigned
+bootstrap snapshot.
 
 ## 7. Acceptance, release branch, offline signing, and master PR
 
