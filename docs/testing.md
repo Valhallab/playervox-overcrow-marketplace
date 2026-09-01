@@ -51,6 +51,7 @@ scripts/check-policy.sh
 sh tests/check-policy-smoke.sh
 sh tests/ci-policy-smoke.sh
 sh tests/ci-trust-boundary-smoke.sh
+sh tests/release-snapshot-gate-smoke.sh
 sh tests/community-submission-smoke.sh
 sh tests/sandbox-component-build-smoke.sh
 sh tests/sandbox-review-checks-smoke.sh
@@ -80,12 +81,17 @@ reviewed pull-request head. No repository or organization secret or
 publication credential is passed to a step. The job definition comes from the
 default branch. It fetches and verifies the exact proposed commit as data,
 without checking it out, then applies trusted-base Cargo/target metadata, path,
-repository-policy, and private-material admission. It exits before staging,
-package-manifest validation, compilation, tests, or any other candidate
-execution. The complete maintainer gate validates package manifests and
-listings before merge. This keeps public pull requests off a persistent
-self-hosted runner and avoids weakening confinement for GitHub-hosted kernels
-that reject Bubblewrap's required user namespace.
+repository-policy, and private-material admission. Candidate PRs and ordinary
+non-publication changes exit before staging, package-manifest validation,
+compilation, tests, or any other candidate execution. An authorized
+same-repository `release/*` PR to `master` that changes `published/` first runs
+the base-owned, non-executing release-snapshot gate. That gate authenticates
+the complete head tree, exact reviewed key, freshness, 90-day lifetime, and
+strictly advancing sequence before the same early exit. The complete
+maintainer gate validates package manifests and listings before merge. This
+keeps public pull requests off a persistent self-hosted runner and avoids
+weakening confinement for GitHub-hosted kernels that reject Bubblewrap's
+required user namespace.
 
 The full wrapper covers sandboxed native tests and builds, both static-site
 suites, deterministic output, and malicious fixtures. A maintainer records that

@@ -59,7 +59,8 @@ if test "$repository" = / || test "$trusted_root" = / || test "$private_parent" 
 fi
 for required in \
         scripts/materialize-git-snapshot.sh scripts/prepare-marketplace-tool.sh \
-        scripts/ci-verify.sh scripts/sandbox-review-checks.sh \
+        scripts/ci-verify.sh scripts/verify-release-snapshot.sh \
+        scripts/sandbox-review-checks.sh \
         scripts/sandbox-component-build.sh scripts/sandbox-supervisor.c \
         scripts/resolve-system-gcc.sh \
         tests/reject-published-change.sh tests/reject-trusted-change.sh; do
@@ -133,6 +134,21 @@ if test "$event_name" = pull_request; then
         sh "$trusted_root/tests/reject-trusted-change.sh" <"$changed_paths"
 fi
 
+published_changed=false
+if test "$event_name" = pull_request; then
+    if trusted_git diff --quiet --no-ext-diff --exit-code \
+            "$trust_sha" "$head_sha" -- published; then
+        :
+    else
+        diff_status=$?
+        if test "$diff_status" -ne 1; then
+            printf '%s\n' 'error: pull-request path metadata is unsafe' >&2
+            exit 1
+        fi
+        published_changed=true
+    fi
+fi
+
 build_plan_ok=false
 if test "$event_name" = pull_request; then
     if "$trusted_tool" build-plan --repository "$head_root" \
@@ -195,6 +211,12 @@ projection_git -c user.name='Marketplace CI' \
 # finish before staging, compilation, tests, or any other candidate execution.
 sh "$projection/scripts/check-policy.sh"
 if test "$verification_mode" = admission; then
+    if test "$published_changed" = true; then
+        sh "$trusted_root/scripts/verify-release-snapshot.sh" \
+            "$trusted_root" "$head_root" "$trusted_tool" \
+            "$event_name" "$repository_name" "$base_ref" \
+            "$head_repository" "$head_ref"
+    fi
     printf '%s\n' 'Hosted static admission passed'
     exit 0
 fi

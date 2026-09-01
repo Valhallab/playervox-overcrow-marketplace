@@ -42,9 +42,14 @@ authority.
 The public deployment contract uses <https://overcrow.playervox.com/> for the
 landing page, <https://overcrow.playervox.com/marketplace/> for browsing, and
 <https://overcrow.playervox.com/marketplace/v1/catalog.json> for the catalog.
-Production catalogs expire after exactly 30 days and are republished at least
-every 14 days. A visual builder can produce the same reviewed package format in
-a later milestone; the current creator path is the Rust SDK and source review.
+Production catalogs are valid for exactly 90 days. Republish no later than
+60 days after issuance, on every content change, and immediately for a signed
+security suspension or revocation. Operational rollback always uses a higher
+catalog sequence. A visual builder can produce the same reviewed package format
+in a later milestone; the current creator path is the Rust SDK and source
+review. The authoritative production release, recovery, GitHub protection,
+deployment, cache, and incident procedure is
+[docs/production-operations.md](docs/production-operations.md).
 
 Local development catalogs are signed only with a clearly labelled development
 fixture key and accepted only by debug OverCrow builds. Production

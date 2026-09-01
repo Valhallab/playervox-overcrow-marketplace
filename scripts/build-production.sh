@@ -286,7 +286,7 @@ if test -e "$receipt" || test -L "$receipt"; then
         generated_at=$(/usr/bin/sed -n 's/^generatedAt=//p' "$receipt_copy")
         expires_at=$(/usr/bin/sed -n 's/^expiresAt=//p' "$receipt_copy")
         receipt_payload=$(/usr/bin/sed -n 's/^payloadSha256=//p' "$receipt_copy")
-        expected_expires=$(/usr/bin/date -u -d "$generated_at +30 days" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || :)
+        expected_expires=$(/usr/bin/date -u -d "$generated_at +90 days" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || :)
         case "$receipt_payload" in
             pending) ;;
             *[!0-9a-f]* | '') receipt_payload='' ;;
@@ -300,7 +300,7 @@ if test -e "$receipt" || test -L "$receipt"; then
         fi
     elif test "$receipt_sequence" -lt "$sequence"; then
         generated_at=$(/usr/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')
-        expires_at=$(/usr/bin/date -u -d "$generated_at +30 days" '+%Y-%m-%dT%H:%M:%SZ')
+        expires_at=$(/usr/bin/date -u -d "$generated_at +90 days" '+%Y-%m-%dT%H:%M:%SZ')
         receipt_payload=pending
         write_receipt "$receipt_payload" || {
             printf '%s\n' 'error: production receipt rejected' >&2
@@ -312,7 +312,7 @@ if test -e "$receipt" || test -L "$receipt"; then
     fi
 else
     generated_at=$(/usr/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')
-    expires_at=$(/usr/bin/date -u -d "$generated_at +30 days" '+%Y-%m-%dT%H:%M:%SZ')
+    expires_at=$(/usr/bin/date -u -d "$generated_at +90 days" '+%Y-%m-%dT%H:%M:%SZ')
     receipt_payload=pending
     write_receipt "$receipt_payload" || {
         printf '%s\n' 'error: production receipt rejected' >&2
