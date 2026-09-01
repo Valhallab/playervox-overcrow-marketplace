@@ -28,7 +28,7 @@ esac
 
 for repository_name in "$repository" "$head_repository"; do
     case "$repository_name" in
-        '' | /* | */ | */*/* | *//* | *..* | *[!A-Za-z0-9._/-]*) reject ;;
+        '' | /* | */ | */*/* | *..* | *[!A-Za-z0-9._/-]*) reject ;;
     esac
 done
 

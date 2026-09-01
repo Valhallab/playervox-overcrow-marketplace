@@ -75,7 +75,7 @@ fi
 
 resolved_toolchain=$(sh "$script_dir/resolve-pinned-rust.sh" "$source_root") || exit 1
 tab=$(printf '\t')
-IFS="$tab" read -r toolchain_root cargo_path rustc_path \
+IFS="$tab" read -r toolchain_root _cargo_path _rustc_path \
     cargo_index cargo_cache cargo_sources <<EOF
 $resolved_toolchain
 EOF
@@ -133,7 +133,9 @@ if test -n "$public_root"; then
     set -- "$@" --ro-bind "$public_root" /public
 fi
 
-if ! /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
+if ! {
+    # shellcheck disable=SC2016 # The sandbox child shell expands this review program.
+    /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
         XDG_RUNTIME_DIR="$runtime_directory" \
         DBUS_SESSION_BUS_ADDRESS="unix:path=$session_bus" \
         /usr/bin/systemd-run --user --wait --pipe --collect \
@@ -190,7 +192,8 @@ if ! /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
                         ;;
                     *) exit 1 ;;
                 esac
-            ' sh "$mode" /system-node </dev/null; then
+            ' sh "$mode" /system-node </dev/null
+}; then
     printf '%s\n' 'error: sandboxed review checks failed' >&2
     exit 1
 fi

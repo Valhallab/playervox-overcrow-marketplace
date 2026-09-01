@@ -115,8 +115,8 @@ git_candidate_is_clean() {
 final_ledger_contains_path() {
     relative=$1
     tab=$(printf '\t')
-    while IFS="$tab" read -r ledger_path ledger_mode ledger_owner \
-            ledger_links ledger_size ledger_digest ledger_extra; do
+    while IFS="$tab" read -r ledger_path _ledger_mode _ledger_owner \
+            _ledger_links _ledger_size _ledger_digest _ledger_extra; do
         if test "$ledger_path" = "$relative"; then
             return 0
         fi
@@ -443,7 +443,7 @@ esac
 tab=$(printf '\t')
 target_count=0
 if test "$mode" = production; then
-    while IFS="$tab" read -r snapshot_mode snapshot_size snapshot_oid snapshot_relative; do
+    while IFS="$tab" read -r _snapshot_mode _snapshot_size _snapshot_oid snapshot_relative; do
         printf '%s\n' "$snapshot_relative" >>"$expected_final_paths"
     done <"$snapshot_plan_file"
 fi
@@ -594,13 +594,15 @@ fi
 
 bindings="$source_root/.build-bindings.json"
 printf '%s\n' '{' '  "schemaVersion": 1,' >"$bindings"
-printf '%s' '  "components": ' >>"$bindings"
-/usr/bin/cat "$components_json" >>"$bindings"
-printf '%s\n' ',' >>"$bindings"
-printf '%s\n' '  "providers": [' >>"$bindings"
-printf '    {"id":"%s","version":"%s","sha256":"%s"}\n' \
-    "$provider_id" "$provider_version" "$provider_digest" >>"$bindings"
-printf '%s\n' '  ]' '}' >>"$bindings"
+{
+    printf '%s' '  "components": '
+    /usr/bin/cat "$components_json"
+    printf '%s\n' ','
+    printf '%s\n' '  "providers": ['
+    printf '    {"id":"%s","version":"%s","sha256":"%s"}\n' \
+        "$provider_id" "$provider_version" "$provider_digest"
+    printf '%s\n' '  ]' '}'
+} >>"$bindings"
 /usr/bin/chmod 0600 "$bindings"
 marketplace_tool bind-build --repository "$source_root" --bindings "$bindings"
 if test "$mode" = production; then
