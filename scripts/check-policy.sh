@@ -40,6 +40,7 @@ for required in \
 done
 
 scan_pattern='BEGIN ((RSA|OPENSSH|EC|DSA|PGP|ENCRYPTED|[A-Z0-9 ]+) )?PRIVATE K[E]Y( BLOCK)?|AGE-SECRET-K[E]Y-1|g[h][pousr]_[A-Za-z0-9]{30,}|s[k]-(proj-)?[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}'
+# shellcheck disable=SC2016 # The child shell expands this scanner program.
 if matches=$(cd "$repo_root" && git ls-files --cached --others --exclude-standard -z |
     /usr/bin/grep -zv '^fixtures/keys/development-ed25519\.key$' |
     /usr/bin/xargs -0 -r sh -c '

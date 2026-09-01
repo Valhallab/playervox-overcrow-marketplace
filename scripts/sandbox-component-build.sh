@@ -114,7 +114,7 @@ fi
 
 resolved_toolchain=$(sh "$script_dir/resolve-pinned-rust.sh" "$source_root") || exit 1
 tab=$(printf '\t')
-IFS="$tab" read -r toolchain_root cargo_path rustc_path \
+IFS="$tab" read -r toolchain_root _cargo_path _rustc_path \
     cargo_index cargo_cache cargo_sources <<EOF
 $resolved_toolchain
 EOF
@@ -155,6 +155,7 @@ fi
 /usr/bin/chmod 0600 "$artifact_archive"
 
 run_sandboxed_build() {
+    # shellcheck disable=SC2016 # The nested sandbox shells expand this program.
     /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
         XDG_RUNTIME_DIR="$runtime_directory" \
         DBUS_SESSION_BUS_ADDRESS="unix:path=$session_bus" \

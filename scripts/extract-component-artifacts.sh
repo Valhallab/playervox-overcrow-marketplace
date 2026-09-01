@@ -48,7 +48,7 @@ fi
 
 tab=$(printf '\t')
 expected_count=0
-while IFS="$tab" read -r cargo_package component_artifact source_directory; do
+while IFS="$tab" read -r _cargo_package component_artifact _source_directory; do
     expected="$component_artifact.wasm"
     if test "$(/usr/bin/grep -F -x -c -- "$expected" "$listing" || :)" != 1; then
         printf '%s\n' 'error: sandboxed component artifacts are unsafe' >&2
@@ -79,7 +79,7 @@ if ! /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
     exit 1
 fi
 artifact_count=0
-while IFS="$tab" read -r cargo_package component_artifact source_directory; do
+while IFS="$tab" read -r _cargo_package component_artifact _source_directory; do
     artifact="$output/$component_artifact.wasm"
     if test ! -f "$artifact" || test -L "$artifact" \
             || test "$(/usr/bin/stat -c '%u:%a:%h' "$artifact")" \
