@@ -53,4 +53,6 @@ signed suspension or revocation in a newer monotonic catalog. Clients must
 reject that package for new installation or update, immediately disable an
 installed copy, and offer its removal. An absent or stale catalog never invents
 a revocation. A catalog signature never bypasses package validation, user
-consent, or runtime sandboxing.
+consent, or runtime sandboxing. Follow the authoritative
+[production operations runbook](docs/production-operations.md) for key
+recovery, loss, compromise, suspension, revocation, and corrective rollback.

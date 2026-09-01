@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC2016 # Policy assertions intentionally match literal shell/YAML.
 set -eu
 
 if test "$#" -ne 0; then
@@ -12,25 +13,33 @@ ci_driver="$repo_root/scripts/ci-verify.sh"
 sandbox_driver="$repo_root/scripts/sandbox-review-checks.sh"
 component_sandbox="$repo_root/scripts/sandbox-component-build.sh"
 published_verifier="$repo_root/scripts/verify-published.sh"
+release_gate="$repo_root/scripts/verify-release-snapshot.sh"
 gate="$repo_root/tests/reject-published-change.sh"
 community_smoke="$repo_root/tests/community-submission-smoke.sh"
 trusted_gate="$repo_root/tests/reject-trusted-change.sh"
 trust_smoke="$repo_root/tests/ci-trust-boundary-smoke.sh"
+release_smoke="$repo_root/tests/release-snapshot-gate-smoke.sh"
 sandbox_review_smoke="$repo_root/tests/sandbox-review-checks-smoke.sh"
 review_gate="$repo_root/scripts/review-revision.sh"
+acceptance_gate="$repo_root/scripts/accept-candidate-revision.sh"
 node_resolver="$repo_root/scripts/resolve-system-node.sh"
 codeowners="$repo_root/.github/CODEOWNERS"
 testing_doc="$repo_root/docs/testing.md"
 publishing_doc="$repo_root/docs/publishing.md"
+production_doc="$repo_root/docs/production-operations.md"
 
 for owned_path in \
         '/tests/reject-published-change.sh @ypMrg' \
         '/tests/reject-trusted-change.sh @ypMrg' \
         '/tests/community-submission-smoke.sh @ypMrg' \
         '/tests/ci-trust-boundary-smoke.sh @ypMrg' \
+        '/tests/release-snapshot-gate-smoke.sh @ypMrg' \
         '/tests/sandbox-review-checks-smoke.sh @ypMrg' \
         '/tests/ci-policy-smoke.sh @ypMrg' \
-        '/scripts/review-revision.sh @ypMrg'; do
+        '/tests/accept-candidate-revision-smoke.sh @ypMrg' \
+        '/scripts/review-revision.sh @ypMrg' \
+        '/scripts/accept-candidate-revision.sh @ypMrg' \
+        '/scripts/verify-release-snapshot.sh @ypMrg'; do
     if ! /usr/bin/grep -F -x -- "$owned_path" "$codeowners" >/dev/null; then
         printf '%s\n' 'error: CI policy gates are not explicitly owned' >&2
         exit 1
@@ -38,18 +47,24 @@ for owned_path in \
 done
 
 if ! test -x "$gate" || test -L "$gate" \
+        || ! test -x "$release_gate" || test -L "$release_gate" \
         || ! test -x "$trusted_gate" || test -L "$trusted_gate"; then
     printf '%s\n' 'error: published-change gate is missing or unsafe' >&2
     exit 1
 fi
 if ! test -x "$community_smoke" || test -L "$community_smoke" \
         || ! test -x "$trust_smoke" || test -L "$trust_smoke" \
+        || ! test -x "$release_smoke" || test -L "$release_smoke" \
         || ! test -x "$sandbox_review_smoke" || test -L "$sandbox_review_smoke"; then
     printf '%s\n' 'error: community-change policy tests are missing or unsafe' >&2
     exit 1
 fi
 if ! test -x "$review_gate" || test -L "$review_gate"; then
     printf '%s\n' 'error: maintainer review gate is missing or unsafe' >&2
+    exit 1
+fi
+if ! test -x "$acceptance_gate" || test -L "$acceptance_gate"; then
+    printf '%s\n' 'error: accepted-revision gate is missing or unsafe' >&2
     exit 1
 fi
 if ! test -x "$node_resolver" || test -L "$node_resolver"; then
@@ -134,6 +149,7 @@ require_line 'tests/reject-published-change.sh'
 require_line 'tests/reject-trusted-change.sh'
 require_line 'scripts/materialize-git-snapshot.sh'
 require_line 'scripts/ci-verify.sh'
+require_line 'scripts/verify-release-snapshot.sh'
 require_line 'scripts/sandbox-review-checks.sh'
 require_line 'show "$TRUST_SHA:scripts/materialize-git-snapshot.sh"'
 require_line 'sh "$trusted_root/scripts/ci-verify.sh"'
@@ -296,6 +312,27 @@ if ! /usr/bin/grep -F -- \
     printf '%s\n' 'error: maintainer gate does not bootstrap exact reviewed bytes' >&2
     exit 1
 fi
+
+if /usr/bin/grep -F -- \
+        'test "$candidate_revision" = "$review_revision"' \
+        "$production_doc" >/dev/null \
+        || ! /usr/bin/awk '
+            /review-revision[.]sh "\$trusted_base_revision" "\$review_revision"/ {
+                premerge_gate = NR
+            }
+            /fetch --no-tags --no-write-fetch-head --force origin/ { fetch = NR }
+            /candidate_revision=\$\(accepted_git rev-parse --verify/ { resolve = NR }
+            /accept-candidate-revision[.]sh / { accepted_gate = NR }
+            /worktree add -b "release\/\$sequence_name"/ { release = NR }
+            END {
+                exit !(premerge_gate > 0 && fetch > premerge_gate \
+                    && resolve > fetch && accepted_gate > resolve \
+                    && release > accepted_gate)
+            }
+        ' "$production_doc"; then
+    printf '%s\n' 'error: accepted revision is not tree-bound and regated after merge' >&2
+    exit 1
+fi
 if /usr/bin/grep -E \
         'apt-get|bubblewrap|shellcheck|systemctl' \
         "$workflow" >/dev/null; then
@@ -342,10 +379,18 @@ if ! /usr/bin/grep -F -- \
 fi
 if ! /usr/bin/awk '
         /if test "\$verification_mode" = admission/ { admission = NR }
+        /sh "\$trusted_root\/scripts\/verify-release-snapshot[.]sh"/ {
+            release_gate = NR
+        }
+        /Hosted static admission passed/ { hosted_success = NR }
         /stage-catalog-repository[.]sh" --mode production/ { stage = NR }
-        END { exit !(admission > 0 && stage > admission) }
+        END {
+            exit !(admission > 0 && release_gate > admission \
+                && hosted_success > release_gate && stage > hosted_success)
+        }
     ' "$ci_driver"; then
-    printf '%s\n' 'error: hosted admission does not exit before candidate execution' >&2
+    printf '%s\n' \
+        'error: hosted verification does not gate releases before candidate execution' >&2
     exit 1
 fi
 

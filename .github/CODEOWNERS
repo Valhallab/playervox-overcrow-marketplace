@@ -9,10 +9,17 @@
 /tests/reject-trusted-change.sh @ypMrg
 /tests/community-submission-smoke.sh @ypMrg
 /tests/ci-trust-boundary-smoke.sh @ypMrg
+/tests/release-snapshot-gate-smoke.sh @ypMrg
 /tests/sandbox-review-checks-smoke.sh @ypMrg
+/tests/deployment-fixture-server.py @ypMrg
+/tests/verify-deployment-smoke.sh @ypMrg
+/tests/accept-candidate-revision-smoke.sh @ypMrg
 /tests/ci-policy-smoke.sh @ypMrg
 /scripts/review-revision.sh @ypMrg
+/scripts/accept-candidate-revision.sh @ypMrg
+/scripts/verify-release-snapshot.sh @ypMrg
 /SECURITY.md @ypMrg
 /docs/permissions.md @ypMrg
 /docs/publishing.md @ypMrg
+/docs/production-operations.md @ypMrg
 /docs/review-policy.md @ypMrg
