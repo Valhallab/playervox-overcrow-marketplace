@@ -2,14 +2,15 @@
 set -eu
 umask 077
 
-if test "$#" -ne 3; then
+if test "$#" -ne 4; then
     printf '%s\n' \
-        'usage: accept-candidate-revision.sh TRUST-SHA REVIEW-SHA CANDIDATE-SHA' >&2
+        'usage: accept-candidate-revision.sh TRUST-SHA REVIEW-SHA CANDIDATE-SHA REVIEW-BUNDLE' >&2
     exit 2
 fi
 trust_sha=$1
 review_sha=$2
 candidate_sha=$3
+review_bundle=$4
 for revision in "$trust_sha" "$review_sha" "$candidate_sha"; do
     case "$revision" in
         '' | *[!0-9a-f]*)
@@ -32,6 +33,14 @@ fi
 repo_root=$(/usr/bin/dirname -- "$script_dir")
 case "$repo_root" in
     / | '') printf '%s\n' 'error: accepted revision root is unsafe' >&2; exit 1 ;;
+esac
+case "$review_bundle" in
+    "$repo_root" | "$repo_root"/* | '')
+        printf '%s\n' 'error: accepted review bundle is unsafe' >&2
+        exit 1
+        ;;
+    /*) ;;
+    *) printf '%s\n' 'error: accepted review bundle is unsafe' >&2; exit 1 ;;
 esac
 
 accepted_git() {
@@ -106,10 +115,18 @@ if test -z "$review_tree" || test "$candidate_tree" != "$review_tree" \
     exit 1
 fi
 
-review_gate="$script_dir/review-revision.sh"
-if test ! -f "$review_gate" || test -L "$review_gate" \
-        || test ! -x "$review_gate"; then
-    printf '%s\n' 'error: accepted revision complete gate is unavailable' >&2
+bundle_gate="$script_dir/review-bundle.sh"
+if test ! -f "$bundle_gate" || test -L "$bundle_gate" \
+        || test ! -x "$bundle_gate" \
+        || ! sh "$bundle_gate" verify --bundle "$review_bundle" \
+            --review-sha "$review_sha" \
+            --review-tree "$review_tree" --trust-sha "$trust_sha"; then
+    printf '%s\n' 'error: accepted review evidence is unavailable' >&2
     exit 1
 fi
-sh "$review_gate" "$trust_sha" "$candidate_sha"
+if ! sh "$bundle_gate" rebind --bundle "$review_bundle" \
+        --from-review-sha "$review_sha" --to-review-sha "$candidate_sha" \
+        --review-tree "$review_tree"; then
+    printf '%s\n' 'error: accepted review evidence is unavailable' >&2
+    exit 1
+fi

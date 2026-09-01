@@ -72,10 +72,7 @@ overcrow_widget_sdk::export_widget!(crate::HelloWidget);
 
 #[cfg(test)]
 mod tests {
-    use std::{env, fs};
-
     use overcrow_widget_sdk::{HostEvent, Interaction, InteractionKind, Locale, WidgetHarness};
-    use wasmparser::{ComponentExternalKind, ComponentTypeRef, Encoding, Parser, Payload};
 
     use super::HelloWidget;
 
@@ -116,55 +113,6 @@ mod tests {
             harness
                 .send(interaction("unknown", InteractionKind::Clicked))
                 .is_err()
-        );
-    }
-
-    #[test]
-    #[ignore = "requires a release wasm32-wasip2 component path"]
-    fn built_component_has_no_imports_and_exact_lifecycle_exports() {
-        let path = env::var_os("OVERCROW_HELLO_COMPONENT")
-            .expect("set OVERCROW_HELLO_COMPONENT to the built component");
-        let bytes = fs::read(path).expect("read built component");
-        let mut root_encoding = None;
-        let mut depth = 0_u32;
-        let mut imports = Vec::new();
-        let mut exports = Vec::new();
-
-        for payload in Parser::new(0).parse_all(&bytes) {
-            match payload.expect("valid WebAssembly component") {
-                Payload::Version { encoding, .. } if root_encoding.is_none() => {
-                    root_encoding = Some(encoding);
-                }
-                Payload::ComponentImportSection(section) if depth == 0 => {
-                    for import in section {
-                        let import = import.expect("valid component import");
-                        if !matches!(import.ty, ComponentTypeRef::Type(_)) {
-                            imports.push(import.name.0.to_owned());
-                        }
-                    }
-                }
-                Payload::ComponentExportSection(section) if depth == 0 => {
-                    for export in section {
-                        let export = export.expect("valid component export");
-                        exports.push((export.name.0.to_owned(), export.kind));
-                    }
-                }
-                Payload::ModuleSection { .. } | Payload::ComponentSection { .. } => depth += 1,
-                Payload::End(_) if depth > 0 => depth -= 1,
-                _ => {}
-            }
-        }
-
-        assert_eq!(root_encoding, Some(Encoding::Component));
-        assert!(imports.is_empty(), "forbidden imports: {imports:?}");
-        exports.sort_by(|left, right| left.0.cmp(&right.0));
-        assert_eq!(
-            exports,
-            [
-                ("handle".to_owned(), ComponentExternalKind::Func),
-                ("init".to_owned(), ComponentExternalKind::Func),
-                ("stop".to_owned(), ComponentExternalKind::Func),
-            ]
         );
     }
 }

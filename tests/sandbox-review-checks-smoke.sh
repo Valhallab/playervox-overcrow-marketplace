@@ -127,4 +127,37 @@ test "$(/usr/bin/cat "$host_canary")" = 'must remain unchanged'
 test ! -e "$fixture/canary/source-mutation" \
     && test ! -L "$fixture/canary/source-mutation"
 
+/usr/bin/install -d -m 0700 -- "$fixture/skipped/src"
+/usr/bin/sed -i 's/members = \["canary"\]/members = ["canary", "skipped"]/' \
+    "$fixture/Cargo.toml"
+printf '%s\n' \
+    '' \
+    '[[package]]' \
+    'name = "review-sandbox-skipped"' \
+    'version = "0.1.0"' >>"$fixture/Cargo.lock"
+printf '%s\n' \
+    '[package]' \
+    'name = "review-sandbox-skipped"' \
+    'version = "0.1.0"' \
+    'edition = "2024"' >"$fixture/skipped/Cargo.toml"
+printf '%s\n' \
+    '#[test]' \
+    'fn must_not_run() {' \
+    '    panic!("unchanged package was retested");' \
+    '}' >"$fixture/skipped/src/lib.rs"
+review_plan="$scratch/review-plan.tsv"
+printf 'review-sandbox-canary\tcanary\tcanary\n' >"$review_plan"
+/usr/bin/chmod 0600 "$review_plan"
+sh "$helper" workspace "$fixture" "$fixture" "$review_plan"
+
+# Prove that the plan is consumed, not merely accepted: selecting the known
+# failing package must fail, while the preceding canary-only plan passed.
+printf 'review-sandbox-skipped\tskipped\tskipped\n' >"$review_plan"
+if sh "$helper" workspace "$fixture" "$fixture" "$review_plan" \
+        >"$scratch/selected-failure.stdout" \
+        2>"$scratch/selected-failure.stderr"; then
+    printf '%s\n' 'error: selected package tests were not executed' >&2
+    exit 1
+fi
+
 printf '%s\n' 'Review-check sandbox smoke tests passed'

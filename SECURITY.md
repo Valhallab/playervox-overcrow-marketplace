@@ -38,11 +38,13 @@ candidate execution. A proposed root Cargo configuration fails admission; it
 is never used to prepare the validator. Package manifests and listings are
 validated later by the complete maintainer gate before merge.
 
-The maintainer's complete gate uses the same trusted-base boundary. Candidate
-format, lint, native tests, component builds, and web tests then run without
-network, secrets, a host process view, a writable source checkout, or writable
-later evidence. Unsupported sandbox primitives fail closed; they are never
-replaced by an unsandboxed build.
+The maintainer gate uses the same trusted-base boundary. Formatting, native
+tests, and one component build run for affected targets; web tests run for the
+assembled site. Accepted unchanged component bytes come from the verified base
+bundle and are not recompiled or retested. Candidate execution has no network,
+secrets, host process view, writable source checkout, or writable later
+evidence. Unsupported sandbox primitives fail closed; they are never replaced
+by an unsandboxed build.
 
 The marketplace website cannot install software. The Control Center validates
 packages and user consent; local unverified packages install disabled and stay

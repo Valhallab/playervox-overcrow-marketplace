@@ -14,9 +14,14 @@
 /tests/deployment-fixture-server.py @ypMrg
 /tests/verify-deployment-smoke.sh @ypMrg
 /tests/accept-candidate-revision-smoke.sh @ypMrg
+/tests/review-bundle-smoke.sh @ypMrg
+/tests/build-production-review-bundle-smoke.sh @ypMrg
 /tests/ci-policy-smoke.sh @ypMrg
 /scripts/review-revision.sh @ypMrg
 /scripts/accept-candidate-revision.sh @ypMrg
+/scripts/review-bundle.sh @ypMrg
+/scripts/build-production.sh @ypMrg
+/scripts/stage-catalog-repository.sh @ypMrg
 /scripts/verify-release-snapshot.sh @ypMrg
 /SECURITY.md @ypMrg
 /docs/permissions.md @ypMrg

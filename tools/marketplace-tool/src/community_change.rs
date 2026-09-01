@@ -7,17 +7,17 @@ const MAX_CHANGED_PATHS: usize = 512;
 const MAX_CHANGED_PATH_BYTES: usize = 512;
 const MAX_COMMUNITY_ROOTS: usize = 100;
 
-pub(crate) fn validate(
+pub(crate) fn affected_sources(
     repository: &Path,
     changed_paths: &Path,
     targets: &[TargetSpec],
-) -> Result<(), ()> {
+) -> Result<Option<BTreeSet<String>>, ()> {
     if targets.is_empty() {
         return Err(());
     }
     let bytes = read_private_file(changed_paths, MAX_CHANGED_BYTES).map_err(|_| ())?;
     if bytes.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     let records = bytes.strip_suffix(&[0]).ok_or(())?;
     let records: Vec<_> = records.split(|byte| *byte == 0).collect();
@@ -26,11 +26,13 @@ pub(crate) fn validate(
     }
 
     let mut roots = BTreeSet::new();
+    let mut paths = Vec::with_capacity(records.len());
     for record in records {
         let path = std::str::from_utf8(record).map_err(|_| ())?;
         if !valid_changed_path(path) {
             return Err(());
         }
+        paths.push(path);
         if !path.starts_with("community/") || path == "community/README.md" {
             continue;
         }
@@ -49,7 +51,7 @@ pub(crate) fn validate(
         }
     }
 
-    let mut sources = BTreeSet::new();
+    let mut sources = BTreeSet::<String>::new();
     for target in targets {
         let source = target.source_directory();
         if source.starts_with("community/") {
@@ -62,9 +64,9 @@ pub(crate) fn validate(
                 return Err(());
             }
         }
-        sources.insert(source);
+        sources.insert(source.to_owned());
     }
-    for root in roots {
+    for root in &roots {
         let submission = repository.join(&root);
         match fs::symlink_metadata(&submission) {
             Ok(metadata) => {
@@ -81,7 +83,44 @@ pub(crate) fn validate(
             Err(_) => return Err(()),
         }
     }
-    Ok(())
+
+    let mut selected = BTreeSet::new();
+    let mut rebuild_all = false;
+    for path in paths {
+        if let Some(source) = sources.iter().find(|source| {
+            path.strip_prefix((*source).as_str())
+                .is_some_and(|suffix| suffix.starts_with('/'))
+        }) {
+            selected.insert((*source).clone());
+            continue;
+        }
+        if path.starts_with("community/") && path != "community/README.md" {
+            continue;
+        }
+        match path {
+            "Cargo.toml" | "Cargo.lock" | "marketplace/targets.json" => {
+                // These files define the shared build graph. A source-local
+                // selection cannot prove that another target is unaffected.
+                rebuild_all = true;
+            }
+            "README.md" | "LICENSE" | "community/README.md" => {}
+            _ if path.starts_with("web/") || path.starts_with("docs/") => {}
+            _ if path.starts_with("sdk/")
+                || path.starts_with("wit/")
+                || path.starts_with("fixtures/")
+                || path.starts_with("widgets/warframe-data/")
+                || path == "rust-toolchain.toml" =>
+            {
+                rebuild_all = true;
+            }
+            _ => rebuild_all = true,
+        }
+    }
+    if rebuild_all {
+        Ok(None)
+    } else {
+        Ok(Some(selected))
+    }
 }
 
 fn valid_changed_path(path: &str) -> bool {

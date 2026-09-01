@@ -258,7 +258,6 @@ name = "hello-widget"
 version = "0.1.0"
 dependencies = [
  "overcrow-widget-sdk",
- "wasmparser",
 ]
 
 [[package]]

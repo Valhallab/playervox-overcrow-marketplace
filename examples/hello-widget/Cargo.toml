@@ -10,6 +10,3 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 overcrow-widget-sdk = { path = "../../sdk/rust/overcrow-widget-sdk" }
-
-[dev-dependencies]
-wasmparser = { version = "=0.245.1", default-features = false, features = ["component-model", "std"] }

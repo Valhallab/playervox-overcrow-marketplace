@@ -6,11 +6,14 @@ if test "$#" -ne 0; then
     exit 2
 fi
 
-node_candidate=$(command -v node 2>/dev/null || :)
-case "$node_candidate" in
-    /*) ;;
-    *) node_candidate='' ;;
-esac
+node_candidate=''
+for candidate in /usr/bin/node /usr/local/bin/node \
+        /usr/lib/chatgpt/resources/cua_node/bin/node; do
+    if test -f "$candidate" && test ! -L "$candidate"; then
+        node_candidate=$candidate
+        break
+    fi
+done
 node_path=$(/usr/bin/readlink -f -- "$node_candidate" 2>/dev/null || :)
 if test -z "$node_path" || test "$node_candidate" != "$node_path" \
         || test ! -f "$node_path" || test -L "$node_path" \
