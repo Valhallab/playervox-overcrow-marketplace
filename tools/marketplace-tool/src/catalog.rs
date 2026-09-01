@@ -1267,7 +1267,14 @@ fn encode_tree_ledger(tree: &Path) -> Result<Vec<u8>, CatalogCode> {
         return Err(CatalogCode::Target);
     }
     let mut entries = BTreeMap::new();
-    walk_public_tree(tree, tree, &mut entries, 0, &mut 0_u64)?;
+    walk_public_tree(
+        tree,
+        tree,
+        &mut entries,
+        0,
+        &mut 0_u64,
+        TreePermissions::Public,
+    )?;
     let mut bytes = Vec::new();
     append_ledger_entry(
         &mut bytes,
@@ -1347,6 +1354,69 @@ pub(crate) fn verify_published_tree(
     key_id: &str,
     public_key: &[u8; 32],
 ) -> Result<(), CatalogCode> {
+    verify_published_tree_with_permissions(
+        repository,
+        tree,
+        catalog_bytes,
+        key_id,
+        public_key,
+        TreePermissions::Public,
+    )
+}
+
+pub(crate) fn verify_release_snapshot_tree(
+    repository: &Path,
+    tree: &Path,
+    catalog_bytes: &[u8],
+    key_id: &str,
+    public_key: &[u8; 32],
+) -> Result<(), CatalogCode> {
+    let metadata = std::fs::symlink_metadata(tree).map_err(|_| CatalogCode::Target)?;
+    let permissions = match metadata.permissions().mode() & 0o7777 {
+        0o755 => TreePermissions::Public,
+        0o700 => TreePermissions::PrivateSnapshot,
+        _ => return Err(CatalogCode::Target),
+    };
+    verify_published_tree_with_permissions(
+        repository,
+        tree,
+        catalog_bytes,
+        key_id,
+        public_key,
+        permissions,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum TreePermissions {
+    Public,
+    PrivateSnapshot,
+}
+
+impl TreePermissions {
+    const fn directory_mode(self) -> u32 {
+        match self {
+            Self::Public => 0o755,
+            Self::PrivateSnapshot => 0o700,
+        }
+    }
+
+    const fn file_mode(self) -> u32 {
+        match self {
+            Self::Public => 0o644,
+            Self::PrivateSnapshot => 0o600,
+        }
+    }
+}
+
+fn verify_published_tree_with_permissions(
+    repository: &Path,
+    tree: &Path,
+    catalog_bytes: &[u8],
+    key_id: &str,
+    public_key: &[u8; 32],
+    permissions: TreePermissions,
+) -> Result<(), CatalogCode> {
     if key_id != PRODUCTION_KEY_ID || !safe_tree_location(repository, tree) {
         return Err(CatalogCode::Target);
     }
@@ -1401,12 +1471,12 @@ pub(crate) fn verify_published_tree(
     let root_metadata = std::fs::symlink_metadata(tree).map_err(|_| CatalogCode::Target)?;
     if !root_metadata.is_dir()
         || root_metadata.uid() != rustix::process::geteuid().as_raw()
-        || root_metadata.permissions().mode() & 0o7777 != 0o755
+        || root_metadata.permissions().mode() & 0o7777 != permissions.directory_mode()
     {
         return Err(CatalogCode::Target);
     }
     let mut actual = BTreeMap::new();
-    walk_public_tree(tree, tree, &mut actual, 0, &mut 0_u64)?;
+    walk_public_tree(tree, tree, &mut actual, 0, &mut 0_u64, permissions)?;
     if actual != expected {
         return Err(CatalogCode::Target);
     }
@@ -1519,6 +1589,7 @@ fn walk_public_tree(
     entries: &mut BTreeMap<String, StaticTreeEntry>,
     depth: usize,
     aggregate: &mut u64,
+    permissions: TreePermissions,
 ) -> Result<(), CatalogCode> {
     if depth > 16 || entries.len() > 1_000 {
         return Err(CatalogCode::Target);
@@ -1530,21 +1601,23 @@ fn walk_public_tree(
         let metadata = std::fs::symlink_metadata(&path).map_err(|_| CatalogCode::Target)?;
         let mode = metadata.permissions().mode() & 0o7777;
         let observed = if metadata.is_dir() {
-            if metadata.uid() != rustix::process::geteuid().as_raw() || mode != 0o755 {
+            if metadata.uid() != rustix::process::geteuid().as_raw()
+                || mode != permissions.directory_mode()
+            {
                 return Err(CatalogCode::Target);
             }
-            walk_public_tree(root, &path, entries, depth + 1, aggregate)?;
+            walk_public_tree(root, &path, entries, depth + 1, aggregate, permissions)?;
             StaticTreeEntry {
                 path: relative.clone(),
                 kind: StaticTreeKind::Directory,
-                mode,
+                mode: 0o755,
                 size: 0,
                 sha256: crate::lower_hex(&crate::sha256(&[])),
             }
         } else if metadata.is_file() {
             if metadata.uid() != rustix::process::geteuid().as_raw()
                 || metadata.nlink() != 1
-                || mode != 0o644
+                || mode != permissions.file_mode()
                 || metadata.len() > 16 * 1024 * 1024
             {
                 return Err(CatalogCode::Target);
@@ -1561,7 +1634,7 @@ fn walk_public_tree(
             StaticTreeEntry {
                 path: relative.clone(),
                 kind: StaticTreeKind::File,
-                mode,
+                mode: 0o644,
                 size: metadata.len(),
                 sha256: crate::lower_hex(&crate::sha256(&bytes)),
             }

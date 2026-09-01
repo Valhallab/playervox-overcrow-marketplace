@@ -22,7 +22,7 @@ use crate::{
         PublisherState, accepted_catalog_identity, build_catalog, build_catalog_with_static_tree,
         collect_static_tree, derive_public_key, parse_counter, production_public_key,
         production_signing_key, read_private_input, verify_catalog, verify_published_tree,
-        verify_tree_ledger, write_verified_tree_ledger,
+        verify_release_snapshot_tree, verify_tree_ledger, write_verified_tree_ledger,
     },
     metadata::{
         TargetSpec, bind_manifest_digests, inspect_component, validate_build_bindings,
@@ -128,6 +128,7 @@ fn run(arguments: Vec<OsString>) -> Result<(), AppError> {
         Some("verify-signing-key") => verify_signing_key(&arguments),
         Some("advance-sequence") => advance_sequence(&arguments),
         Some("verify-tree") => verify_tree(&arguments),
+        Some("verify-release-snapshot") => verify_release_snapshot(&arguments),
         Some("write-tree-ledger") => write_tree_ledger(&arguments),
         Some("verify-tree-ledger") => verify_final_tree_ledger(&arguments),
         Some("rename-noreplace") => rename_noreplace(&arguments),
@@ -421,6 +422,78 @@ fn verify_tree(arguments: &[String]) -> Result<(), AppError> {
         .map_err(|_| AppError::Verification)?;
     std::io::stdout()
         .write_all(b"tree=verified\n")
+        .map_err(|_| AppError::Output)
+}
+
+fn verify_release_snapshot(arguments: &[String]) -> Result<(), AppError> {
+    if arguments.len() != 9
+        || arguments[1] != "--trusted-repository"
+        || arguments[3] != "--head-repository"
+        || arguments[5] != "--public-key"
+        || arguments[7] != "--key-id"
+    {
+        return Err(AppError::Arguments);
+    }
+    let trusted_repository = Path::new(&arguments[2]);
+    let head_repository = Path::new(&arguments[4]);
+    if arguments[8] != PRODUCTION_KEY_ID
+        || Path::new(&arguments[6])
+            != trusted_repository.join(crate::catalog::PRODUCTION_PUBLIC_KEY_PATH)
+    {
+        return Err(AppError::Arguments);
+    }
+
+    let public_key = production_public_key(trusted_repository).map_err(|_| AppError::Input)?;
+    let head_public_key =
+        production_public_key(head_repository).map_err(|_| AppError::Verification)?;
+    if public_key != head_public_key {
+        return Err(AppError::Verification);
+    }
+
+    let head_tree = head_repository.join("published");
+    let head_catalog = read_source_file(&head_tree, "marketplace/v1/catalog.json", 1024 * 1024)
+        .map_err(|_| AppError::Verification)?;
+    verify_release_snapshot_tree(
+        head_repository,
+        &head_tree,
+        &head_catalog,
+        PRODUCTION_KEY_ID,
+        &public_key,
+    )
+    .map_err(|_| AppError::Verification)?;
+    let (head_sequence, _) = accepted_catalog_identity(&head_catalog, &public_key)
+        .map_err(|_| AppError::Verification)?;
+
+    let base_tree = trusted_repository.join("published");
+    match std::fs::symlink_metadata(&base_tree) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if head_sequence != 1 {
+                return Err(AppError::Verification);
+            }
+        }
+        Err(_) => return Err(AppError::Verification),
+        Ok(_) => {
+            let base_catalog =
+                read_source_file(&base_tree, "marketplace/v1/catalog.json", 1024 * 1024)
+                    .map_err(|_| AppError::Verification)?;
+            verify_release_snapshot_tree(
+                trusted_repository,
+                &base_tree,
+                &base_catalog,
+                PRODUCTION_KEY_ID,
+                &public_key,
+            )
+            .map_err(|_| AppError::Verification)?;
+            let (base_sequence, _) = accepted_catalog_identity(&base_catalog, &public_key)
+                .map_err(|_| AppError::Verification)?;
+            if head_sequence <= base_sequence {
+                return Err(AppError::Verification);
+            }
+        }
+    }
+
+    std::io::stdout()
+        .write_all(b"release-snapshot=verified\n")
         .map_err(|_| AppError::Output)
 }
 

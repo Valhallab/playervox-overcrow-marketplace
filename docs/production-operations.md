@@ -63,13 +63,19 @@ result is a separately required commit-status context, not a GitHub App check.
 If the configured controls cannot establish this contract, stop; do not infer
 GitHub setting names or substitute a weaker configuration.
 
-## 3. Offline authority directory and key creation
+## 3. Active offline authority and routine release checks
 
 Do this on the offline authority host, outside every repository, CI workspace,
-Coolify volume, and project temporary directory. No production key currently
-exists. The exact key ID is `overcrow-production-2026-01`. Record
-`trust_revision` from the separately reviewed marketplace trust checkout; do
-not build authority tooling until that checkout is still exact and clean.
+Coolify volume, and project temporary directory. The initial activation
+ceremony is complete: the active key was created, its recovery backup was
+restore-tested, and its public identity was reviewed. Routine releases reuse
+that authority and its monotonically advancing sequence state. Do not generate
+or replace production authority during a routine release; replacement is
+permitted only through the rotation, irretrievable-loss, or compromise paths
+in section 11. The exact active key ID is
+`overcrow-production-2026-01`. Record `trust_revision` from the separately
+reviewed marketplace trust checkout; do not build authority tooling until that
+checkout is still exact and clean.
 
 ```sh
 signing_key="$authority_root/overcrow-production-2026-01.key"
@@ -87,50 +93,50 @@ test "$(/usr/bin/git -C "$trust_root" rev-parse HEAD)" = "$trust_revision"
 test -z "$(/usr/bin/git -C "$trust_root" status --porcelain=v1 --untracked-files=normal)"
 
 umask 077
-/usr/bin/install -d -m 0700 -- "$authority_root"
 receipt="$sequence_state.receipt"
-for authority_target in "$signing_key" "$sequence_file" "$sequence_state" "$receipt" "$derived_public_key"; do
-  test ! -e "$authority_target" && test ! -L "$authority_target"
+test -d "$authority_root" && test ! -L "$authority_root"
+for authority_input in "$signing_key" "$sequence_file" "$derived_public_key"; do
+  test -f "$authority_input" && test ! -L "$authority_input"
 done
-(set -C; : >"$signing_key")
-(set -C; : >"$sequence_file")
-/usr/bin/openssl rand -hex 32 >"$signing_key"
-printf '%s\n' 1 >"$sequence_file"
 test "$(/usr/bin/stat -c '%a' "$authority_root")" = 700
 test "$(/usr/bin/stat -c '%a' "$signing_key")" = 600
 test "$(/usr/bin/stat -c '%a' "$sequence_file")" = 600
 test "$(/usr/bin/wc -c <"$signing_key")" -eq 65
-
-initial_tool_work="$authority_root/tool-initial"
-test ! -e "$initial_tool_work" && test ! -L "$initial_tool_work"
-/usr/bin/install -d -m 0700 -- "$initial_tool_work"
-marketplace_tool=$(sh "$trust_root/scripts/prepare-marketplace-tool.sh" \
-  "$trust_root" "$initial_tool_work")
-"$marketplace_tool" derive-public-key --repository "$trust_root" \
-  --signing-key "$signing_key" --key-id overcrow-production-2026-01 \
-  --output "$derived_public_key" >/dev/null
 test "$(/usr/bin/wc -c <"$derived_public_key")" -eq 65
 /usr/bin/grep -Eq '^[0-9a-f]{64}$' "$derived_public_key"
+
+routine_tool_work="$authority_root/tool-routine-$sequence_name"
+test ! -e "$routine_tool_work" && test ! -L "$routine_tool_work"
+/usr/bin/install -d -m 0700 -- "$routine_tool_work"
+marketplace_tool=$(sh "$trust_root/scripts/prepare-marketplace-tool.sh" \
+  "$trust_root" "$routine_tool_work")
+"$marketplace_tool" verify-signing-key --repository "$trust_root" \
+  --signing-key "$signing_key" --key-id overcrow-production-2026-01 \
+  >/dev/null
+/usr/bin/cmp --silent "$derived_public_key" \
+  "$trust_root/keys/overcrow-production-2026-01.pub"
 ```
 
-Leave `sequence_state` absent until the first successful publisher run creates
-it with mode `0600`; its receipt is also private. The signing key, counter,
-state, receipt, and every authority path remain outside repositories, GitHub,
-CI, Coolify, logs, and project temporary files. The commands above redirect
-private bytes directly to a mode-`0600` file and never print them.
+The first publisher run creates `sequence_state` with mode `0600`; later runs
+reuse it, while its receipt remains private and transient. The signing key,
+counter, state, receipt, and every authority path remain outside repositories,
+GitHub, CI, Coolify, logs, and project temporary files. The checks above never
+print private bytes.
 
 ## 4. Private recovery backup
 
-Before public-key activation, create an encrypted recovery backup under private
-operator control and test it through the restore verification below. The
-provider, account, device, location, labels, and recovery mechanism are private
-operator information and must not be recorded in a repository, issue, pull
-request, CI output, deployment system, or public runbook.
+The active key has an encrypted recovery backup under private operator control
+that passed restore verification during initial activation. Confirm privately
+that recovery remains available before routine publication, and repeat the
+restore verification below after any authorized replacement. The provider,
+account, device, location, labels, and recovery mechanism are private operator
+information and must not be recorded in a repository, issue, pull request, CI
+output, deployment system, or public runbook.
 
 Do not proceed if the required backup is absent, inaccessible, or has not
 passed restore verification.
 
-## 5. Restore verification
+## 5. Periodic restore verification
 
 Restore the required backup into a fresh private authority directory, then
 derive its public key without exposing private bytes. Build the trusted tool in
@@ -162,28 +168,37 @@ A failed or non-identical `cmp` stops activation. Repeat the check for every
 retained encrypted recovery copy. Never use `cat`, a debugger, a log, or a
 command substitution to display private key bytes.
 
-## 6. Public-key review and activation
+## 6. Reviewed public trust and release-gate bootstrap
 
-The initial public key was derived and validated privately before backup. Review
-it as ordinary public source, but activate it only after the required restore
-test:
+The active public key is already reviewed and versioned in both repositories.
+Routine releases compare those public files; they do not reinstall, replace,
+or rediscover trust:
 
 ```sh
 set -eu
-/usr/bin/install -d -m 0755 -- "$trust_root/keys"
-/usr/bin/install -m 0644 -- "$derived_public_key" \
-  "$trust_root/keys/overcrow-production-2026-01.pub"
-/usr/bin/install -m 0644 -- "$derived_public_key" "$overcrow_public_key"
+test -f "$trust_root/keys/overcrow-production-2026-01.pub"
+test ! -L "$trust_root/keys/overcrow-production-2026-01.pub"
+test -f "$overcrow_public_key" && test ! -L "$overcrow_public_key"
 /usr/bin/cmp --silent "$trust_root/keys/overcrow-production-2026-01.pub" \
   "$overcrow_public_key"
+/usr/bin/cmp --silent "$derived_public_key" \
+  "$trust_root/keys/overcrow-production-2026-01.pub"
 ```
 
-The marketplace and OverCrow files must be identical 65-byte,
-lowercase-hex-plus-newline files. Review and commit the public key in both
-repositories, then activate production trust only after the required backup
-restore has passed. Do not record the authority path, backup location, provider,
-account, or recovery secret in either repository, a PR, an issue, CI, or a
-deployment system.
+The marketplace and OverCrow files remain identical 65-byte,
+lowercase-hex-plus-newline files. Any replacement follows section 11 and a
+separate public-trust review. Do not record the authority path, backup
+location, provider, account, or recovery secret in either repository, a PR, an
+issue, CI, or a deployment system.
+
+For the one-time production bootstrap, land the reviewed public key, trusted
+release-snapshot driver, and verifier on `master` while `published/` is absent.
+Only after that exact base revision is present may the technical and human
+protections in section 2 be enabled and validated. The first signed snapshot
+is then a separate same-repository `release/1` PR to protected `master`; its
+base-owned gate requires sequence `1`. Never combine bootstrap trust changes
+with the first snapshot, temporarily relax an active protection, use a head
+copy of the driver or verifier, or create an unsigned bootstrap snapshot.
 
 ## 7. Acceptance, release branch, offline signing, and master PR
 
