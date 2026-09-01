@@ -2,6 +2,7 @@
   "author": "PlayerVox",
   "spdxLicense": "AGPL-3.0-only",
   "sourceUrl": "https://github.com/PlayerVox/playervox-overcrow-marketplace",
+  "previewFile": "preview.png",
   "localizations": [
     {
       "locale": "en",
