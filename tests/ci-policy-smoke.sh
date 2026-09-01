@@ -89,9 +89,29 @@ if test "$(/usr/bin/grep -F -c -- 'pull_request_target:' "$workflow")" -ne 1 \
             "$workflow" >/dev/null \
         || ! /usr/bin/grep -F -- 'hashFiles('"'"'Cargo.lock'"'"')' \
             "$workflow" >/dev/null \
+        || ! /usr/bin/grep -F -- \
+            'Reject invalid paths before toolchain setup' \
+            "$workflow" >/dev/null \
+        || ! /usr/bin/grep -F -- \
+            'diff --quiet --no-ext-diff' \
+            "$workflow" >/dev/null \
+        || ! /usr/bin/grep -F -- \
+            '"$BASE_SHA" "$HEAD_SHA" -- .github scripts tests tools' \
+            "$workflow" >/dev/null \
         || ! /usr/bin/grep -F -- '"$private_root" admission' \
             "$workflow" >/dev/null; then
     printf '%s\n' 'error: hosted admission scope is not explicit and read-only' >&2
+    exit 1
+fi
+
+preflight_line=$(/usr/bin/grep -n -m1 \
+    'Reject invalid paths before toolchain setup' "$workflow" \
+    | /usr/bin/cut -d : -f 1)
+toolchain_line=$(/usr/bin/grep -n -m1 'Install pinned admission toolchain' \
+    "$workflow" | /usr/bin/cut -d : -f 1)
+if test -z "$preflight_line" || test -z "$toolchain_line" \
+        || test "$preflight_line" -ge "$toolchain_line"; then
+    printf '%s\n' 'error: trusted-path rejection does not precede toolchain setup' >&2
     exit 1
 fi
 if /usr/bin/grep -F -x -- '  pull_request:' "$workflow" >/dev/null \

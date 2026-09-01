@@ -64,6 +64,50 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Reject invalid paths before toolchain setup
+        if: ${{ github.event_name == 'pull_request_target' }}
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          case "$BASE_REF" in
+            master | candidate) ;;
+            *)
+              printf '%s\n' 'error: pull-request base is not trusted' >&2
+              exit 1
+              ;;
+          esac
+          if test "$(git rev-parse --verify 'HEAD^{commit}' 2>/dev/null)" \
+                  != "$BASE_SHA"; then
+            printf '%s\n' 'error: reviewed base checkout is unavailable' >&2
+            exit 1
+          fi
+          review_ref="refs/overcrow-review/$HEAD_SHA"
+          git -c credential.helper= -c protocol.file.allow=never \
+            -c protocol.ext.allow=never \
+            fetch --no-tags --no-write-fetch-head --force --depth=1 \
+            https://github.com/Valhallab/playervox-overcrow-marketplace.git \
+            "refs/pull/$PR_NUMBER/head:$review_ref"
+          if test "$(git rev-parse --verify "$review_ref^{commit}" 2>/dev/null)" \
+                  != "$HEAD_SHA"; then
+            printf '%s\n' 'error: pull-request revision is unavailable' >&2
+            exit 1
+          fi
+          # This coarse short-circuit saves setup time. The materialized-base
+          # admission below remains the authoritative policy gate.
+          if ! git -c diff.external= diff --quiet --no-ext-diff \
+              "$BASE_SHA" "$HEAD_SHA" -- .github scripts tests tools; then
+            printf '%s\n' 'error: pull-request trusted-path policy rejected' >&2
+            exit 1
+          fi
+          if test "$BASE_REF" = candidate \
+              && ! git -c diff.external= diff --quiet --no-ext-diff \
+                "$BASE_SHA" "$HEAD_SHA" -- published; then
+            printf '%s\n' 'error: pull-request publication policy rejected' >&2
+            exit 1
+          fi
       - name: Install pinned admission toolchain
         run: |
           rustup toolchain install 1.98.0 --profile minimal
