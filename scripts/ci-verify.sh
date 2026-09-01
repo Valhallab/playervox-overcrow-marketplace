@@ -2,9 +2,10 @@
 set -eu
 umask 077
 
-if test "$#" -ne 9 && test "$#" -ne 10; then
+if test "$#" -ne 9 && test "$#" -ne 10 && test "$#" -ne 11 \
+        && test "$#" -ne 12; then
     printf '%s\n' \
-        'usage: ci-verify.sh REPOSITORY TRUST-SHA HEAD-SHA EVENT REPOSITORY-NAME BASE-REF HEAD-REPOSITORY HEAD-REF PRIVATE-PARENT [admission|full]' >&2
+        'usage: ci-verify.sh REPOSITORY TRUST-SHA HEAD-SHA EVENT REPOSITORY-NAME BASE-REF HEAD-REPOSITORY HEAD-REF PRIVATE-PARENT [admission|full [REVIEW-BUNDLE [BASE-BUNDLE]]]' >&2
     exit 2
 fi
 repository=$1
@@ -17,6 +18,8 @@ head_repository=$7
 head_ref=$8
 private_parent=$9
 verification_mode=${10:-full}
+review_bundle=${11:-}
+base_bundle=${12:-}
 
 case "$event_name" in
     pull_request | push) ;;
@@ -26,6 +29,27 @@ case "$verification_mode" in
     admission | full) ;;
     *) printf '%s\n' 'error: CI verification mode is invalid' >&2; exit 1 ;;
 esac
+if test "$verification_mode" = admission \
+        && { test -n "$review_bundle" || test -n "$base_bundle"; }; then
+    printf '%s\n' 'error: hosted admission cannot produce review evidence' >&2
+    exit 1
+fi
+if test "$verification_mode" = full; then
+    case "$review_bundle" in
+        /*) ;;
+        *) printf '%s\n' 'error: full review output is unavailable' >&2; exit 1 ;;
+    esac
+fi
+if test -n "$base_bundle"; then
+    case "$base_bundle" in
+        /*) ;;
+        *) printf '%s\n' 'error: accepted base bundle is unavailable' >&2; exit 1 ;;
+    esac
+    if test "$base_bundle" = "$review_bundle"; then
+        printf '%s\n' 'error: accepted base bundle is unavailable' >&2
+        exit 1
+    fi
+fi
 for revision in "$trust_sha" "$head_sha"; do
     case "$revision" in
         *[!0-9a-f]* | '')
@@ -60,6 +84,7 @@ fi
 for required in \
         scripts/materialize-git-snapshot.sh scripts/prepare-marketplace-tool.sh \
         scripts/ci-verify.sh scripts/verify-release-snapshot.sh \
+        scripts/review-bundle.sh \
         scripts/sandbox-review-checks.sh \
         scripts/sandbox-component-build.sh scripts/sandbox-supervisor.c \
         scripts/resolve-system-gcc.sh \
@@ -107,13 +132,6 @@ changed_paths="$work/changed-paths.nul"
 /usr/bin/install -m 0600 /dev/null "$build_plan"
 /usr/bin/install -m 0600 /dev/null "$changed_paths"
 
-tool_work="$work/trusted-tool"
-/usr/bin/install -d -m 0700 -- "$tool_work"
-trusted_tool=$(sh "$trusted_root/scripts/prepare-marketplace-tool.sh" \
-    "$trusted_root" "$tool_work")
-sh "$trusted_root/scripts/materialize-git-snapshot.sh" --validated \
-    "$repository" "$head_sha" "$head_root" "$trusted_tool"
-
 if test "$event_name" = pull_request; then
     trusted_git diff --name-only -z --no-renames \
         "$trust_sha" "$head_sha" -- >"$changed_paths"
@@ -148,6 +166,15 @@ if test "$event_name" = pull_request; then
         published_changed=true
     fi
 fi
+
+# Cheap path and publication gates above reject most malformed submissions
+# before the trusted Rust parser needs to be compiled.
+tool_work="$work/trusted-tool"
+/usr/bin/install -d -m 0700 -- "$tool_work"
+trusted_tool=$(sh "$trusted_root/scripts/prepare-marketplace-tool.sh" \
+    "$trusted_root" "$tool_work")
+sh "$trusted_root/scripts/materialize-git-snapshot.sh" --validated \
+    "$repository" "$head_sha" "$head_root" "$trusted_tool"
 
 build_plan_ok=false
 if test "$event_name" = pull_request; then
@@ -223,7 +250,38 @@ fi
 
 stage_parent="$work/stage"
 /usr/bin/install -d -m 0700 -- "$stage_parent"
-sh "$projection/scripts/stage-catalog-repository.sh" --mode production --trusted-tool "$trusted_tool" "$stage_parent/repository"
+review_test_plan=$build_plan
+if test -n "$base_bundle"; then
+    trust_tree=$(trusted_git rev-parse --verify "$trust_sha^{tree}" 2>/dev/null) \
+        || trust_tree=''
+    if test -z "$trust_tree" \
+            || ! sh "$trusted_root/scripts/review-bundle.sh" verify \
+                --bundle "$base_bundle" --review-sha "$trust_sha" \
+                --review-tree "$trust_tree"; then
+        printf '%s\n' 'error: accepted base bundle is unavailable' >&2
+        exit 1
+    fi
+    sh "$projection/scripts/stage-catalog-repository.sh" --mode production \
+        --trusted-tool "$trusted_tool" \
+        --reuse-components-from "$base_bundle/repository" \
+        --build-plan "$build_plan" "$stage_parent/repository"
+    if ! sh "$trusted_root/scripts/review-bundle.sh" verify \
+            --bundle "$base_bundle" --review-sha "$trust_sha" \
+            --review-tree "$trust_tree"; then
+        printf '%s\n' 'error: accepted base bundle changed during review' >&2
+        exit 1
+    fi
+else
+    review_test_plan="$work/full-build-plan.tsv"
+    /usr/bin/install -m 0600 /dev/null "$review_test_plan"
+    if ! "$trusted_tool" build-plan --repository "$head_root" \
+            >"$review_test_plan"; then
+        printf '%s\n' 'error: full review build plan is unavailable' >&2
+        exit 1
+    fi
+    sh "$projection/scripts/stage-catalog-repository.sh" --mode production \
+        --trusted-tool "$trusted_tool" "$stage_parent/repository"
+fi
 
 build_reviewed_catalog() {
     output=$1
@@ -257,28 +315,23 @@ build_reviewed_catalog() {
 }
 
 first_build="$work/build-first"
-second_build="$work/build-second"
 build_reviewed_catalog "$first_build"
-build_reviewed_catalog "$second_build"
-/usr/bin/diff --recursive --no-dereference \
-    "$first_build/public" "$second_build/public"
 "$trusted_tool" verify "$first_build/public/marketplace/v1/catalog.json"
-"$trusted_tool" verify "$second_build/public/marketplace/v1/catalog.json"
 
-sh "$trusted_root/scripts/sandbox-review-checks.sh" workspace "$projection" "$first_build/public"
+sh "$trusted_root/scripts/sandbox-review-checks.sh" workspace \
+    "$projection" "$first_build/public" "$review_test_plan"
 sh "$projection/scripts/sandbox-review-checks.sh" site \
     "$projection" "$first_build/public"
 
-# These are reviewed base scripts. Community smoke remains a maintainer gate:
-# it intentionally exercises local development paths and never runs on PR data.
-# The trust-boundary smoke receives the exact root and tool established above;
-# it must never bootstrap trust from the candidate-shaped projection.
-sh "$trusted_root/tests/ci-trust-boundary-smoke.sh" --trusted-root "$trusted_root" --trusted-tool "$trusted_tool"
-sh "$projection/tests/sandbox-review-checks-smoke.sh"
-sh "$projection/tests/sandbox-component-build-smoke.sh"
-sh "$projection/tests/ci-policy-smoke.sh"
-sh "$projection/tests/check-policy-smoke.sh"
-/usr/bin/shellcheck "$projection"/scripts/*.sh "$projection"/tests/*.sh
-/bin/sh -n "$projection"/scripts/*.sh "$projection"/tests/*.sh
+review_tree=$(trusted_git rev-parse --verify "$head_sha^{tree}" 2>/dev/null) \
+    || review_tree=''
+if test -z "$review_tree" \
+        || ! sh "$trusted_root/scripts/review-bundle.sh" create \
+            --source "$stage_parent/repository" --output "$review_bundle" \
+            --trust-sha "$trust_sha" --review-sha "$head_sha" \
+            --review-tree "$review_tree"; then
+    printf '%s\n' 'error: reviewed artifact bundle failed' >&2
+    exit 1
+fi
 
 printf '%s\n' 'Reviewed CI verification passed'

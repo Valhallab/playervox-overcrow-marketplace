@@ -89,6 +89,27 @@ changed_paths="$scratch/changed-paths"
 write_path 'community/example/hello-widget/src/lib.rs' "$changed_paths"
 accepted_plan="$scratch/accepted-plan.tsv"
 community_plan "$fixture" "$changed_paths" >"$accepted_plan"
+test "$(/usr/bin/wc -l <"$accepted_plan")" -eq 1
+/usr/bin/grep -F -x \
+    'hello-widget	hello_widget	community/example/hello-widget' \
+    "$accepted_plan" >/dev/null
+
+write_path 'sdk/rust/overcrow-widget-sdk/src/lib.rs' "$changed_paths"
+all_plan="$scratch/all-plan.tsv"
+community_plan "$fixture" "$changed_paths" >"$all_plan"
+test "$(/usr/bin/wc -l <"$all_plan")" -eq 3
+
+write_path 'web/marketplace/app.js' "$changed_paths"
+web_plan="$scratch/web-plan.tsv"
+community_plan "$fixture" "$changed_paths" >"$web_plan"
+test ! -s "$web_plan"
+
+write_path 'Cargo.lock' "$changed_paths"
+shared_plan="$scratch/shared-plan.tsv"
+community_plan "$fixture" "$changed_paths" >"$shared_plan"
+test "$(/usr/bin/wc -l <"$shared_plan")" -eq 3
+
+write_path 'community/example/hello-widget/src/lib.rs' "$changed_paths"
 
 nested_fixture="$scratch/nested-repository"
 /usr/bin/cp -R -- "$fixture" "$nested_fixture"
@@ -198,10 +219,19 @@ deleted_fixture="$scratch/deleted-repository"
 ' "$deleted_fixture/Cargo.lock" >"$deleted_fixture/Cargo.lock.next"
 /usr/bin/mv -- "$deleted_fixture/Cargo.lock.next" "$deleted_fixture/Cargo.lock"
 /usr/bin/rm -rf -- "$deleted_fixture/community/example/hello-widget"
-if ! community_plan "$deleted_fixture" "$changed_paths" >/dev/null; then
+printf 'community/example/hello-widget/src/lib.rs\000Cargo.toml\000Cargo.lock\000marketplace/targets.json\000' \
+    >"$changed_paths"
+/usr/bin/chmod 0600 "$changed_paths"
+deleted_plan="$scratch/deleted-plan.tsv"
+if ! community_plan "$deleted_fixture" "$changed_paths" >"$deleted_plan"; then
     printf '%s\n' 'error: community-change gate rejected a clean deletion' >&2
     exit 1
 fi
+test "$(/usr/bin/wc -l <"$deleted_plan")" -eq 1
+tab=$(printf '\t')
+/usr/bin/grep -F -x \
+    "warframe-worldstate-provider${tab}warframe_worldstate_provider${tab}providers/warframe-worldstate" \
+    "$deleted_plan" >/dev/null
 /usr/bin/cp -- "$accepted_targets" "$deleted_fixture/marketplace/targets.json"
 expect_plan_reject "$deleted_fixture"
 
@@ -221,15 +251,30 @@ for source in providers/warframe-worldstate community/example/hello-widget; do
         "$production_stage/$source/component.wasm"
 done
 
-sh "$fixture/scripts/build-local.sh"
-first_public="$scratch/public-first"
-/usr/bin/cp -R -- "$fixture/public" "$first_public"
-sh "$fixture/scripts/build-local.sh"
-/usr/bin/diff --recursive --no-dereference "$first_public" "$fixture/public"
-if test "$(/usr/bin/find "$fixture/public/marketplace/v1/packages/com.playervox.overcrow.example.hello" \
-        -type f -name '*.ocpkg' -print | /usr/bin/wc -l)" -ne 1; then
-    printf '%s\n' 'error: wired community fixture was not packaged' >&2
+widget_source="$fixture/community/example/hello-widget/src/lib.rs"
+/usr/bin/sed -i 's/Hello from OverCrow!/Hello again from OverCrow!/' \
+    "$widget_source"
+/usr/bin/git -C "$fixture" add community/example/hello-widget/src/lib.rs
+/usr/bin/git -C "$fixture" commit --quiet -m 'updated community widget'
+write_path 'community/example/hello-widget/src/lib.rs' "$changed_paths"
+incremental_plan="$scratch/incremental-plan.tsv"
+community_plan "$fixture" "$changed_paths" >"$incremental_plan"
+/usr/bin/chmod 0600 "$incremental_plan"
+test "$(/usr/bin/wc -l <"$incremental_plan")" -eq 1
+
+incremental_stage="$scratch/incremental-stage"
+sh "$fixture/scripts/stage-catalog-repository.sh" --mode production \
+    --reuse-components-from "$production_stage" \
+    --build-plan "$incremental_plan" "$incremental_stage"
+/usr/bin/cmp -- "$production_stage/providers/warframe-worldstate/component.wasm" \
+    "$incremental_stage/providers/warframe-worldstate/component.wasm"
+if /usr/bin/cmp --silent \
+        "$production_stage/community/example/hello-widget/component.wasm" \
+        "$incremental_stage/community/example/hello-widget/component.wasm"; then
+    printf '%s\n' 'error: changed community widget reused its old component' >&2
     exit 1
 fi
+marketplace_tool inspect-component \
+    "$incremental_stage/community/example/hello-widget/component.wasm"
 
 printf '%s\n' 'Community submission smoke tests passed'

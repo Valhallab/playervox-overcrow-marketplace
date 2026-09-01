@@ -17,7 +17,7 @@ merge policy. The workflow publishes `pending` and final base-specific
 admission statuses on the exact reviewed pull-request head. Reporting jobs have
 only `statuses: write`; the verification job has only `contents: read`.
 Neither permission can merge, publish, deploy, or sign a package.
-Branch protection uses strict required status checks: `candidate` requires
+Branch protection should use strict required status checks: `candidate` requires
 `overcrow/marketplace-admission/candidate`, while `master` requires
 `overcrow/marketplace-admission/master`.
 
@@ -50,10 +50,11 @@ snapshot PR on its matching `release/<sequence>` branch. Never combine
 bootstrap trust bytes with that snapshot, relax an active protection to admit
 it, or fall back to a copy from the pull-request head.
 
-Before accepting or promoting a submission, a maintainer runs the complete
-gate from a clean checkout on a compatible Linux host. That gate uses the same
-trusted-base admission, then performs native tests and component compilation
-inside the bounded Bubblewrap sandboxes. GitHub-hosted Ubuntu currently blocks
+Before accepting a submission, a maintainer runs the sandboxed review from a
+clean checkout on a compatible Linux host. The first review builds all
+components. Later reviews verify the prior accepted bundle, then run native
+tests and component compilation only for targets affected by the submission;
+unchanged accepted component bytes are reused. GitHub-hosted Ubuntu currently blocks
 the user-namespace mapping required by this confinement, so hosted CI must not
 silently replace it with an unsandboxed build. The commands in
 [testing.md](testing.md), including `scripts/review-revision.sh`, are the
@@ -84,9 +85,11 @@ never reset or reuse one. Source package directories never retain
 `component.wasm` after publication.
 
 The reviewed offline publisher is `scripts/build-production.sh`. It accepts
-only an exact clean `release/*` commit and external private authority files,
-stages and verifies the complete tree, advances the sequence, and atomically
-replaces `published/`; it does not deploy or push. The authoritative key,
+only an exact clean `release/*` commit, the external accepted review bundle,
+and external private authority files. It verifies and copies the bundle,
+assembles and signs the static catalog, advances the sequence, and atomically
+replaces `published/`. It never compiles or retests widgets and does not deploy
+or push. The authoritative key,
 release, recovery, cache, and deployment procedure is the
 [production operations runbook](production-operations.md).
 
