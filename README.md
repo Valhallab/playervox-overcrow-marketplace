@@ -34,10 +34,12 @@ Reviewed community submissions are accepted under
 [`community/<publisher>/<widget-id>/`](community/README.md) through pull
 requests to `candidate`. Hosted CI admits metadata and repository shape without
 executing submitted code. A maintainer then runs the complete sandboxed build
-and reviews the exact source, capabilities, dependencies, license, and
-provenance. Merge acceptance is not publication; a later maintainer-owned
-offline release promotes an accepted revision without giving creators signing
-authority.
+for the affected widget and reviews its exact source, capabilities,
+dependencies, license, and provenance. Unchanged accepted widgets keep their
+reviewed component bytes and are not rebuilt for another submission. Merge
+acceptance is not publication; a later maintainer-owned offline release
+promotes the accepted review bundle without retesting it or giving creators
+signing authority.
 
 The public deployment contract uses <https://overcrow.playervox.com/> for the
 landing page, <https://overcrow.playervox.com/marketplace/> for browsing, and

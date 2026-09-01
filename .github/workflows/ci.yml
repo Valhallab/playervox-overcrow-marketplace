@@ -10,7 +10,7 @@ permissions: {}
 
 concurrency:
   group: marketplace-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   pending:
@@ -56,7 +56,7 @@ jobs:
     needs: pending
     if: ${{ always() && (github.event_name == 'push' || needs.pending.result == 'success') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
     permissions:
       contents: read
     steps:
@@ -69,6 +69,13 @@ jobs:
           rustup toolchain install 1.98.0 --profile minimal
           rustup target add --toolchain 1.98.0 wasm32-wasip2
           rustup default 1.98.0
+      - name: Restore trusted dependency cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.cargo/registry
+          key: marketplace-admission-${{ runner.os }}-${{ runner.arch }}-rust-1.98-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            marketplace-admission-${{ runner.os }}-${{ runner.arch }}-rust-1.98-
       - name: Admit through the reviewed base
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}

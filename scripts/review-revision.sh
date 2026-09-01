@@ -2,12 +2,15 @@
 set -eu
 umask 077
 
-if test "$#" -ne 2; then
-    printf '%s\n' 'usage: review-revision.sh TRUST-SHA REVIEW-SHA' >&2
+if test "$#" -ne 3 && test "$#" -ne 4; then
+    printf '%s\n' \
+        'usage: review-revision.sh TRUST-SHA REVIEW-SHA REVIEW-BUNDLE [ACCEPTED-BASE-BUNDLE]' >&2
     exit 2
 fi
 trust_sha=$1
 review_sha=$2
+review_bundle=$3
+base_bundle=${4:-}
 for revision in "$trust_sha" "$review_sha"; do
     case "$revision" in
         '' | *[!0-9a-f]*)
@@ -31,6 +34,36 @@ repo_root=$(/usr/bin/dirname -- "$script_dir")
 case "$repo_root" in
     / | '') printf '%s\n' 'error: maintainer review root is unsafe' >&2; exit 1 ;;
 esac
+case "$review_bundle" in
+    "$repo_root" | "$repo_root"/* | '')
+        printf '%s\n' 'error: review bundle destination is unsafe' >&2
+        exit 1
+        ;;
+    /*) ;;
+    *) printf '%s\n' 'error: review bundle destination is unsafe' >&2; exit 1 ;;
+esac
+if test -n "$base_bundle"; then
+    case "$base_bundle" in
+        "$repo_root" | "$repo_root"/* | "$review_bundle" | '')
+            printf '%s\n' 'error: accepted base bundle is unsafe' >&2
+            exit 1
+            ;;
+        /*) ;;
+        *) printf '%s\n' 'error: accepted base bundle is unsafe' >&2; exit 1 ;;
+    esac
+fi
+review_bundle_parent=${review_bundle%/*}
+if test "$review_bundle_parent" = "$review_bundle" \
+        || test ! -d "$review_bundle_parent" \
+        || test -L "$review_bundle_parent" \
+        || test "$(CDPATH='' cd -- "$review_bundle_parent" 2>/dev/null && pwd -P || :)" \
+            != "$review_bundle_parent" \
+        || test "$(/usr/bin/stat -c '%u:%a' "$review_bundle_parent" 2>/dev/null || :)" \
+            != "$(/usr/bin/id -u):700" \
+        || test -e "$review_bundle" || test -L "$review_bundle"; then
+    printf '%s\n' 'error: review bundle destination is unsafe' >&2
+    exit 1
+fi
 
 trusted_git() {
     /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
@@ -124,8 +157,12 @@ fetch_rustup_home="$private_root/fetch-rustup-home"
             --manifest-path tools/marketplace-tool/Cargo.toml
 )
 
-sh "$trusted_root/scripts/ci-verify.sh" \
+set -- \
     "$repo_root" "$trust_sha" "$review_sha" pull_request \
     Valhallab/playervox-overcrow-marketplace candidate \
     untrusted/review review \
-    "$private_root" full
+    "$private_root" full "$review_bundle"
+if test -n "$base_bundle"; then
+    set -- "$@" "$base_bundle"
+fi
+sh "$trusted_root/scripts/ci-verify.sh" "$@"
