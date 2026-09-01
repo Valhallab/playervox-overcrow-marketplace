@@ -176,7 +176,7 @@ for trusted_path in .github scripts tests tools; do
         printf '%s\n' 'error: trusted CI projection is unavailable' >&2
         exit 1
     fi
-    /usr/bin/rm -rf -- "$projection/$trusted_path"
+    /usr/bin/rm -rf -- "${projection:?}/$trusted_path"
     /usr/bin/cp -a -- "$trusted_root/$trusted_path" \
         "$projection/$trusted_path"
 done

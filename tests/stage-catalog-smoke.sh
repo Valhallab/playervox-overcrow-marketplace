@@ -195,6 +195,7 @@ done
 /usr/bin/git init --quiet "$production_fixture"
 /usr/bin/git -C "$production_fixture" config user.name 'Marketplace Tests'
 /usr/bin/git -C "$production_fixture" config user.email 'marketplace-tests@invalid.example'
+# shellcheck disable=SC2016 # Git expands this export-subst placeholder later.
 printf '%s\n' '$Format:%<(17)%h$' >"$production_fixture/export-subst.txt"
 printf '%s\n' 'FILTER-RAW' >"$production_fixture/filter-target.txt"
 /usr/bin/git -C "$production_fixture" add --all
