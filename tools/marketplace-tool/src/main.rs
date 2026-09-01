@@ -466,11 +466,7 @@ fn verify_release_snapshot(arguments: &[String]) -> Result<(), AppError> {
 
     let base_tree = trusted_repository.join("published");
     match std::fs::symlink_metadata(&base_tree) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            if head_sequence != 1 {
-                return Err(AppError::Verification);
-            }
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => return Err(AppError::Verification),
         Ok(_) => {
             let base_catalog =

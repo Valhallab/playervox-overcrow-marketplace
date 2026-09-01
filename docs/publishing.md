@@ -35,17 +35,20 @@ base-built verifier additionally authenticate the complete proposed static
 tree with the reviewed base public key. They reject an invalid signature,
 changed key, stale or future catalog, lifetime other than exactly 90 days,
 unlisted or changed objects, and a sequence that is not strictly above the
-verified base snapshot. If `master` has no snapshot, only sequence `1` is
-accepted. Head scripts, tools, and binaries are never executed.
+verified base snapshot. If `master` has no snapshot, the first published
+sequence need only be positive. An aborted or otherwise unpublished offline
+publisher run can consume an authority sequence, so gaps before or between
+published snapshots are valid. Head scripts, tools, and binaries are never
+executed.
 
 Changes under `.github/`, `scripts`, `tests`, or `tools` are rejected by this
 path until a maintainer lands those trusted bytes separately. Initial
 production rollout is therefore two-phase: first land the reviewed public key,
 driver, and verifier on `master` while `published/` remains absent; then
-configure and validate the full protected flow before opening the sequence-1
-snapshot PR. Never combine bootstrap trust bytes with that snapshot, relax an
-active protection to admit it, or fall back to a copy from the pull-request
-head.
+configure and validate the full protected flow before opening the first signed
+snapshot PR on its matching `release/<sequence>` branch. Never combine
+bootstrap trust bytes with that snapshot, relax an active protection to admit
+it, or fall back to a copy from the pull-request head.
 
 Before accepting or promoting a submission, a maintainer runs the complete
 gate from a clean checkout on a compatible Linux host. That gate uses the same
