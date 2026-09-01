@@ -91,17 +91,19 @@ snapshot_published() (
     root="$fixture/published"
     unsorted="$destination.unsorted"
     : >"$unsorted"
-    /usr/bin/find "$root" -xdev -type d \
-        -printf 'directory\t%P\t%U\t%G\t%m\t%n\n' >>"$unsorted"
-    /usr/bin/find "$root" -xdev -type f -printf '%P\n' \
-        | LC_ALL=C /usr/bin/sort \
-        | while IFS= read -r relative; do
-            metadata=$(/usr/bin/stat -c '%u\t%g\t%a\t%h\t%s' "$root/$relative")
-            digest=$(/usr/bin/sha256sum "$root/$relative" | /usr/bin/cut -d ' ' -f 1)
-            printf 'file\t%s\t%b\t%s\n' "$relative" "$metadata" "$digest"
-        done >>"$unsorted"
-    /usr/bin/find "$root" -xdev ! -type d ! -type f \
-        -printf 'other\t%P\t%y\t%U\t%G\t%m\t%n\t%l\n' >>"$unsorted"
+    {
+        /usr/bin/find "$root" -xdev -type d \
+            -printf 'directory\t%P\t%U\t%G\t%m\t%n\n'
+        /usr/bin/find "$root" -xdev -type f -printf '%P\n' \
+            | LC_ALL=C /usr/bin/sort \
+            | while IFS= read -r relative; do
+                metadata=$(/usr/bin/stat -c '%u\t%g\t%a\t%h\t%s' "$root/$relative")
+                digest=$(/usr/bin/sha256sum "$root/$relative" | /usr/bin/cut -d ' ' -f 1)
+                printf 'file\t%s\t%b\t%s\n' "$relative" "$metadata" "$digest"
+            done
+        /usr/bin/find "$root" -xdev ! -type d ! -type f \
+            -printf 'other\t%P\t%y\t%U\t%G\t%m\t%n\t%l\n'
+    } >>"$unsorted"
     LC_ALL=C /usr/bin/sort "$unsorted" >"$destination"
     /usr/bin/rm -f -- "$unsorted"
 )
@@ -202,7 +204,7 @@ assert_fixed_failure() (
                     *'cannot open'*) diagnostic_kind=cannot-open ;;
                     *'Syntax error'*) diagnostic_kind=syntax ;;
                     *'not found'*) diagnostic_kind=not-found ;;
-                    *'parameter not set'*) diagnostic_kind=unset ;;
+                    *'parameter not set'*) diagnostic_kind='unset' ;;
                 esac
                 printf '%s\n' \
                     "error: $label returned a non-fixed diagnostic kind=$diagnostic_kind bytes=${#actual_error} sha256=$diagnostic_digest" >&2
@@ -230,12 +232,13 @@ fixture=$(make_fixture staged-publisher-tool)
 secrets=$(make_secrets staged-publisher-tool)
 live_verify_marker="$scratch/live-verify-helper-ran"
 live_publish_marker="$scratch/live-publish-helper-ran"
+# shellcheck disable=SC2016 # The generated fixture expands its repository path later.
 printf '%s\n' \
     '' \
     '# Fixture-only post-staging mutation; never copied into production code.' \
     'printf "%s\n" fixture_live_tool_source_must_not_compile >>"$repo_root/tools/marketplace-tool/src/main.rs"' \
-    'printf "%s\n" "#!/bin/sh" "printf helper-ran >'"'"$live_verify_marker"'"'" "exit 0" >"$repo_root/scripts/verify-published.sh"' \
-    'printf "%s\n" "#!/bin/sh" "printf helper-ran >'"'"$live_publish_marker"'"'" "exit 97" >"$repo_root/scripts/publish-directory.sh"' \
+    'printf "%s\n" "#!/bin/sh" "printf helper-ran >'"'""$live_verify_marker""'"'" "exit 0" >"$repo_root/scripts/verify-published.sh"' \
+    'printf "%s\n" "#!/bin/sh" "printf helper-ran >'"'""$live_publish_marker""'"'" "exit 97" >"$repo_root/scripts/publish-directory.sh"' \
     '/usr/bin/chmod 0755 "$repo_root/scripts/verify-published.sh" "$repo_root/scripts/publish-directory.sh"' \
     >>"$fixture/scripts/stage-catalog-repository.sh"
 /usr/bin/git -C "$fixture" add scripts/stage-catalog-repository.sh
@@ -574,6 +577,7 @@ secrets=$(make_secrets success)
 node_host_marker="/tmp/marketplace-node-sandbox-host-marker.$$"
 host_network_namespace=$(/usr/bin/readlink /proc/self/ns/net)
 /usr/bin/rm -f -- "$node_host_marker"
+# shellcheck disable=SC2016 # The generated Node program expands its loop variable.
 printf '%s\n' \
     "fs.writeFileSync(\"$node_host_marker\", \"sandbox escape\");" \
     'const sandboxStatus = fs.readFileSync("/proc/self/status", "utf8");' \

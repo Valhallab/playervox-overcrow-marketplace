@@ -36,6 +36,7 @@ trusted_tool=$(sh "$repo_root/scripts/prepare-marketplace-tool.sh" \
     "$repo_root" "$tool_work")
 helper="$scratch/publish-wrapper"
 export PUBLISH_HELPER_SOURCE="$helper_source" PUBLISH_RENAME_TOOL="$trusted_tool"
+# shellcheck disable=SC2016 # The generated wrapper expands these variables when run.
 printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
@@ -90,17 +91,19 @@ snapshot_tree() {
     destination=$2
     unsorted="$destination.unsorted"
     : >"$unsorted"
-    /usr/bin/find "$root" -xdev -type d \
-        -printf 'directory\t%P\t%U\t%G\t%m\t%n\n' >>"$unsorted"
-    /usr/bin/find "$root" -xdev -type f -printf '%P\n' \
-        | LC_ALL=C /usr/bin/sort \
-        | while IFS= read -r relative; do
-            metadata=$(/usr/bin/stat -c '%u\t%g\t%a\t%h\t%s' "$root/$relative")
-            digest=$(/usr/bin/sha256sum "$root/$relative" | /usr/bin/cut -d ' ' -f 1)
-            printf 'file\t%s\t%b\t%s\n' "$relative" "$metadata" "$digest"
-        done >>"$unsorted"
-    /usr/bin/find "$root" -xdev ! -type d ! -type f \
-        -printf 'other\t%P\t%y\t%U\t%G\t%m\t%n\t%l\n' >>"$unsorted"
+    {
+        /usr/bin/find "$root" -xdev -type d \
+            -printf 'directory\t%P\t%U\t%G\t%m\t%n\n'
+        /usr/bin/find "$root" -xdev -type f -printf '%P\n' \
+            | LC_ALL=C /usr/bin/sort \
+            | while IFS= read -r relative; do
+                metadata=$(/usr/bin/stat -c '%u\t%g\t%a\t%h\t%s' "$root/$relative")
+                digest=$(/usr/bin/sha256sum "$root/$relative" | /usr/bin/cut -d ' ' -f 1)
+                printf 'file\t%s\t%b\t%s\n' "$relative" "$metadata" "$digest"
+            done
+        /usr/bin/find "$root" -xdev ! -type d ! -type f \
+            -printf 'other\t%P\t%y\t%U\t%G\t%m\t%n\t%l\n'
+    } >>"$unsorted"
     LC_ALL=C /usr/bin/sort "$unsorted" >"$destination"
     /usr/bin/rm -f -- "$unsorted"
 }
