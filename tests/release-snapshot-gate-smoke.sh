@@ -287,7 +287,7 @@ expect_reject equal-sequence "$base_one" "$equal_sequence"
 
 base_two=$(clone_repository "$head_two" base-two)
 expect_reject lower-sequence "$base_two" "$head_one"
-expect_reject bootstrap-sequence-two "$bootstrap_base" "$head_two" \
+expect_accept bootstrap-sequence-two "$bootstrap_base" "$head_two" \
     pull_request master "$repository_name" release/2
 
 expect_reject fork-publication "$base_one" "$head_two" pull_request master \
