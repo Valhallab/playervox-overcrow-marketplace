@@ -4,16 +4,18 @@ umask 077
 
 mode=${1:-}
 case "$mode:$#" in
-    workspace:2 | workspace:3) ;;
+    workspace:2 | workspace:3 | workspace:4) ;;
     site:3) ;;
     *)
         printf '%s\n' \
-            'usage: sandbox-review-checks.sh workspace ABSOLUTE-SOURCE-ROOT | site ABSOLUTE-SOURCE-ROOT ABSOLUTE-PUBLIC-ROOT' >&2
+            'usage: sandbox-review-checks.sh workspace ABSOLUTE-SOURCE-ROOT [ABSOLUTE-PUBLIC-ROOT [ABSOLUTE-BUILD-PLAN]] | site ABSOLUTE-SOURCE-ROOT ABSOLUTE-PUBLIC-ROOT' >&2
         exit 2
         ;;
 esac
 source_root=$2
 public_root=${3:-}
+review_plan=${4:-}
+targeted_review=false
 
 safe_root() {
     root=$1
@@ -37,6 +39,19 @@ if ! safe_root "$source_root" \
         || { test -n "$public_root" && ! safe_root "$public_root"; }; then
     printf '%s\n' 'error: unsafe review-check roots' >&2
     exit 1
+fi
+if test -n "$review_plan"; then
+    case "$review_plan" in /*) ;; *) review_plan='' ;; esac
+    if test -z "$review_plan" || test ! -f "$review_plan" \
+            || test -L "$review_plan" \
+            || test "$(/usr/bin/stat -c '%u:%a:%h' "$review_plan" \
+                2>/dev/null || :)" != "$invoking_uid:600:1" \
+            || test "$(/usr/bin/stat -c '%s' "$review_plan" 2>/dev/null || :)" \
+                -gt 131072; then
+        printf '%s\n' 'error: unsafe review build plan' >&2
+        exit 1
+    fi
+    targeted_review=true
 fi
 
 script_dir=$(CDPATH='' cd -- "$(/usr/bin/dirname -- "$0")" && pwd -P)
@@ -132,6 +147,8 @@ set -- \
 if test -n "$public_root"; then
     set -- "$@" --ro-bind "$public_root" /public
 fi
+review_plan_mount=${review_plan:-/dev/null}
+set -- "$@" --ro-bind "$review_plan_mount" /review-plan.tsv
 
 if ! {
     # shellcheck disable=SC2016 # The sandbox child shell expands this review program.
@@ -157,6 +174,7 @@ if ! {
             --landlock-rule path-beneath:execute,read-file,read-dir:/usr \
             --landlock-rule path-beneath:execute,read-file,read-dir:/rust-toolchain \
             --landlock-rule path-beneath:execute,read-file:/system-node \
+            --landlock-rule path-beneath:read-file:/review-plan.tsv \
             --landlock-rule path-beneath:read-file,read-dir:/source \
             --landlock-rule path-beneath:read-file,read-dir:/public \
             --landlock-rule path-beneath:execute,write-file,read-file,read-dir,remove-dir,remove-file,make-dir,make-reg,make-sock,make-fifo,make-sym,refer,truncate:/build \
@@ -173,17 +191,28 @@ if ! {
             SOURCE_DATE_EPOCH=0 \
             RUSTFLAGS='--remap-path-prefix=/source=/usr/src/overcrow' \
             /bin/sh -c '
+                set -eu
                 umask 022
                 case "$1" in
                     workspace)
                         /rust-toolchain/bin/cargo fmt --all -- --check \
-                            && /rust-toolchain/bin/cargo clippy \
-                                --workspace --all-targets --locked --offline \
-                                -- -D warnings \
-                            && /usr/bin/rm -rf -- /build/target \
-                            && /usr/bin/mkdir -m 0700 /build/target \
-                            && /rust-toolchain/bin/cargo test \
+                            || exit 1
+                        if test "$3" = true; then
+                            tab=$(printf "\t")
+                            set --
+                            while IFS="$tab" read -r package artifact source extra; do
+                                test -z "$extra" && test -n "$package" \
+                                    && test -n "$artifact" && test -n "$source" \
+                                    || exit 1
+                                set -- "$@" -p "$package"
+                            done </review-plan.tsv
+                            test "$#" -eq 0 \
+                                || /rust-toolchain/bin/cargo test \
+                                    --all-targets --locked --offline "$@"
+                        else
+                            /rust-toolchain/bin/cargo test \
                                 --workspace --all-targets --locked --offline
+                        fi
                         ;;
                     site)
                         "$2" --test /source/tests/landing/*.test.mjs \
@@ -192,7 +221,7 @@ if ! {
                         ;;
                     *) exit 1 ;;
                 esac
-            ' sh "$mode" /system-node </dev/null
+            ' sh "$mode" /system-node "$targeted_review" </dev/null
 }; then
     printf '%s\n' 'error: sandboxed review checks failed' >&2
     exit 1

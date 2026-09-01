@@ -2,23 +2,25 @@
 set -eu
 umask 077
 
-if test "$#" -ne 12 \
+if test "$#" -ne 14 \
         || test "$1" != --candidate-revision \
-        || test "$3" != --sequence-file \
-        || test "$5" != --sequence-state \
-        || test "$7" != --signing-key \
-        || test "$9" != --public-key \
-        || test "${11}" != --key-id; then
+        || test "$3" != --review-bundle \
+        || test "$5" != --sequence-file \
+        || test "$7" != --sequence-state \
+        || test "$9" != --signing-key \
+        || test "${11}" != --public-key \
+        || test "${13}" != --key-id; then
     printf '%s\n' \
-        'usage: build-production.sh --candidate-revision REVISION --sequence-file ABSOLUTE --sequence-state ABSOLUTE --signing-key ABSOLUTE --public-key ABSOLUTE --key-id overcrow-production-2026-01' >&2
+        'usage: build-production.sh --candidate-revision REVISION --review-bundle ABSOLUTE --sequence-file ABSOLUTE --sequence-state ABSOLUTE --signing-key ABSOLUTE --public-key ABSOLUTE --key-id overcrow-production-2026-01' >&2
     exit 2
 fi
 candidate_revision=$2
-sequence_file=$4
-sequence_state=$6
-signing_key=$8
-public_key=${10}
-key_id=${12}
+review_bundle=$4
+sequence_file=$6
+sequence_state=$8
+signing_key=${10}
+public_key=${12}
+key_id=${14}
 
 repo_root=$(pwd -P)
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
@@ -55,6 +57,16 @@ for private_path in "$sequence_file" "$sequence_state" "$signing_key"; do
         exit 1
     fi
 done
+if ! valid_absolute_syntax "$review_bundle"; then
+    printf '%s\n' 'error: production review bundle rejected' >&2
+    exit 1
+fi
+case "$review_bundle" in
+    "$repo_root" | "$repo_root"/*)
+        printf '%s\n' 'error: production review bundle rejected' >&2
+        exit 1
+        ;;
+esac
 if test "$sequence_file" = "$sequence_state" \
         || test "$sequence_file" = "$signing_key" \
         || test "$sequence_state" = "$signing_key"; then
@@ -65,6 +77,14 @@ if test "$public_key" != "$repo_root/keys/overcrow-production-2026-01.pub"; then
     printf '%s\n' 'error: production key identity rejected' >&2
     exit 1
 fi
+for private_path in "$sequence_file" "$sequence_state" "$signing_key"; do
+    case "$private_path" in
+        "$review_bundle" | "$review_bundle"/*)
+            printf '%s\n' 'error: private publisher paths rejected' >&2
+            exit 1
+            ;;
+    esac
+done
 
 exec 9<"$repo_root"
 if ! /usr/bin/flock -n 9; then
@@ -110,9 +130,24 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-if ! sh "$script_dir/stage-catalog-repository.sh" \
-        --mode production "$source_root" >/dev/null 2>&1; then
-    printf '%s\n' 'error: production staging failed' >&2
+candidate_tree=$(trusted_git rev-parse --verify "$candidate_revision^{tree}" 2>/dev/null) \
+    || candidate_tree=''
+bundle_gate="$script_dir/review-bundle.sh"
+if test -z "$candidate_tree" \
+        || test ! -f "$bundle_gate" || test -L "$bundle_gate" \
+        || test ! -x "$bundle_gate" \
+        || ! sh "$bundle_gate" verify --bundle "$review_bundle" \
+            --review-sha "$candidate_revision" \
+            --review-tree "$candidate_tree" >/dev/null 2>&1; then
+    printf '%s\n' 'error: production review bundle rejected' >&2
+    exit 1
+fi
+/usr/bin/install -d -m 0700 -- "$source_root"
+if ! /usr/bin/cp -a -- "$review_bundle/repository/." "$source_root/" \
+        || ! sh "$bundle_gate" verify-copy --bundle "$review_bundle" \
+            --copy "$source_root" --review-sha "$candidate_revision" \
+            --review-tree "$candidate_tree" >/dev/null 2>&1; then
+    printf '%s\n' 'error: production review bundle rejected' >&2
     exit 1
 fi
 

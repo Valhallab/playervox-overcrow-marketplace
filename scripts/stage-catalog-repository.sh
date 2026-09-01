@@ -4,7 +4,7 @@ umask 077
 
 usage() {
     printf '%s\n' \
-        'usage: stage-catalog-repository.sh --mode development OUTPUT-REPOSITORY | stage-catalog-repository.sh --mode production [--trusted-tool ABSOLUTE-TOOL] OUTPUT-REPOSITORY' >&2
+        'usage: stage-catalog-repository.sh --mode development OUTPUT-REPOSITORY | stage-catalog-repository.sh --mode production [--trusted-tool ABSOLUTE-TOOL] [--reuse-components-from ABSOLUTE-REPOSITORY --build-plan ABSOLUTE-PLAN] OUTPUT-REPOSITORY' >&2
 }
 
 if test "$#" -lt 3 || test "$1" != "--mode"; then
@@ -18,24 +18,36 @@ case "$mode" in
 esac
 
 trusted_tool_argument=''
+reuse_repository=''
+affected_plan_argument=''
 shift 2
-case "$#" in
-    1)
-        output_repository=$1
-        ;;
-    3)
-        if test "$mode" != production || test "$1" != "--trusted-tool"; then
-            usage
-            exit 2
-        fi
-        trusted_tool_argument=$2
-        output_repository=$3
-        ;;
-    *)
+if test "$mode" = development; then
+    if test "$#" -ne 1; then
         usage
         exit 2
-        ;;
-esac
+    fi
+    output_repository=$1
+else
+    case "$#:$1:${3:-}:${5:-}" in
+        1:*:*:*) output_repository=$1 ;;
+        3:--trusted-tool:*:*)
+            trusted_tool_argument=$2
+            output_repository=$3
+            ;;
+        5:--reuse-components-from:--build-plan:*)
+            reuse_repository=$2
+            affected_plan_argument=$4
+            output_repository=$5
+            ;;
+        7:--trusted-tool:--reuse-components-from:--build-plan)
+            trusted_tool_argument=$2
+            reuse_repository=$4
+            affected_plan_argument=$6
+            output_repository=$7
+            ;;
+        *) usage; exit 2 ;;
+    esac
+fi
 case "$output_repository" in
     /*) ;;
     *) printf '%s\n' 'error: output repository must be absolute' >&2; exit 1 ;;
@@ -59,6 +71,7 @@ source_root="$work/repository"
 target_root="$work/component-output"
 provider_root="$work/provider-repository"
 plan="$work/build-plan.tsv"
+compile_plan="$work/compile-plan.tsv"
 snapshot_plan_file="$work/snapshot-plan.tsv"
 final_file_ledger="$work/final-file-ledger.tsv"
 expected_final_paths="$work/expected-final-paths"
@@ -441,6 +454,59 @@ case "$mode" in
 esac
 
 tab=$(printf '\t')
+if test -z "$reuse_repository"; then
+    /usr/bin/install -m 0600 -- "$plan" "$compile_plan"
+else
+    case "$reuse_repository:$affected_plan_argument" in
+        /*:/*) ;;
+        *) usage; exit 2 ;;
+    esac
+    if test "$reuse_repository" = / || test ! -d "$reuse_repository" \
+            || test -L "$reuse_repository" \
+            || test "$(CDPATH='' cd -- "$reuse_repository" 2>/dev/null && pwd -P || :)" \
+                != "$reuse_repository" \
+            || test "$(/usr/bin/stat -c '%u' "$reuse_repository" 2>/dev/null || :)" \
+                != "$(/usr/bin/id -u)" \
+            || test -n "$(/usr/bin/find "$reuse_repository" -xdev \
+                ! -type d ! -type f -print -quit)" \
+            || test -n "$(/usr/bin/find "$reuse_repository" -xdev \
+                ! -user "$(/usr/bin/id -u)" -print -quit)" \
+            || test -n "$(/usr/bin/find "$reuse_repository" -xdev \
+                -perm /0022 -print -quit)" \
+            || test ! -f "$affected_plan_argument" \
+            || test -L "$affected_plan_argument" \
+            || test "$(/usr/bin/stat -c '%u:%a:%h' "$affected_plan_argument" \
+                2>/dev/null || :)" != "$(/usr/bin/id -u):600:1" \
+            || test "$(/usr/bin/stat -c '%s' "$affected_plan_argument" \
+                2>/dev/null || :)" -gt 131072; then
+        printf '%s\n' 'error: reusable component inputs are unsafe' >&2
+        exit 1
+    fi
+    /usr/bin/install -m 0600 -- "$affected_plan_argument" "$compile_plan"
+    affected_count=0
+    while IFS="$tab" read -r affected_package affected_artifact \
+            affected_source affected_extra; do
+        if test -n "$affected_extra" || test -z "$affected_package" \
+                || test -z "$affected_artifact" || test -z "$affected_source" \
+                || ! /usr/bin/grep -F -x -- \
+                    "$affected_package${tab}$affected_artifact${tab}$affected_source" \
+                    "$plan" >/dev/null; then
+            printf '%s\n' 'error: reusable component build plan is invalid' >&2
+            exit 1
+        fi
+        affected_count=$((affected_count + 1))
+        test "$affected_count" -le 500 || {
+            printf '%s\n' 'error: reusable component build plan is invalid' >&2
+            exit 1
+        }
+    done <"$compile_plan"
+    if test "$(/usr/bin/sort -u "$compile_plan" | /usr/bin/wc -l)" \
+            != "$(/usr/bin/wc -l <"$compile_plan")"; then
+        printf '%s\n' 'error: reusable component build plan is invalid' >&2
+        exit 1
+    fi
+fi
+
 target_count=0
 if test "$mode" = production; then
     while IFS="$tab" read -r _snapshot_mode _snapshot_size _snapshot_oid snapshot_relative; do
@@ -480,7 +546,7 @@ case "$mode" in
         set --
         while IFS="$tab" read -r cargo_package component_artifact source_directory; do
             set -- "$@" -p "$cargo_package"
-        done <"$plan"
+        done <"$compile_plan"
         RUSTFLAGS="--remap-path-prefix=$source_root=/usr/src/overcrow" \
             CARGO_INCREMENTAL=0 \
             cargo build --manifest-path "$source_root/Cargo.toml" \
@@ -488,8 +554,11 @@ case "$mode" in
             --locked --offline "$@"
         ;;
     production)
-        /usr/bin/install -m 0600 -- "$plan" "$target_root/build-plan.tsv"
-        sh "$source_root/scripts/sandbox-component-build.sh" "$source_root" "$target_root"
+        if test -s "$compile_plan"; then
+            /usr/bin/install -m 0600 -- "$compile_plan" "$target_root/build-plan.tsv"
+            sh "$source_root/scripts/sandbox-component-build.sh" \
+                "$source_root" "$target_root"
+        fi
         ;;
 esac
 
@@ -497,22 +566,40 @@ components_json="$work/components.json"
 printf '%s' '[' >"$components_json"
 separator=''
 while IFS="$tab" read -r cargo_package component_artifact source_directory; do
-    case "$mode" in
-        development)
-            built="$target_root/target/wasm32-wasip2/release/$component_artifact.wasm"
-            ;;
-        production)
-            built="$target_root/artifacts/$component_artifact.wasm"
-            ;;
-    esac
     destination="$source_root/$source_directory/component.wasm"
-    if test ! -f "$built" || test -L "$built" \
-            || test -e "$destination" || test -L "$destination"; then
+    plan_line="$cargo_package${tab}$component_artifact${tab}$source_directory"
+    if /usr/bin/grep -F -x -- "$plan_line" "$compile_plan" >/dev/null; then
+        case "$mode" in
+            development)
+                built="$target_root/target/wasm32-wasip2/release/$component_artifact.wasm"
+                ;;
+            production)
+                built="$target_root/artifacts/$component_artifact.wasm"
+                ;;
+        esac
+        if test ! -f "$built" || test -L "$built"; then
+            printf '%s\n' 'error: component build output is missing or unsafe' >&2
+            exit 1
+        fi
+        /usr/bin/install -m 0644 -- "$built" "$destination"
+        marketplace_tool inspect-component "$destination"
+    else
+        reused="$reuse_repository/$source_directory/component.wasm"
+        if test -z "$reuse_repository" || test ! -f "$reused" \
+                || test -L "$reused" \
+                || test "$(/usr/bin/stat -c '%u:%a:%h' "$reused" 2>/dev/null || :)" \
+                    != "$(/usr/bin/id -u):644:1" \
+                || test "$(/usr/bin/stat -c '%s' "$reused" 2>/dev/null || :)" \
+                    -gt 4194304; then
+            printf '%s\n' 'error: reusable component is missing or unsafe' >&2
+            exit 1
+        fi
+        /usr/bin/install -m 0644 -- "$reused" "$destination"
+    fi
+    if test ! -f "$destination" || test -L "$destination"; then
         printf '%s\n' 'error: component build output is missing or unsafe' >&2
         exit 1
     fi
-    /usr/bin/install -m 0644 -- "$built" "$destination"
-    marketplace_tool inspect-component "$destination"
     digest=$(/usr/bin/sha256sum "$destination" | /usr/bin/cut -d ' ' -f 1)
     if ! record_final_file "$source_directory/component.wasm" 644 4194304; then
         printf '%s\n' 'error: generated source ledger failed' >&2

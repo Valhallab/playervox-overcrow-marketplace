@@ -209,8 +209,9 @@ bootstrap snapshot.
 
 Record the exact trusted candidate-base SHA and proposed review SHA before
 human review. From a clean checkout at the trusted base, run the repository's
-review wrapper; it prepares pinned dependencies from the trusted snapshot, then
-runs candidate compilation and tests in the bounded networkless sandbox:
+review wrapper. It prepares pinned dependencies from the trusted snapshot,
+reuses unchanged components from the previously accepted bundle, and compiles
+and tests only affected targets in the bounded networkless sandbox:
 
 ```sh
 set -eu
@@ -219,22 +220,30 @@ test "${#sequence_name}" -le 16
 test "$sequence_name" -lt 9007199254740991
 review_private_parent="$authority_root/review-$sequence_name"
 /usr/bin/install -d -m 0700 -- "$review_private_parent"
+review_bundle="$review_private_parent/proposed.bundle"
+accepted_base_bundle=/absolute/private/path/to/current-accepted.bundle
 test "$(git -C "$candidate_root" rev-parse HEAD)" = "$trusted_base_revision"
 test -z "$(git -C "$candidate_root" status --porcelain=v1 --untracked-files=normal)"
 test "$trusted_base_revision" != "$review_revision"
 (
   cd "$candidate_root"
-  sh scripts/review-revision.sh "$trusted_base_revision" "$review_revision"
+  sh scripts/review-revision.sh "$trusted_base_revision" "$review_revision" \
+    "$review_bundle" "$accepted_base_bundle"
 )
 ```
+
+For the first accepted catalog, omit `accepted_base_bundle`; that intentionally
+performs a full bootstrap build. The review bundle stays outside repositories
+and contains no key, sequence state, credential, or deployment configuration.
 
 Merge acceptance only after that gate passes. The protected merge may rewrite
 the commit identity. Refresh and record the protected post-merge
 `candidate_revision`, require its tree to equal the reviewed PR-head tree and
-its merge base to be the prior protected `trusted_base_revision`, then rerun
-the complete gate against that exact accepted revision. Only after the second
-gate passes may the release name be bound to the private counter without
-printing it and a release branch be created:
+its merge base to be the prior protected `trusted_base_revision`, then bind the
+existing review evidence to that protected commit. This is an ancestry, tree,
+and ledger verification; it does not compile or retest widgets. Only after it
+passes may the release name be bound to the private counter without printing it
+and a release branch be created:
 
 ```sh
 set -eu
@@ -261,7 +270,7 @@ test "${#candidate_revision}" -eq 40
 (
   cd "$candidate_root"
   sh scripts/accept-candidate-revision.sh "$trusted_base_revision" \
-    "$review_revision" "$candidate_revision"
+    "$review_revision" "$candidate_revision" "$review_bundle"
 )
 sequence_owner=$(/usr/bin/id -u)
 test -f "$sequence_file" && test ! -L "$sequence_file"
@@ -282,6 +291,10 @@ test "$(git -C "$marketplace_root" branch --show-current)" = "release/$sequence_
 test -z "$(git -C "$marketplace_root" status --porcelain=v1 --untracked-files=normal)"
 ```
 
+`review_bundle` is now the accepted bundle for `candidate_revision`. Retain it
+as the base evidence for the next submission and as the only component input to
+the offline publisher.
+
 On the offline authority host, verify the key privately, sign the exact clean
 release tree, and verify the generated tracked tree before opening the
 `release/<sequence>` PR to `master`:
@@ -298,6 +311,7 @@ marketplace_tool=$(sh "$marketplace_root/scripts/prepare-marketplace-tool.sh" \
 (
   cd "$marketplace_root"
   sh scripts/build-production.sh --candidate-revision "$candidate_revision" \
+    --review-bundle "$review_bundle" \
     --sequence-file "$sequence_file" --sequence-state "$sequence_state" \
     --signing-key "$signing_key" \
     --public-key "$marketplace_root/keys/overcrow-production-2026-01.pub" \
@@ -308,9 +322,11 @@ sh "$marketplace_root/scripts/verify-published.sh" "$marketplace_root/published"
   overcrow-production-2026-01
 ```
 
-The publisher atomically replaces `published/`, advances the private sequence,
-and does not deploy or push. Review the resulting release diff and use a PR to
-`master`; do not copy an artifact into Coolify or sign from CI.
+The publisher verifies the accepted bundle before copying, compares the private
+copy against the bundle ledger, never invokes the component staging compiler,
+atomically replaces `published/`, advances the private sequence, and does not
+deploy or push. Review the resulting release diff and use a PR to `master`; do
+not copy an artifact into Coolify or sign from CI.
 
 ## 8. Coolify static deployment
 
