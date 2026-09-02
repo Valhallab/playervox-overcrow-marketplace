@@ -1,3 +1,5 @@
+#![cfg(feature = "api-v1")]
+
 use overcrow_widget_sdk::{
     BuildError, CanvasLine, CanvasPrimitive, CanvasRect, CanvasText, DragPhase,
     GrantedCapabilities, GuestError, GuestOutput, HarnessError, HostEvent, InitInput, Interaction,

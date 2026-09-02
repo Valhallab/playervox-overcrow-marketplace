@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+default = ["api-v1"]
+api-v1 = []
+api-v2 = []
+
 [dependencies]
 spin.workspace = true
 wit-bindgen.workspace = true

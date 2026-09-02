@@ -7,6 +7,8 @@ use alloc::{
 };
 use core::{error::Error, fmt};
 
+#[cfg(feature = "api-v2")]
+use crate::{ContainerLayout, GridLayout, Layout, TextRole};
 use crate::{
     GuestError, GuestOutput, HostCommand, Locale, LocalizedText, View, ViewNode, WidgetContext,
     state::{OutputState, RequestKind},
@@ -144,9 +146,23 @@ impl ViewBuilder {
     }
 
     pub fn text(&mut self, text: LocalizedText) -> Result<NodeId, BuildError> {
+        #[cfg(feature = "api-v1")]
+        {
+            let text = text.resolve(&self.locale).to_owned();
+            let budget = self.check_node(None, &[&text], 0)?;
+            Ok(self.push(ViewNode::Text(text), None, budget))
+        }
+        #[cfg(feature = "api-v2")]
+        {
+            self.text_role(TextRole::Body, text)
+        }
+    }
+
+    #[cfg(feature = "api-v2")]
+    pub fn text_role(&mut self, role: TextRole, text: LocalizedText) -> Result<NodeId, BuildError> {
         let text = text.resolve(&self.locale).to_owned();
         let budget = self.check_node(None, &[&text], 0)?;
-        Ok(self.push(ViewNode::Text(text), None, budget))
+        Ok(self.push(ViewNode::Text((role, text)), None, budget))
     }
 
     pub fn image(&mut self, asset_id: &str) -> Result<NodeId, BuildError> {
@@ -274,10 +290,58 @@ impl ViewBuilder {
     }
 
     pub fn container(&mut self, children: &[NodeId]) -> Result<NodeId, BuildError> {
+        #[cfg(feature = "api-v1")]
+        let node = ViewNode::Container(children.iter().map(|child| child.0).collect());
+        #[cfg(feature = "api-v2")]
+        let node = ViewNode::Container((
+            Layout::Linear(ContainerLayout::Column),
+            children.iter().map(|child| child.0).collect(),
+        ));
+        let child_bytes = children.len().checked_mul(4).ok_or(BuildError::DataLimit)?;
+        let budget = self.check_node(None, &[], child_bytes)?;
+        Ok(self.push(node, None, budget))
+    }
+
+    #[cfg(feature = "api-v2")]
+    pub fn row(&mut self, children: &[NodeId]) -> Result<NodeId, BuildError> {
+        self.layout_container(Layout::Linear(ContainerLayout::Row), children)
+    }
+
+    #[cfg(feature = "api-v2")]
+    pub fn grid(&mut self, columns: u8, children: &[NodeId]) -> Result<NodeId, BuildError> {
+        if !(1..=8).contains(&columns) {
+            return Err(BuildError::InvalidTree);
+        }
+        self.layout_container(Layout::Grid(GridLayout { columns }), children)
+    }
+
+    #[cfg(feature = "api-v2")]
+    pub fn surface(&mut self, children: &[NodeId]) -> Result<NodeId, BuildError> {
         let child_bytes = children.len().checked_mul(4).ok_or(BuildError::DataLimit)?;
         let budget = self.check_node(None, &[], child_bytes)?;
         Ok(self.push(
-            ViewNode::Container(children.iter().map(|child| child.0).collect()),
+            ViewNode::Surface(children.iter().map(|child| child.0).collect()),
+            None,
+            budget,
+        ))
+    }
+
+    #[cfg(feature = "api-v2")]
+    pub fn scroll(&mut self, child: NodeId) -> Result<NodeId, BuildError> {
+        let budget = self.check_node(None, &[], 4)?;
+        Ok(self.push(ViewNode::Scroll(child.0), None, budget))
+    }
+
+    #[cfg(feature = "api-v2")]
+    fn layout_container(
+        &mut self,
+        layout: Layout,
+        children: &[NodeId],
+    ) -> Result<NodeId, BuildError> {
+        let child_bytes = children.len().checked_mul(4).ok_or(BuildError::DataLimit)?;
+        let budget = self.check_node(None, &[], child_bytes)?;
+        Ok(self.push(
+            ViewNode::Container((layout, children.iter().map(|child| child.0).collect())),
             None,
             budget,
         ))
@@ -424,10 +488,10 @@ fn validate_canvas_primitive(primitive: &crate::CanvasPrimitive) -> Result<(), B
 fn validate_tree(nodes: &[ViewNode], root: NodeId) -> Result<(), BuildError> {
     let mut parents = vec![0_u8; nodes.len()];
     for node in nodes {
-        if let ViewNode::Container(children) = node {
+        if let Some(children) = child_ids(node) {
             let mut unique = BTreeSet::new();
             for child in children {
-                let child = usize::try_from(*child).map_err(|_| BuildError::InvalidTree)?;
+                let child = usize::try_from(child).map_err(|_| BuildError::InvalidTree)?;
                 if child >= nodes.len() || !unique.insert(child) {
                     return Err(BuildError::InvalidTree);
                 }
@@ -469,11 +533,11 @@ fn visit(
         return Err(BuildError::InvalidTree);
     }
     visited[index] = true;
-    if let ViewNode::Container(children) = &nodes[index] {
+    if let Some(children) = child_ids(&nodes[index]) {
         for child in children {
             visit(
                 nodes,
-                usize::try_from(*child).map_err(|_| BuildError::InvalidTree)?,
+                usize::try_from(child).map_err(|_| BuildError::InvalidTree)?,
                 depth + 1,
                 visited,
             )?;
@@ -745,11 +809,23 @@ fn view_wire_bytes(view: &View) -> Result<usize, BuildError> {
     for node in &view.nodes {
         bytes = bytes.checked_add(64).ok_or(BuildError::OutputLimit)?;
         let variable = match node {
+            #[cfg(feature = "api-v1")]
             ViewNode::Container(children) => children
                 .len()
                 .checked_mul(4)
                 .ok_or(BuildError::OutputLimit)?,
-            ViewNode::Text(text) | ViewNode::Image(text) => text.len(),
+            #[cfg(feature = "api-v2")]
+            ViewNode::Container((_, children)) | ViewNode::Surface(children) => children
+                .len()
+                .checked_mul(4)
+                .ok_or(BuildError::OutputLimit)?,
+            #[cfg(feature = "api-v2")]
+            ViewNode::Scroll(_) => 4,
+            #[cfg(feature = "api-v1")]
+            ViewNode::Text(text) => text.len(),
+            #[cfg(feature = "api-v2")]
+            ViewNode::Text((_, text)) => text.len(),
+            ViewNode::Image(text) => text.len(),
             ViewNode::Button((id, label)) | ViewNode::Toggle((id, label, _)) => id
                 .len()
                 .checked_add(label.len())
@@ -785,10 +861,27 @@ fn view_wire_bytes(view: &View) -> Result<usize, BuildError> {
     Ok(bytes)
 }
 
+fn child_ids(node: &ViewNode) -> Option<Vec<u32>> {
+    #[cfg(feature = "api-v1")]
+    if let ViewNode::Container(children) = node {
+        return Some(children.clone());
+    }
+    #[cfg(feature = "api-v2")]
+    match node {
+        ViewNode::Container((_, children)) | ViewNode::Surface(children) => Some(children.clone()),
+        ViewNode::Scroll(child) => Some(vec![*child]),
+        _ => None,
+    }
+    #[cfg(feature = "api-v1")]
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{GrantedCapabilities, HostEvent, HttpResponseMetadata, InitInput};
+    use crate::{GrantedCapabilities, InitInput};
+    #[cfg(feature = "api-v1")]
+    use crate::{HostEvent, HttpResponseMetadata};
 
     fn context() -> WidgetContext {
         WidgetContext::from_init(InitInput {
@@ -807,6 +900,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "api-v1")]
     fn session_state_enforces_host_aggregate_limits() {
         let mut lifecycle = context();
         let mut output = OutputBuilder::new(&mut lifecycle);
@@ -896,6 +990,35 @@ mod tests {
         output
             .provider_publish("com.example.provider/value.v1", 8, b"next")
             .expect("strictly newer revision");
+    }
+
+    #[test]
+    #[cfg(feature = "api-v2")]
+    fn v2_layout_builders_validate_grid_and_one_connected_tree() {
+        let locale = Locale::parse("en").expect("locale");
+        let mut builder = ViewBuilder::new(&locale);
+        let heading = builder
+            .text_role(TextRole::Heading, LocalizedText::new("Market"))
+            .expect("heading");
+        let metric = builder
+            .text_role(TextRole::Metric, LocalizedText::new("12 platinum"))
+            .expect("metric");
+        let grid = builder.grid(2, &[heading, metric]).expect("grid");
+        let scroll = builder.scroll(grid).expect("scroll");
+        let surface = builder.surface(&[scroll]).expect("surface");
+        let root = builder.row(&[surface]).expect("row");
+        let view = builder.finish(root, 1).expect("connected v2 view");
+        assert!(matches!(
+            view.nodes.last(),
+            Some(ViewNode::Container((
+                Layout::Linear(ContainerLayout::Row),
+                _
+            )))
+        ));
+
+        let mut invalid = ViewBuilder::new(&locale);
+        assert_eq!(invalid.grid(0, &[]), Err(BuildError::InvalidTree));
+        assert_eq!(invalid.grid(9, &[]), Err(BuildError::InvalidTree));
     }
 
     #[test]
