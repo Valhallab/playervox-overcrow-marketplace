@@ -246,6 +246,7 @@ fn validate_package_manifest(member: &str, table: &Table) -> Result<PackageManif
             "lib",
             "dependencies",
             "dev-dependencies",
+            "features",
             "lints",
             "target",
         ],
@@ -276,6 +277,7 @@ fn validate_package_manifest(member: &str, table: &Table) -> Result<PackageManif
     {
         return Err(());
     }
+    validate_reviewed_sdk_features(member, table.get("features"))?;
 
     let (library_name, crate_types) = if let Some(value) = table.get("lib") {
         let library = value.as_table().ok_or(())?;
@@ -344,6 +346,31 @@ fn validate_package_manifest(member: &str, table: &Table) -> Result<PackageManif
     })
 }
 
+fn validate_reviewed_sdk_features(member: &str, value: Option<&Value>) -> Result<(), ()> {
+    if member != "sdk/rust/overcrow-widget-sdk" {
+        return if value.is_none() { Ok(()) } else { Err(()) };
+    }
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let features = value.as_table().ok_or(())?;
+    only_keys(features, &["default", "api-v1", "api-v2"])?;
+    let default = features
+        .get("default")
+        .and_then(Value::as_array)
+        .ok_or(())?;
+    let api_v1 = features.get("api-v1").and_then(Value::as_array).ok_or(())?;
+    let api_v2 = features.get("api-v2").and_then(Value::as_array).ok_or(())?;
+    if default.len() != 1
+        || default[0].as_str() != Some("api-v1")
+        || !api_v1.is_empty()
+        || !api_v2.is_empty()
+    {
+        return Err(());
+    }
+    Ok(())
+}
+
 fn validate_reviewed_sdk_target(member: &str, value: &Value) -> Result<Vec<DependencySpec>, ()> {
     if member != "sdk/rust/overcrow-widget-sdk" {
         return Err(());
@@ -398,11 +425,24 @@ fn parse_member_dependency(member: &str, name: &str, value: &Value) -> Result<De
         });
     }
     if let Some(path) = table.get("path") {
-        only_keys(table, &["path"])?;
+        only_keys(table, &["path", "default-features", "features"])?;
         let path = path.as_str().ok_or(())?;
+        let dependency_member = normalize_dependency_path(member, path)?;
+        if table.len() > 1 {
+            validate_dependency_options(table)?;
+            let features = table.get("features").and_then(Value::as_array).ok_or(())?;
+            if name != "overcrow-widget-sdk"
+                || dependency_member != "sdk/rust/overcrow-widget-sdk"
+                || table.get("default-features").and_then(Value::as_bool) != Some(false)
+                || features.len() != 1
+                || !matches!(features[0].as_str(), Some("api-v1" | "api-v2"))
+            {
+                return Err(());
+            }
+        }
         return Ok(DependencySpec::Path {
             name: name.to_owned(),
-            member: normalize_dependency_path(member, path)?,
+            member: dependency_member,
         });
     }
     Ok(DependencySpec::Registry {

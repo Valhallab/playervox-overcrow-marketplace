@@ -236,7 +236,13 @@ validate_final_file_ledger() {
     expected_entries=1
     final_ledger_contains_path .build-bindings.json || return 1
     tab=$(printf '\t')
-    while IFS="$tab" read -r cargo_package component_artifact source_directory; do
+    while IFS="$tab" read -r cargo_package component_artifact source_directory \
+            api_version extra; do
+        test -z "$extra" || return 1
+        case "$api_version" in
+            1 | 2) ;;
+            *) return 1 ;;
+        esac
         final_ledger_contains_path "$source_directory/component.wasm" || return 1
         final_ledger_contains_path "$source_directory/manifest.json" || return 1
         expected_entries=$((expected_entries + 2))
@@ -485,11 +491,12 @@ else
     /usr/bin/install -m 0600 -- "$affected_plan_argument" "$compile_plan"
     affected_count=0
     while IFS="$tab" read -r affected_package affected_artifact \
-            affected_source affected_extra; do
+            affected_source affected_api affected_extra; do
         if test -n "$affected_extra" || test -z "$affected_package" \
                 || test -z "$affected_artifact" || test -z "$affected_source" \
+                || { test "$affected_api" != 1 && test "$affected_api" != 2; } \
                 || ! /usr/bin/grep -F -x -- \
-                    "$affected_package${tab}$affected_artifact${tab}$affected_source" \
+                    "$affected_package${tab}$affected_artifact${tab}$affected_source${tab}$affected_api" \
                     "$plan" >/dev/null; then
             printf '%s\n' 'error: reusable component build plan is invalid' >&2
             exit 1
@@ -513,8 +520,11 @@ if test "$mode" = production; then
         printf '%s\n' "$snapshot_relative" >>"$expected_final_paths"
     done <"$snapshot_plan_file"
 fi
-while IFS="$tab" read -r cargo_package component_artifact source_directory; do
-    if test -z "$cargo_package" || test -z "$component_artifact" || test -z "$source_directory"; then
+while IFS="$tab" read -r cargo_package component_artifact source_directory \
+        api_version extra; do
+    if test -n "$extra" || test -z "$cargo_package" \
+            || test -z "$component_artifact" || test -z "$source_directory" \
+            || { test "$api_version" != 1 && test "$api_version" != 2; }; then
         printf '%s\n' 'error: invalid validated build plan' >&2
         exit 1
     fi
@@ -543,15 +553,24 @@ fi
 
 case "$mode" in
     development)
-        set --
-        while IFS="$tab" read -r cargo_package component_artifact source_directory; do
-            set -- "$@" -p "$cargo_package"
-        done <"$compile_plan"
-        RUSTFLAGS="--remap-path-prefix=$source_root=/usr/src/overcrow" \
-            CARGO_INCREMENTAL=0 \
-            cargo build --manifest-path "$source_root/Cargo.toml" \
-            --release --target wasm32-wasip2 --target-dir "$target_root/target" \
-            --locked --offline "$@"
+        for api_version in 1 2; do
+            set --
+            while IFS="$tab" read -r cargo_package component_artifact \
+                    source_directory package_api extra; do
+                test -z "$extra" || exit 1
+                if test "$package_api" = "$api_version"; then
+                    set -- "$@" -p "$cargo_package"
+                fi
+            done <"$compile_plan"
+            if test "$#" -gt 0; then
+                RUSTFLAGS="--remap-path-prefix=$source_root=/usr/src/overcrow" \
+                    CARGO_INCREMENTAL=0 \
+                    cargo build --manifest-path "$source_root/Cargo.toml" \
+                    --release --target wasm32-wasip2 \
+                    --target-dir "$target_root/target" \
+                    --locked --offline "$@"
+            fi
+        done
         ;;
     production)
         if test -s "$compile_plan"; then
@@ -565,9 +584,10 @@ esac
 components_json="$work/components.json"
 printf '%s' '[' >"$components_json"
 separator=''
-while IFS="$tab" read -r cargo_package component_artifact source_directory; do
+while IFS="$tab" read -r cargo_package component_artifact source_directory \
+        api_version extra; do
     destination="$source_root/$source_directory/component.wasm"
-    plan_line="$cargo_package${tab}$component_artifact${tab}$source_directory"
+    plan_line="$cargo_package${tab}$component_artifact${tab}$source_directory${tab}$api_version"
     if /usr/bin/grep -F -x -- "$plan_line" "$compile_plan" >/dev/null; then
         case "$mode" in
             development)
@@ -617,7 +637,8 @@ printf '%s\n' ']' >>"$components_json"
 provider_source='providers/warframe-worldstate'
 provider_package=''
 provider_artifact=''
-while IFS="$tab" read -r cargo_package component_artifact source_directory; do
+while IFS="$tab" read -r cargo_package component_artifact source_directory \
+        api_version extra; do
     if test "$source_directory" = "$provider_source"; then
         provider_package=$cargo_package
         provider_artifact=$component_artifact
@@ -697,7 +718,8 @@ if test "$mode" = production; then
         printf '%s\n' 'error: generated source ledger failed' >&2
         exit 1
     fi
-    while IFS="$tab" read -r cargo_package component_artifact source_directory; do
+    while IFS="$tab" read -r cargo_package component_artifact source_directory \
+            api_version extra; do
         if ! record_final_file "$source_directory/manifest.json" 644 65536; then
             printf '%s\n' 'error: generated source ledger failed' >&2
             exit 1

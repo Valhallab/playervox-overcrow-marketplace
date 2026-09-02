@@ -205,7 +205,7 @@ fn build_plan_emits_only_validated_fixed_fields() {
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stdout).expect("UTF-8 plan"),
-        "hello-widget\thello_widget\texamples/hello-widget\n",
+        "hello-widget\thello_widget\texamples/hello-widget\t1\n",
     );
     assert!(output.stderr.is_empty(), "successful plan stays quiet");
     assert!(
@@ -1647,6 +1647,15 @@ fn prepare_build_plan_fixture(repository: &Path) {
     )
     .expect("package manifest");
     fs::write(source.join("src/lib.rs"), "pub fn fixture() {}\n").expect("package source");
+    for relative in ["manifest.json", "listing.json"] {
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/hello-widget")
+                .join(relative),
+            source.join(relative),
+        )
+        .expect("metadata fixture");
+    }
     write_targets(
         repository,
         serde_json::json!([target(

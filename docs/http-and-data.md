@@ -7,6 +7,16 @@ peer, sends no ambient credentials, follows no redirects, and returns a typed
 `http-result`. Request IDs are nonzero and strictly increasing. Handle a result
 with no status as unavailable and never assume a body is UTF-8.
 
+API v1 delivers one bounded response body. API v2 keeps the same 2 MiB request
+limit but delivers a start event, at most 32 chunks of at most 64 KiB, and an
+end event so a component can parse incrementally. Warframe Market uses this
+path for the item catalog: it streams the initial response into a compact,
+content-checked index split across bounded private-storage entries. A fresh
+index is reused for 24 hours, stale data remains searchable while one refresh
+runs, and the manifest is written last so an interrupted refresh cannot replace
+the previous cache. Per-item order responses remain separately bounded and are
+never stored in that catalog cache.
+
 Storage is a bounded package-scoped key/value service. Use `storage-get`,
 `storage-set`, or `storage-delete` only when storage was declared and granted;
 results arrive as `storage-result`. Components never receive filesystem paths.

@@ -14,7 +14,9 @@ write_build_plan() {
     plan_target=$1
     plan_package=$2
     plan_artifact=$3
-    printf '%s\t%s\t%s\n' "$plan_package" "$plan_artifact" fixture \
+    plan_api=${4:-1}
+    printf '%s\t%s\t%s\t%s\n' \
+        "$plan_package" "$plan_artifact" fixture "$plan_api" \
         >"$plan_target/build-plan.tsv"
     /usr/bin/chmod 0600 "$plan_target/build-plan.tsv"
 }
@@ -418,7 +420,7 @@ archive_fixture="$scratch/archive-fixture"
 /usr/bin/install -d -m 0700 "$archive_fixture/input"
 printf '%s\n' 'validated artifact bytes' \
     >"$archive_fixture/input/archive_canary.wasm"
-printf '%s\t%s\t%s\n' archive-canary archive_canary fixture \
+printf '%s\t%s\t%s\t1\n' archive-canary archive_canary fixture \
     >"$archive_fixture/build-plan.tsv"
 /usr/bin/chmod 0600 "$archive_fixture/build-plan.tsv"
 (
@@ -443,7 +445,7 @@ test -f "$archive_fixture/valid-output/archive_canary.wasm"
     /usr/bin/tar --create --format=ustar \
         --file="$archive_fixture/link.tar" -- link_canary.wasm
 )
-printf '%s\t%s\t%s\n' link-canary link_canary fixture \
+printf '%s\t%s\t%s\t1\n' link-canary link_canary fixture \
     >"$archive_fixture/link-plan.tsv"
 /usr/bin/chmod 0600 "$archive_fixture/link-plan.tsv"
 printf '%s\n' 'traversal bytes' >"$archive_fixture/input/traversal_canary.wasm"
@@ -453,7 +455,7 @@ printf '%s\n' 'traversal bytes' >"$archive_fixture/input/traversal_canary.wasm"
         --transform='s|^|../|' --file="$archive_fixture/traversal.tar" \
         -- traversal_canary.wasm
 )
-printf '%s\t%s\t%s\n' traversal-canary traversal_canary fixture \
+printf '%s\t%s\t%s\t1\n' traversal-canary traversal_canary fixture \
     >"$archive_fixture/traversal-plan.tsv"
 /usr/bin/chmod 0600 "$archive_fixture/traversal-plan.tsv"
 /usr/bin/truncate -s 5242880 "$archive_fixture/input/oversize_canary.wasm"
@@ -462,7 +464,7 @@ printf '%s\t%s\t%s\n' traversal-canary traversal_canary fixture \
     /usr/bin/tar --create --sparse --format=gnu \
         --file="$archive_fixture/oversize.tar" -- oversize_canary.wasm
 )
-printf '%s\t%s\t%s\n' oversize-canary oversize_canary fixture \
+printf '%s\t%s\t%s\t1\n' oversize-canary oversize_canary fixture \
     >"$archive_fixture/oversize-plan.tsv"
 /usr/bin/chmod 0600 "$archive_fixture/oversize-plan.tsv"
 for archive_case in duplicate link traversal oversize; do
