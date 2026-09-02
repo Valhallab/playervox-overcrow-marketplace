@@ -54,17 +54,23 @@ valid_pair() {
     test -d "$1" && test ! -L "$1" \
         && test -f "$1/widget-v1.wit" && test ! -L "$1/widget-v1.wit" \
         && test -f "$1/widget-v1.sha256" && test ! -L "$1/widget-v1.sha256" \
+        && test -f "$1/widget-v2.wit" && test ! -L "$1/widget-v2.wit" \
+        && test -f "$1/widget-v2.sha256" && test ! -L "$1/widget-v2.sha256" \
         || return 1
     pair_extra=$(/usr/bin/find "$1" -mindepth 1 -maxdepth 1 \
-        ! -name widget-v1.wit ! -name widget-v1.sha256 -print -quit) || return 1
+        ! -name widget-v1.wit ! -name widget-v1.sha256 \
+        ! -name widget-v2.wit ! -name widget-v2.sha256 -print -quit) || return 1
     test -z "$pair_extra" || return 1
-    pair_hash=$(/usr/bin/sha256sum "$1/widget-v1.wit") || return 1
-    pair_hash=${pair_hash%% *}
-    pair_recorded=$(/usr/bin/cat "$1/widget-v1.sha256") || return 1
-    case "$pair_recorded" in
-        *[!0-9a-f]* | '') return 1 ;;
-    esac
-    test "${#pair_recorded}" -eq 64 && test "$pair_hash" = "$pair_recorded"
+    for pair_version in v1 v2; do
+        pair_hash=$(/usr/bin/sha256sum "$1/widget-$pair_version.wit") || return 1
+        pair_hash=${pair_hash%% *}
+        pair_recorded=$(/usr/bin/cat "$1/widget-$pair_version.sha256") || return 1
+        case "$pair_recorded" in
+            *[!0-9a-f]* | '') return 1 ;;
+        esac
+        test "${#pair_recorded}" -eq 64 \
+            && test "$pair_hash" = "$pair_recorded" || return 1
+    done
 }
 
 restore_previous() {
@@ -103,9 +109,10 @@ if { test -e "$destination" || test -L "$destination"; } && ! valid_pair "$desti
     exit 1
 fi
 
-source_wit="$worktree/crates/overcrow-extension-api/wit/widget-v1.wit"
+source_wit_v1="$worktree/crates/overcrow-extension-api/wit/widget-v1.wit"
+source_wit_v2="$worktree/crates/overcrow-extension-api/wit/widget-v2.wit"
 source_spec="$worktree/docs/superpowers/specs/2026-08-25-widget-marketplace-design.md"
-for source_file in "$source_wit" "$source_spec"; do
+for source_file in "$source_wit_v1" "$source_wit_v2" "$source_spec"; do
     canonical_source=$(/usr/bin/readlink -f -- "$source_file") || {
         printf '%s\n' 'error: required OverCrow source is unavailable' >&2
         exit 1
@@ -126,20 +133,26 @@ if test "$canonical_stage" != "$stage" || test ! -d "$stage" || test -L "$stage"
     exit 1
 fi
 /usr/bin/chmod 0700 "$stage"
-/usr/bin/install -m 0644 "$source_wit" "$stage/widget-v1.wit"
-source_hash=$(/usr/bin/sha256sum "$stage/widget-v1.wit")
-source_hash=${source_hash%% *}
-case "$source_hash" in
-    *[!0-9a-f]* | '')
+for source_version in v1 v2; do
+    case "$source_version" in
+        v1) source_file=$source_wit_v1 ;;
+        v2) source_file=$source_wit_v2 ;;
+    esac
+    /usr/bin/install -m 0644 "$source_file" "$stage/widget-$source_version.wit"
+    source_hash=$(/usr/bin/sha256sum "$stage/widget-$source_version.wit")
+    source_hash=${source_hash%% *}
+    case "$source_hash" in
+        *[!0-9a-f]* | '')
+            printf '%s\n' 'error: SHA-256 output is invalid' >&2
+            exit 1
+            ;;
+    esac
+    if test "${#source_hash}" -ne 64; then
         printf '%s\n' 'error: SHA-256 output is invalid' >&2
         exit 1
-        ;;
-esac
-if test "${#source_hash}" -ne 64; then
-    printf '%s\n' 'error: SHA-256 output is invalid' >&2
-    exit 1
-fi
-printf '%s\n' "$source_hash" >"$stage/widget-v1.sha256"
+    fi
+    printf '%s\n' "$source_hash" >"$stage/widget-$source_version.sha256"
+done
 
 if test -e "$destination"; then
     backup_created=true
@@ -155,4 +168,5 @@ if test -e "$previous"; then
     /usr/bin/rm -rf -- "$previous"
 fi
 backup_created=false
-printf '%s\n' "$source_hash"
+printf '%s\n' "$(/usr/bin/cat "$destination/widget-v1.sha256")"
+printf '%s\n' "$(/usr/bin/cat "$destination/widget-v2.sha256")"

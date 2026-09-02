@@ -146,6 +146,7 @@ impl WidgetContext {
 
     pub(crate) fn apply_event(&mut self, event: &HostEvent) -> Result<(), GuestError> {
         match event {
+            #[cfg(feature = "api-v1")]
             HostEvent::HttpResult((request_id, _, _, _)) => {
                 self.output_state.complete(*request_id, RequestKind::Http)?;
             }
@@ -167,5 +168,10 @@ impl WidgetContext {
             _ => {}
         }
         Ok(())
+    }
+
+    #[cfg(feature = "api-v2")]
+    pub(crate) fn complete_http(&mut self, request_id: u32) -> Result<(), GuestError> {
+        self.output_state.complete(request_id, RequestKind::Http)
     }
 }

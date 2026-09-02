@@ -94,10 +94,53 @@ impl<'a, W: Widget> WidgetHarness<'a, W> {
     pub fn text_at(&self, index: usize) -> Option<&str> {
         self.nodes()
             .filter_map(|node| match node {
+                #[cfg(feature = "api-v1")]
                 ViewNode::Text(text) => Some(text.as_str()),
+                #[cfg(feature = "api-v2")]
+                ViewNode::Text((_, text)) => Some(text.as_str()),
                 _ => None,
             })
             .nth(index)
+    }
+
+    #[cfg(feature = "api-v2")]
+    pub fn http_response_start(
+        &mut self,
+        request_id: u32,
+        status: Option<u16>,
+        body_length: u32,
+        metadata: crate::HttpResponseMetadata,
+    ) -> Result<(), HarnessError> {
+        self.context.complete_http(request_id)?;
+        self.output = self.widget.http_response_start(
+            request_id,
+            status,
+            body_length,
+            metadata,
+            &mut self.context,
+        )?;
+        Ok(())
+    }
+
+    #[cfg(feature = "api-v2")]
+    pub fn http_response_chunk(
+        &mut self,
+        request_id: u32,
+        sequence: u8,
+        bytes: Vec<u8>,
+    ) -> Result<(), HarnessError> {
+        self.output =
+            self.widget
+                .http_response_chunk(request_id, sequence, bytes, &mut self.context)?;
+        Ok(())
+    }
+
+    #[cfg(feature = "api-v2")]
+    pub fn http_response_end(&mut self, request_id: u32) -> Result<(), HarnessError> {
+        self.output = self
+            .widget
+            .http_response_end(request_id, &mut self.context)?;
+        Ok(())
     }
 
     pub fn button_label(&self, element_id: &str) -> Option<&str> {
