@@ -64,13 +64,17 @@ impl<'a, W: Widget> WidgetHarness<'a, W> {
     }
 
     pub fn from_init(widget: &'a mut W, input: InitInput) -> Result<Self, GuestError> {
+        let mode = input
+            .session_data
+            .as_ref()
+            .map_or(OverlayModeCode::Interactive, |session| session.overlay_mode);
         let mut context = WidgetContext::from_init(input)?;
         let output = widget.init(&mut context)?;
         Ok(Self {
             widget,
             context,
             output,
-            mode: OverlayModeCode::Interactive,
+            mode,
         })
     }
 

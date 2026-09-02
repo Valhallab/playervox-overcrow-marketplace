@@ -740,7 +740,7 @@ fn cli_build_is_reproducible_and_verifies_its_complete_source() {
         fs::read(
             fixture
                 .path()
-                .join("marketplace/development-catalog-state.json")
+                .join("marketplace/development-catalog-state.json"),
         )
         .expect("development state"),
         format!("{{\"schemaVersion\":1,\"sequence\":1,\"payloadSha256\":\"{payload_sha256}\"}}\n")

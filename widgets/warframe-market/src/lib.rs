@@ -2,6 +2,7 @@
 
 extern crate alloc;
 
+mod cache;
 mod model;
 mod parse;
 mod state;
@@ -9,16 +10,17 @@ mod state;
 use alloc::{format, string::String, vec, vec::Vec};
 use core::cmp::Reverse;
 
+use cache::{EncodedCache, MANIFEST_KEY, Manifest, decode as decode_cache, encode as encode_cache};
 use model::{
     MAX_ORDERS_PER_SIDE, MAX_RESULTS, MarketDetail, MarketItem, MarketOrder, Presence, SideFilter,
     StatusFilter, TradeSide, display_slug, item_matches, normalize_query, stable_element_id,
     whisper_line,
 };
 use overcrow_widget_sdk::{
-    GuestError, GuestOutput, HostEvent, Interaction, InteractionKind, LocalizedText, OutputBuilder,
-    OverlayModeCode, ViewBuilder, Widget, WidgetContext,
+    GuestError, GuestOutput, HostEvent, HttpResponseMetadata, Interaction, InteractionKind,
+    LocalizedText, OutputBuilder, OverlayModeCode, TextRole, ViewBuilder, Widget, WidgetContext,
 };
-use parse::{parse_items, parse_orders};
+use parse::{CatalogStream, parse_orders};
 use state::{Preferences, STORAGE_KEY};
 
 const HTTP_HOST: &str = "api.warframe.market";
@@ -29,6 +31,8 @@ const MAX_HOST_UTC_MS: u64 = 253_402_300_799_999;
 const HTTP_CADENCE_MS: u64 = 15_000;
 const REFRESH_MS: u64 = 30_000;
 const STALE_MS: u64 = 120_000;
+const CATALOG_TTL_MS: u64 = 24 * 60 * 60 * 1_000;
+const MAX_HTTP_BODY_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Clone)]
 enum PendingHttp {
@@ -46,9 +50,37 @@ impl PendingHttp {
 
 enum Action {
     HttpGet(u32, String),
-    StorageGet(u32),
-    StorageSet(u32, Vec<u8>),
+    StorageGet(u32, String),
+    StorageSet(u32, String, Vec<u8>),
+    StorageDelete(u32, String),
     Clipboard(String),
+}
+
+enum HttpTransfer {
+    Catalog(CatalogStream),
+    Buffered {
+        expected: usize,
+        received: usize,
+        next_sequence: u8,
+        bytes: Vec<u8>,
+    },
+    Discard {
+        expected: usize,
+        received: usize,
+        next_sequence: u8,
+    },
+}
+
+struct CacheLoad {
+    manifest: Manifest,
+    requests: Vec<(u32, usize)>,
+    parts: Vec<Option<Vec<u8>>>,
+}
+
+struct CacheWrite {
+    encoded: EncodedCache,
+    part_requests: Vec<u32>,
+    manifest_request: Option<u32>,
 }
 
 #[derive(Clone, Copy)]
@@ -68,7 +100,14 @@ struct WarframeMarketWidget {
     last_orders_attempt_ms: Option<u64>,
     items_queued: bool,
     pending_http: Option<PendingHttp>,
+    http_transfer: Option<HttpTransfer>,
     load_request: Option<u32>,
+    cache_manifest_request: Option<u32>,
+    cache_load: Option<CacheLoad>,
+    cache_write: Option<CacheWrite>,
+    cache_cleanup_requests: Vec<u32>,
+    committed_part_keys: Vec<String>,
+    catalog_fetched_at_ms: Option<u64>,
     store_request: Option<u32>,
     next_request_id: u32,
     preferences_changed: bool,
@@ -80,9 +119,17 @@ struct WarframeMarketWidget {
 impl Widget for WarframeMarketWidget {
     fn init(&mut self, context: &mut WidgetContext) -> Result<GuestOutput, GuestError> {
         validate_init(context)?;
-        let request_id = self.allocate_request()?;
-        self.load_request = Some(request_id);
-        self.render(context, vec![Action::StorageGet(request_id)])
+        let preferences_request = self.allocate_request()?;
+        let cache_request = self.allocate_request()?;
+        self.load_request = Some(preferences_request);
+        self.cache_manifest_request = Some(cache_request);
+        self.render(
+            context,
+            vec![
+                Action::StorageGet(preferences_request, STORAGE_KEY.into()),
+                Action::StorageGet(cache_request, MANIFEST_KEY.into()),
+            ],
+        )
     }
 
     fn handle(
@@ -102,9 +149,6 @@ impl Widget for WarframeMarketWidget {
             HostEvent::Interaction(interaction) => {
                 self.handle_interaction(interaction, context, &mut actions)?;
             }
-            HostEvent::HttpResult((request_id, status, body, _metadata)) => {
-                self.handle_http(request_id, status, &body, context, &mut actions)?;
-            }
             HostEvent::StorageResult((request_id, value)) => {
                 self.handle_storage(request_id, value.as_deref(), context, &mut actions)?;
             }
@@ -117,6 +161,90 @@ impl Widget for WarframeMarketWidget {
             }
             HostEvent::ProviderData(_) => return Err(GuestError::InvalidInput),
         }
+        self.render(context, actions)
+    }
+
+    fn http_response_start(
+        &mut self,
+        request_id: u32,
+        status: Option<u16>,
+        body_length: u32,
+        _metadata: HttpResponseMetadata,
+        _context: &mut WidgetContext,
+    ) -> Result<GuestOutput, GuestError> {
+        if self.http_transfer.is_some()
+            || self.pending_http.as_ref().map(PendingHttp::request_id) != Some(request_id)
+        {
+            return Err(GuestError::InvalidInput);
+        }
+        let expected = usize::try_from(body_length).map_err(|_| GuestError::InvalidInput)?;
+        if expected == 0 || expected > MAX_HTTP_BODY_BYTES {
+            return Err(GuestError::InvalidInput);
+        }
+        self.http_transfer = Some(if status != Some(200) {
+            HttpTransfer::Discard {
+                expected,
+                received: 0,
+                next_sequence: 0,
+            }
+        } else if matches!(self.pending_http, Some(PendingHttp::Items { .. })) {
+            HttpTransfer::Catalog(
+                CatalogStream::start(body_length).map_err(|_| GuestError::InvalidInput)?,
+            )
+        } else {
+            HttpTransfer::Buffered {
+                expected,
+                received: 0,
+                next_sequence: 0,
+                bytes: Vec::with_capacity(expected.min(64 * 1024)),
+            }
+        });
+        Ok(empty_output())
+    }
+
+    fn http_response_chunk(
+        &mut self,
+        request_id: u32,
+        sequence: u8,
+        bytes: Vec<u8>,
+        _context: &mut WidgetContext,
+    ) -> Result<GuestOutput, GuestError> {
+        if self.pending_http.as_ref().map(PendingHttp::request_id) != Some(request_id) {
+            return Err(GuestError::InvalidInput);
+        }
+        match self
+            .http_transfer
+            .as_mut()
+            .ok_or(GuestError::InvalidState)?
+        {
+            HttpTransfer::Catalog(stream) => stream
+                .push(sequence, &bytes)
+                .map_err(|_| GuestError::InvalidInput)?,
+            HttpTransfer::Buffered {
+                expected,
+                received,
+                next_sequence,
+                bytes: body,
+            } => {
+                push_http_chunk(*expected, received, next_sequence, sequence, &bytes)?;
+                body.extend_from_slice(&bytes);
+            }
+            HttpTransfer::Discard {
+                expected,
+                received,
+                next_sequence,
+            } => push_http_chunk(*expected, received, next_sequence, sequence, &bytes)?,
+        }
+        Ok(empty_output())
+    }
+
+    fn http_response_end(
+        &mut self,
+        request_id: u32,
+        context: &mut WidgetContext,
+    ) -> Result<GuestOutput, GuestError> {
+        let mut actions = Vec::new();
+        self.finish_http(request_id, context, &mut actions)?;
         self.render(context, actions)
     }
 }
@@ -172,6 +300,9 @@ impl WarframeMarketWidget {
         let Some(now_ms) = self.now_ms else {
             return Ok(());
         };
+        if !self.query.is_empty() && self.catalog_needs_refresh(now_ms) {
+            self.items_queued = true;
+        }
         if self
             .last_http_attempt_ms
             .is_some_and(|last| now_ms.saturating_sub(last) < HTTP_CADENCE_MS)
@@ -184,17 +315,19 @@ impl WarframeMarketWidget {
                 .is_none_or(|last| now_ms.saturating_sub(last) >= REFRESH_MS);
         if orders_due {
             self.dispatch_orders(now_ms, actions)?;
-        } else if self.items_queued && !self.query.is_empty() && self.items.is_empty() {
+        } else if self.items_queued
+            && !self.query.is_empty()
+            && !self.cache_load_pending()
+            && self.catalog_needs_refresh(now_ms)
+        {
             self.dispatch_items(now_ms, actions)?;
         }
         Ok(())
     }
 
-    fn handle_http(
+    fn finish_http(
         &mut self,
         request_id: u32,
-        status: Option<u16>,
-        body: &[u8],
         context: &WidgetContext,
         actions: &mut Vec<Action>,
     ) -> Result<(), GuestError> {
@@ -203,18 +336,24 @@ impl WarframeMarketWidget {
             .take()
             .filter(|pending| pending.request_id() == request_id)
             .ok_or(GuestError::InvalidInput)?;
+        let transfer = self.http_transfer.take().ok_or(GuestError::InvalidState)?;
         match pending {
             PendingHttp::Items { .. } => {
-                if status != Some(200) {
-                    self.error = Some(ErrorMessage::RequestFailed);
-                } else {
-                    match parse_items(body) {
+                match transfer {
+                    HttpTransfer::Catalog(stream) => match stream.finish() {
                         Ok(items) => {
+                            let fetched_at_ms = self.now_ms.ok_or(GuestError::InvalidState)?;
                             self.items = items;
+                            self.catalog_fetched_at_ms = Some(fetched_at_ms);
+                            self.start_cache_write(fetched_at_ms, actions)?;
                             self.error = None;
                         }
                         Err(_) => self.error = Some(ErrorMessage::Unavailable),
-                    }
+                    },
+                    HttpTransfer::Discard {
+                        expected, received, ..
+                    } if expected == received => self.error = Some(ErrorMessage::RequestFailed),
+                    _ => return Err(GuestError::InvalidInput),
                 }
                 self.request_if_due(context, actions)?;
             }
@@ -223,10 +362,13 @@ impl WarframeMarketWidget {
                     self.request_if_due(context, actions)?;
                     return Ok(());
                 }
-                if status != Some(200) {
-                    self.error = Some(ErrorMessage::RequestFailed);
-                } else {
-                    match parse_orders(body) {
+                match transfer {
+                    HttpTransfer::Buffered {
+                        expected,
+                        received,
+                        bytes,
+                        ..
+                    } if expected == received => match parse_orders(&bytes) {
                         Ok(orders) => {
                             let name = self.selected_name(&slug);
                             self.detail = Some(MarketDetail {
@@ -238,7 +380,11 @@ impl WarframeMarketWidget {
                             self.error = None;
                         }
                         Err(_) => self.error = Some(ErrorMessage::Unavailable),
-                    }
+                    },
+                    HttpTransfer::Discard {
+                        expected, received, ..
+                    } if expected == received => self.error = Some(ErrorMessage::RequestFailed),
+                    _ => return Err(GuestError::InvalidInput),
                 }
                 self.request_if_due(context, actions)?;
             }
@@ -259,6 +405,94 @@ impl WarframeMarketWidget {
                 self.preferences = value.and_then(Preferences::parse).unwrap_or_default();
             }
             self.request_if_due(context, actions)?;
+        } else if self.cache_manifest_request == Some(request_id) {
+            self.cache_manifest_request = None;
+            if let Some(manifest) = value.and_then(|bytes| Manifest::parse(bytes).ok()) {
+                let keys = manifest.part_keys();
+                let mut requests = Vec::with_capacity(keys.len());
+                for (index, key) in keys.iter().enumerate() {
+                    let request_id = self.allocate_request()?;
+                    requests.push((request_id, index));
+                    actions.push(Action::StorageGet(request_id, key.clone()));
+                }
+                self.committed_part_keys = keys;
+                self.cache_load = Some(CacheLoad {
+                    parts: (0..requests.len()).map(|_| None).collect(),
+                    manifest,
+                    requests,
+                });
+            } else {
+                self.request_if_due(context, actions)?;
+            }
+        } else if let Some((position, part_index)) = self.cache_load.as_ref().and_then(|load| {
+            load.requests
+                .iter()
+                .position(|(candidate, _)| *candidate == request_id)
+                .map(|position| (position, load.requests[position].1))
+        }) {
+            if let Some(bytes) = value {
+                let load = self.cache_load.as_mut().ok_or(GuestError::InvalidState)?;
+                load.requests.remove(position);
+                load.parts[part_index] = Some(bytes.to_vec());
+                if load.requests.is_empty() {
+                    let load = self.cache_load.take().ok_or(GuestError::InvalidState)?;
+                    if let Some(parts) = load.parts.into_iter().collect::<Option<Vec<_>>>()
+                        && let Ok(items) = decode_cache(&load.manifest, &parts)
+                    {
+                        self.items = items;
+                        self.catalog_fetched_at_ms = Some(load.manifest.fetched_at_ms);
+                    }
+                    self.request_if_due(context, actions)?;
+                }
+            } else {
+                self.cache_load = None;
+                self.request_if_due(context, actions)?;
+            }
+        } else if self
+            .cache_write
+            .as_ref()
+            .is_some_and(|write| write.part_requests.contains(&request_id))
+        {
+            let write = self.cache_write.as_mut().ok_or(GuestError::InvalidState)?;
+            let position = write
+                .part_requests
+                .iter()
+                .position(|candidate| *candidate == request_id)
+                .ok_or(GuestError::InvalidState)?;
+            write.part_requests.remove(position);
+            if write.part_requests.is_empty() {
+                let request_id = self.allocate_request()?;
+                let write = self.cache_write.as_mut().ok_or(GuestError::InvalidState)?;
+                write.manifest_request = Some(request_id);
+                actions.push(Action::StorageSet(
+                    request_id,
+                    MANIFEST_KEY.into(),
+                    write.encoded.manifest.clone(),
+                ));
+            }
+        } else if self
+            .cache_write
+            .as_ref()
+            .and_then(|write| write.manifest_request)
+            == Some(request_id)
+        {
+            let write = self.cache_write.take().ok_or(GuestError::InvalidState)?;
+            let previous = core::mem::replace(
+                &mut self.committed_part_keys,
+                write.encoded.part_keys.clone(),
+            );
+            let current = self.committed_part_keys.clone();
+            for key in previous.into_iter().filter(|key| !current.contains(key)) {
+                let request_id = self.allocate_request()?;
+                self.cache_cleanup_requests.push(request_id);
+                actions.push(Action::StorageDelete(request_id, key));
+            }
+        } else if let Some(position) = self
+            .cache_cleanup_requests
+            .iter()
+            .position(|candidate| *candidate == request_id)
+        {
+            self.cache_cleanup_requests.remove(position);
         } else if self.store_request == Some(request_id) {
             self.store_request = None;
             if self.store_queued {
@@ -283,14 +517,20 @@ impl WarframeMarketWidget {
         match interaction.kind {
             InteractionKind::Submitted(value) if interaction.element_id == "market-query" => {
                 self.query = normalize_query(&value).ok_or(GuestError::InvalidInput)?;
-                self.items_queued = !self.query.is_empty() && self.items.is_empty();
+                self.items_queued = !self.query.is_empty()
+                    && self
+                        .now_ms
+                        .is_none_or(|now_ms| self.catalog_needs_refresh(now_ms));
                 self.request_if_due(context, actions)?;
             }
             InteractionKind::ValueChanged(value) if interaction.element_id == "market-query" => {
                 self.query = normalize_query(&value).ok_or(GuestError::InvalidInput)?;
             }
             InteractionKind::Clicked if interaction.element_id == "market-search" => {
-                self.items_queued = !self.query.is_empty() && self.items.is_empty();
+                self.items_queued = !self.query.is_empty()
+                    && self
+                        .now_ms
+                        .is_none_or(|now_ms| self.catalog_needs_refresh(now_ms));
                 self.request_if_due(context, actions)?;
             }
             InteractionKind::Clicked if interaction.element_id == "market-clear" => {
@@ -382,7 +622,28 @@ impl WarframeMarketWidget {
         let bytes = self.preferences.encode().ok_or(GuestError::Unavailable)?;
         let request_id = self.allocate_request()?;
         self.store_request = Some(request_id);
-        actions.push(Action::StorageSet(request_id, bytes));
+        actions.push(Action::StorageSet(request_id, STORAGE_KEY.into(), bytes));
+        Ok(())
+    }
+
+    fn start_cache_write(
+        &mut self,
+        fetched_at_ms: u64,
+        actions: &mut Vec<Action>,
+    ) -> Result<(), GuestError> {
+        let encoded =
+            encode_cache(&self.items, fetched_at_ms).map_err(|_| GuestError::Unavailable)?;
+        let mut part_requests = Vec::with_capacity(encoded.parts.len());
+        for (key, bytes) in encoded.part_keys.iter().zip(&encoded.parts) {
+            let request_id = self.allocate_request()?;
+            part_requests.push(request_id);
+            actions.push(Action::StorageSet(request_id, key.clone(), bytes.clone()));
+        }
+        self.cache_write = Some(CacheWrite {
+            encoded,
+            part_requests,
+            manifest_request: None,
+        });
         Ok(())
     }
 
@@ -391,6 +652,17 @@ impl WarframeMarketWidget {
             .iter()
             .find(|item| item.slug == slug)
             .map_or_else(|| display_slug(slug), |item| item.name.clone())
+    }
+
+    fn cache_load_pending(&self) -> bool {
+        self.cache_manifest_request.is_some() || self.cache_load.is_some()
+    }
+
+    fn catalog_needs_refresh(&self, now_ms: u64) -> bool {
+        self.items.is_empty()
+            || self.catalog_fetched_at_ms.is_none_or(|fetched_at_ms| {
+                fetched_at_ms > now_ms || now_ms.saturating_sub(fetched_at_ms) >= CATALOG_TTL_MS
+            })
     }
 
     fn search_results(&self) -> Vec<&MarketItem> {
@@ -492,7 +764,10 @@ impl WarframeMarketWidget {
             .ok_or(GuestError::Unavailable)?;
         let mut builder = ViewBuilder::new(context.locale());
         let mut nodes = Vec::new();
-        nodes.push(builder.text(localized("Warframe Market", "Marché Warframe")?)?);
+        nodes.push(builder.text_role(
+            TextRole::Heading,
+            localized("Warframe Market", "Marché Warframe")?,
+        )?);
 
         if !warframe_active(context) {
             nodes.push(builder.text(localized(
@@ -559,11 +834,14 @@ impl WarframeMarketWidget {
                 Action::HttpGet(request_id, path) => {
                     output.http_get(request_id, HTTP_HOST, &path)?;
                 }
-                Action::StorageGet(request_id) => {
-                    output.storage_get(request_id, STORAGE_KEY)?;
+                Action::StorageGet(request_id, key) => {
+                    output.storage_get(request_id, &key)?;
                 }
-                Action::StorageSet(request_id, bytes) => {
-                    output.storage_set(request_id, STORAGE_KEY, &bytes)?;
+                Action::StorageSet(request_id, key, bytes) => {
+                    output.storage_set(request_id, &key, &bytes)?;
+                }
+                Action::StorageDelete(request_id, key) => {
+                    output.storage_delete(request_id, &key)?
                 }
                 Action::Clipboard(text) => output.clipboard_write(&text)?,
             }
@@ -641,6 +919,34 @@ impl WarframeMarketWidget {
         let remaining = deadline?.saturating_sub(now_ms).clamp(100, REFRESH_MS);
         Some(u32::try_from(remaining).unwrap_or(REFRESH_MS as u32))
     }
+}
+
+fn empty_output() -> GuestOutput {
+    GuestOutput {
+        view: None,
+        commands: Vec::new(),
+        next_wake_ms: None,
+    }
+}
+
+fn push_http_chunk(
+    expected: usize,
+    received: &mut usize,
+    next_sequence: &mut u8,
+    sequence: u8,
+    bytes: &[u8],
+) -> Result<(), GuestError> {
+    if sequence != *next_sequence || bytes.is_empty() || bytes.len() > 64 * 1024 {
+        return Err(GuestError::InvalidInput);
+    }
+    *next_sequence = next_sequence
+        .checked_add(1)
+        .ok_or(GuestError::InvalidInput)?;
+    *received = received
+        .checked_add(bytes.len())
+        .filter(|received| *received <= expected)
+        .ok_or(GuestError::InvalidInput)?;
+    Ok(())
 }
 
 fn validate_init(context: &WidgetContext) -> Result<(), GuestError> {

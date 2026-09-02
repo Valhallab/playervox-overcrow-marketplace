@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "id": "com.playervox.overcrow.warframe.market",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "kind": "bundle",
-  "apiVersion": "1",
+  "apiVersion": "2",
   "defaultLocale": "en",
   "availableLocales": ["en", "fr"],
   "games": [{"platform": "steam", "id": "230410"}],
@@ -27,7 +27,7 @@
   "files": {
     "component": {
       "path": "component.wasm",
-      "sha256": "65ce1660aa53e7f849d6409e857cc0a339939b7ceb332b642515ed010ee61e23"
+      "sha256": "734dbfe7a2b08b1f6972c90cf825da67f4efb7cf4e8ad8092ad484aa982d4049"
     },
     "locales": {
       "en": {

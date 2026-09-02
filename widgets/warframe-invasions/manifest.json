@@ -33,7 +33,7 @@
   "files": {
     "component": {
       "path": "component.wasm",
-      "sha256": "e3c744be541bd50acabcf55863c4ca5d95c63be1ea7f3d28ae70315e1bb0ea00"
+      "sha256": "b5baeb2bce040a8e548739751df3502974a1ce4852be2d9bb7f3b36e8c6d96c6"
     },
     "locales": {
       "en": {

@@ -4,6 +4,8 @@
 
 #[doc(hidden)]
 pub extern crate alloc;
+#[cfg(feature = "api-v2")]
+use alloc::vec::Vec;
 #[cfg(target_arch = "wasm32")]
 extern crate rlibc;
 
