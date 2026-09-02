@@ -1,9 +1,13 @@
 {
-  "data": [
-    {"id": "order-sell-online", "type": "sell", "platinum": 100, "visible": true, "platform": null, "user": {"ingameName": "SellerOne", "status": "online", "platform": "pc"}},
-    {"id": "order-sell-offline", "type": "sell", "platinum": 90, "visible": true, "platform": null, "user": {"ingameName": "SellerTwo", "status": "offline", "platform": "pc"}},
-    {"id": "order-buy-ingame", "type": "buy", "platinum": 80, "visible": true, "platform": null, "user": {"ingameName": "BuyerOne", "status": "ingame", "platform": "pc"}},
-    {"id": "order-buy-online", "type": "buy", "platinum": 85, "visible": true, "platform": null, "user": {"ingameName": "BuyerTwo", "status": "online", "platform": "pc"}},
-    {"id": "order-hidden", "type": "sell", "platinum": 1, "visible": false, "platform": null, "user": {"ingameName": "Hidden", "status": "ingame", "platform": "pc"}}
-  ]
+  "data": {
+    "sell": [
+      {"id": "order-sell-online", "type": "sell", "platinum": 100, "visible": true, "platform": null, "user": {"ingameName": "SellerOne", "status": "online", "platform": "pc"}},
+      {"id": "order-sell-offline", "type": "sell", "platinum": 90, "visible": true, "platform": null, "user": {"ingameName": "SellerTwo", "status": "offline", "platform": "pc"}},
+      {"id": "order-hidden", "type": "sell", "platinum": 1, "visible": false, "platform": null, "user": {"ingameName": "Hidden", "status": "ingame", "platform": "pc"}}
+    ],
+    "buy": [
+      {"id": "order-buy-ingame", "type": "buy", "platinum": 80, "visible": true, "platform": null, "user": {"ingameName": "BuyerOne", "status": "ingame", "platform": "pc"}},
+      {"id": "order-buy-online", "type": "buy", "platinum": 85, "visible": true, "platform": null, "user": {"ingameName": "BuyerTwo", "status": "online", "platform": "pc"}}
+    ]
+  }
 }

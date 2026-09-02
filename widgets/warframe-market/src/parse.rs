@@ -10,17 +10,18 @@ use serde::{
     de::{Error as _, SeqAccess, Visitor},
 };
 
-use crate::cache::MAX_ITEMS;
+use crate::cache::{MAX_ITEMS, valid_catalog_version};
 use crate::model::{
     MarketItem, MarketOrder, Presence, TradeSide, safe_public_token, safe_slug, sanitize_display,
     sanitize_trader, stable_element_id,
 };
 
 const MAX_ITEMS_BYTES: usize = 2 * 1024 * 1024;
-const MAX_ORDERS_BYTES: usize = 2 * 1024 * 1024;
+const MAX_ORDERS_BYTES: usize = 128 * 1024;
+const MAX_VERSIONS_BYTES: usize = 16 * 1024;
 const MAX_JSON_DEPTH: usize = 32;
 const MAX_JSON_STRING_BYTES: usize = 512;
-const MAX_ORDERS: usize = 4_096;
+const MAX_ORDERS_PER_SIDE: usize = 5;
 const MAX_NAME_CHARS: usize = 96;
 const MAX_PLATINUM: u64 = 900_000;
 const MAX_ITEM_OBJECT_BYTES: usize = 64 * 1024;
@@ -302,8 +303,15 @@ fn market_item(raw: RawItem) -> Result<(String, MarketItem), ParseError> {
 
 #[derive(Deserialize)]
 struct OrdersEnvelope {
+    data: TopOrders,
+}
+
+#[derive(Deserialize)]
+struct TopOrders {
     #[serde(deserialize_with = "deserialize_orders")]
-    data: Vec<RawOrder>,
+    sell: Vec<RawOrder>,
+    #[serde(deserialize_with = "deserialize_orders")]
+    buy: Vec<RawOrder>,
 }
 
 #[derive(Deserialize)]
@@ -322,6 +330,21 @@ struct RawUser {
     ingame_name: String,
     status: String,
     platform: String,
+}
+
+#[derive(Deserialize)]
+struct VersionsEnvelope {
+    data: VersionsData,
+}
+
+#[derive(Deserialize)]
+struct VersionsData {
+    collections: CollectionVersions,
+}
+
+#[derive(Deserialize)]
+struct CollectionVersions {
+    items: String,
 }
 
 macro_rules! capped_vec_deserializer {
@@ -362,14 +385,14 @@ macro_rules! capped_vec_deserializer {
     };
 }
 
-capped_vec_deserializer!(deserialize_orders, RawOrder, MAX_ORDERS);
+capped_vec_deserializer!(deserialize_orders, RawOrder, MAX_ORDERS_PER_SIDE);
 
 pub(crate) fn parse_orders(bytes: &[u8]) -> Result<Vec<MarketOrder>, ParseError> {
     validate_envelope(bytes, MAX_ORDERS_BYTES)?;
     let raw: OrdersEnvelope = serde_json::from_slice(bytes).map_err(|_| ParseError)?;
     let mut by_id = BTreeMap::new();
     let mut identities = BTreeMap::new();
-    for raw in raw.data {
+    for raw in raw.data.sell.into_iter().chain(raw.data.buy) {
         if !raw.visible {
             continue;
         }
@@ -404,6 +427,14 @@ pub(crate) fn parse_orders(bytes: &[u8]) -> Result<Vec<MarketOrder>, ParseError>
         insert_consistent(&mut by_id, raw.id, order)?;
     }
     Ok(by_id.into_values().collect())
+}
+
+pub(crate) fn parse_catalog_version(bytes: &[u8]) -> Result<String, ParseError> {
+    validate_envelope(bytes, MAX_VERSIONS_BYTES)?;
+    let envelope: VersionsEnvelope = serde_json::from_slice(bytes).map_err(|_| ParseError)?;
+    valid_catalog_version(&envelope.data.collections.items)
+        .then_some(envelope.data.collections.items)
+        .ok_or(ParseError)
 }
 
 fn insert_identity(
@@ -484,6 +515,8 @@ fn validate_envelope(bytes: &[u8], maximum_bytes: usize) -> Result<(), ParseErro
 
 #[cfg(test)]
 mod tests {
+    use core::fmt::Write as _;
+
     use super::*;
 
     const ITEMS: &[u8] = include_bytes!("../tests/fixtures/items.json");
@@ -515,5 +548,45 @@ mod tests {
         let mut stream = CatalogStream::start(conflicting.len() as u32).expect("start stream");
         stream.push(0, conflicting).expect("bounded transport");
         assert_eq!(stream.finish(), Err(ParseError));
+    }
+
+    #[test]
+    fn production_sized_catalog_streams_within_the_public_body_bound() {
+        let mut body = String::from(r#"{"data":["#);
+        let padding = "x".repeat(300);
+        for index in 0..3_840 {
+            if index != 0 {
+                body.push(',');
+            }
+            write!(
+                body,
+                r#"{{"slug":"item_{index:04}","i18n":{{"en":{{"name":"Item {index:04}"}}}},"ignored":"{padding}"}}"#
+            )
+            .expect("write generated catalog item");
+        }
+        body.push_str("]}");
+        assert!(body.len() > 1024 * 1024);
+        assert!(body.len() < MAX_ITEMS_BYTES);
+
+        let mut stream = CatalogStream::start(body.len() as u32).expect("start large stream");
+        for (sequence, chunk) in body.as_bytes().chunks(64 * 1024).enumerate() {
+            stream
+                .push(
+                    u8::try_from(sequence).expect("bounded chunk sequence"),
+                    chunk,
+                )
+                .expect("stream generated catalog");
+        }
+        let items = stream.finish().expect("finish generated catalog");
+
+        assert_eq!(items.len(), 3_840);
+        assert_eq!(
+            items.first().map(|item| item.slug.as_str()),
+            Some("item_0000")
+        );
+        assert_eq!(
+            items.last().map(|item| item.name.as_str()),
+            Some("Item 3839")
+        );
     }
 }

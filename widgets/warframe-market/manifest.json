@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "com.playervox.overcrow.warframe.market",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "kind": "bundle",
   "apiVersion": "2",
   "defaultLocale": "en",
@@ -27,16 +27,16 @@
   "files": {
     "component": {
       "path": "component.wasm",
-      "sha256": "ad6357d3c0243e4f401d51590772f815a049432f32c75eb9ec156c219d239480"
+      "sha256": "0cccb040a554ceccd1c835e81d1fc97dcf5fd31ec314658e830f80db03400e47"
     },
     "locales": {
       "en": {
         "path": "locales/en.json",
-        "sha256": "f333c5451ea17e99f76d61000536734d398f13b736180c5ccc7e66ced8f1f1f8"
+        "sha256": "27f4ac153b6adefac0d3c2c24e406269caad3d32282af5f4b0b9142d530e9e78"
       },
       "fr": {
         "path": "locales/fr.json",
-        "sha256": "9e1385a595aff108cb9254fd0a005c87408f6cb2059fd5053703e48c0aac8873"
+        "sha256": "e7386c57a53954090b039644eea891bf8b06cb80acf7ce1a9910c6028e39653e"
       }
     },
     "assets": {}

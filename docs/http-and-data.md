@@ -12,10 +12,13 @@ limit but delivers a start event, at most 32 chunks of at most 64 KiB, and an
 end event so a component can parse incrementally. Warframe Market uses this
 path for the item catalog: it streams the initial response into a compact,
 content-checked index split across bounded private-storage entries. A fresh
-index is reused for 24 hours, stale data remains searchable while one refresh
-runs, and the manifest is written last so an interrupted refresh cannot replace
-the previous cache. Per-item order responses remain separately bounded and are
-never stored in that catalog cache.
+index is reused for 24 hours. When it expires, the widget first checks the small
+official `/v2/versions` collection marker and downloads `/v2/items` again only
+when that marker changed; stale data remains searchable during the check. The
+manifest is written last so an interrupted refresh cannot replace the previous
+cache. Per-item market data uses `/v2/orders/item/{slug}/top`, admits at most
+five sell and five buy orders inside a separate 128 KiB response bound, and is
+never stored in the catalog cache.
 
 Storage is a bounded package-scoped key/value service. Use `storage-get`,
 `storage-set`, or `storage-delete` only when storage was declared and granted;

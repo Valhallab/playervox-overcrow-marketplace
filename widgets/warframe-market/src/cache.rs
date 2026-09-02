@@ -5,8 +5,11 @@ use sha2::{Digest, Sha256};
 use crate::model::{MarketItem, safe_slug, sanitize_display, stable_element_id};
 
 const INDEX_MAGIC: &[u8; 4] = b"WFI1";
-const MANIFEST_MAGIC: &[u8; 4] = b"WFC1";
-const MANIFEST_BYTES: usize = 4 + 8 + 4 + 1 + 32;
+const LEGACY_MANIFEST_MAGIC: &[u8; 4] = b"WFC1";
+const MANIFEST_MAGIC: &[u8; 4] = b"WFC2";
+const LEGACY_MANIFEST_BYTES: usize = 4 + 8 + 4 + 1 + 32;
+const MANIFEST_HEADER_BYTES: usize = LEGACY_MANIFEST_BYTES + 1;
+const MAX_VERSION_BYTES: usize = 128;
 pub(crate) const MANIFEST_KEY: &str = "catalog-current";
 pub(crate) const MAX_ITEMS: usize = 8_192;
 pub(crate) const MAX_PART_BYTES: usize = 60 * 1024;
@@ -28,6 +31,7 @@ pub(crate) struct EncodedCache {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Manifest {
     pub(crate) fetched_at_ms: u64,
+    pub(crate) catalog_version: Option<String>,
     total_bytes: usize,
     part_count: usize,
     digest: [u8; 32],
@@ -35,9 +39,29 @@ pub(crate) struct Manifest {
 
 impl Manifest {
     pub(crate) fn parse(bytes: &[u8]) -> Result<Self, CacheError> {
-        if bytes.len() != MANIFEST_BYTES || &bytes[..4] != MANIFEST_MAGIC {
-            return Err(CacheError);
-        }
+        let catalog_version =
+            if bytes.len() == LEGACY_MANIFEST_BYTES && &bytes[..4] == LEGACY_MANIFEST_MAGIC {
+                None
+            } else if bytes.len() >= MANIFEST_HEADER_BYTES && &bytes[..4] == MANIFEST_MAGIC {
+                let version_bytes = usize::from(bytes[LEGACY_MANIFEST_BYTES]);
+                if version_bytes > MAX_VERSION_BYTES
+                    || bytes.len() != MANIFEST_HEADER_BYTES + version_bytes
+                {
+                    return Err(CacheError);
+                }
+                if version_bytes == 0 {
+                    None
+                } else {
+                    let version = core::str::from_utf8(&bytes[MANIFEST_HEADER_BYTES..])
+                        .map_err(|_| CacheError)?;
+                    if !valid_catalog_version(version) {
+                        return Err(CacheError);
+                    }
+                    Some(version.to_owned())
+                }
+            } else {
+                return Err(CacheError);
+            };
         let fetched_at_ms = read_u64(&bytes[4..12])?;
         let total_bytes = usize::try_from(read_u32(&bytes[12..16])?).map_err(|_| CacheError)?;
         let part_count = usize::from(bytes[16]);
@@ -49,9 +73,10 @@ impl Manifest {
             return Err(CacheError);
         }
         let mut digest = [0_u8; 32];
-        digest.copy_from_slice(&bytes[17..]);
+        digest.copy_from_slice(&bytes[17..LEGACY_MANIFEST_BYTES]);
         Ok(Self {
             fetched_at_ms,
+            catalog_version,
             total_bytes,
             part_count,
             digest,
@@ -66,7 +91,11 @@ impl Manifest {
     }
 }
 
-pub(crate) fn encode(items: &[MarketItem], fetched_at_ms: u64) -> Result<EncodedCache, CacheError> {
+pub(crate) fn encode(
+    items: &[MarketItem],
+    fetched_at_ms: u64,
+    catalog_version: Option<&str>,
+) -> Result<EncodedCache, CacheError> {
     if items.is_empty() || items.len() > MAX_ITEMS {
         return Err(CacheError);
     }
@@ -107,18 +136,34 @@ pub(crate) fn encode(items: &[MarketItem], fetched_at_ms: u64) -> Result<Encoded
         .collect::<Vec<_>>();
     let part_count = u8::try_from(parts.len()).map_err(|_| CacheError)?;
     let total_bytes = u32::try_from(bytes.len()).map_err(|_| CacheError)?;
-    let mut manifest = Vec::with_capacity(MANIFEST_BYTES);
+    if catalog_version.is_some_and(|version| !valid_catalog_version(version)) {
+        return Err(CacheError);
+    }
+    let version_bytes = catalog_version.map_or(0, str::len);
+    let mut manifest = Vec::with_capacity(MANIFEST_HEADER_BYTES + version_bytes);
     manifest.extend_from_slice(MANIFEST_MAGIC);
     manifest.extend_from_slice(&fetched_at_ms.to_le_bytes());
     manifest.extend_from_slice(&total_bytes.to_le_bytes());
     manifest.push(part_count);
     manifest.extend_from_slice(&digest);
+    manifest.push(u8::try_from(version_bytes).map_err(|_| CacheError)?);
+    if let Some(version) = catalog_version {
+        manifest.extend_from_slice(version.as_bytes());
+    }
     let parsed = Manifest::parse(&manifest)?;
     Ok(EncodedCache {
         part_keys: parsed.part_keys(),
         manifest,
         parts,
     })
+}
+
+pub(crate) fn valid_catalog_version(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_VERSION_BYTES
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'=' | b'_' | b'-')
+        })
 }
 
 pub(crate) fn decode(
@@ -241,20 +286,45 @@ mod tests {
     #[test]
     fn compact_index_round_trips_across_storage_parts() {
         let items = (0..3_840).map(item).collect::<Vec<_>>();
-        let cache = encode(&items, 1_777_000_000_000).expect("encode current-size catalog");
+        let cache = encode(&items, 1_777_000_000_000, Some("catalog-v1"))
+            .expect("encode current-size catalog");
         assert!(cache.parts.len() >= 2);
         assert!(cache.parts.iter().all(|part| part.len() <= MAX_PART_BYTES));
 
         let manifest = Manifest::parse(&cache.manifest).expect("parse manifest");
         assert_eq!(manifest.fetched_at_ms, 1_777_000_000_000);
+        assert_eq!(manifest.catalog_version.as_deref(), Some("catalog-v1"));
         assert_eq!(manifest.part_keys(), cache.part_keys);
+        assert_eq!(decode(&manifest, &cache.parts), Ok(items));
+    }
+
+    #[test]
+    fn legacy_cache_remains_readable_without_a_catalog_version() {
+        let items = (0..32).map(item).collect::<Vec<_>>();
+        let cache =
+            encode(&items, 1_777_000_000_000, Some("catalog-v1")).expect("encode current cache");
+        let mut legacy_manifest = cache.manifest[..LEGACY_MANIFEST_BYTES].to_vec();
+        legacy_manifest[..4].copy_from_slice(LEGACY_MANIFEST_MAGIC);
+
+        let manifest = Manifest::parse(&legacy_manifest).expect("parse legacy manifest");
+        assert_eq!(manifest.catalog_version, None);
+        assert_eq!(decode(&manifest, &cache.parts), Ok(items));
+    }
+
+    #[test]
+    fn current_cache_round_trips_without_a_catalog_version() {
+        let items = (0..32).map(item).collect::<Vec<_>>();
+        let cache = encode(&items, 1_777_000_000_000, None).expect("encode unversioned cache");
+
+        let manifest = Manifest::parse(&cache.manifest).expect("parse current manifest");
+        assert_eq!(manifest.catalog_version, None);
         assert_eq!(decode(&manifest, &cache.parts), Ok(items));
     }
 
     #[test]
     fn missing_or_modified_parts_are_rejected() {
         let items = (0..3_840).map(item).collect::<Vec<_>>();
-        let cache = encode(&items, 42).expect("encode catalog");
+        let cache = encode(&items, 42, Some("catalog-v1")).expect("encode catalog");
         let manifest = Manifest::parse(&cache.manifest).expect("parse manifest");
 
         assert_eq!(decode(&manifest, &cache.parts[..1]), Err(CacheError));
@@ -266,13 +336,13 @@ mod tests {
     #[test]
     fn cache_bounds_item_count_and_encoded_size() {
         let too_many = (0..=MAX_ITEMS).map(item).collect::<Vec<_>>();
-        assert_eq!(encode(&too_many, 42), Err(CacheError));
+        assert_eq!(encode(&too_many, 42, Some("catalog-v1")), Err(CacheError));
 
         let invalid = vec![MarketItem {
             element_id: "item-invalid".into(),
             name: "x".repeat(MAX_NAME_BYTES + 1),
             slug: "valid_slug".into(),
         }];
-        assert_eq!(encode(&invalid, 42), Err(CacheError));
+        assert_eq!(encode(&invalid, 42, Some("catalog-v1")), Err(CacheError));
     }
 }

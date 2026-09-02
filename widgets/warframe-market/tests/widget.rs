@@ -15,6 +15,10 @@ use super::{
 const ITEMS: &[u8] = include_bytes!("fixtures/items.json");
 const ORDERS: &[u8] = include_bytes!("fixtures/orders.json");
 const HOSTILE: &[u8] = include_bytes!("fixtures/hostile.json");
+const VERSIONS: &[u8] =
+    br#"{"apiVersion":"0.25.0","data":{"collections":{"items":"catalog-v1"}},"error":null}"#;
+const VERSIONS_CHANGED: &[u8] =
+    br#"{"apiVersion":"0.25.0","data":{"collections":{"items":"catalog-v2"}},"error":null}"#;
 const NOW_MS: u64 = 1_777_000_000_000;
 
 #[test]
@@ -23,10 +27,12 @@ fn active_market_uses_structured_bounded_layout() {
     let mut harness = WidgetHarness::from_init(&mut widget, init("en")).expect("market init");
     bootstrap(&mut harness);
     submit_query(&mut harness, "arcane");
-    let request_id = http_get(harness.output()).expect("catalog request").0;
+    let request_id = catalog_request_after_version(&mut harness);
     deliver_http(&mut harness, request_id, Some(200), ITEMS).expect("catalog response");
 
-    let nodes = &harness.output().view.as_ref().expect("market view").nodes;
+    let view = harness.output().view.as_ref().expect("market view");
+    let nodes = &view.nodes;
+    assert!(matches!(nodes[view.root as usize], ViewNode::Scroll(_)));
     assert!(
         nodes
             .iter()
@@ -50,6 +56,12 @@ fn first_search_streams_catalog_and_publishes_cache_manifest_last() {
     bootstrap(&mut harness);
 
     submit_query(&mut harness, "arcane");
+    let versions_request = http_get(harness.output()).expect("versions request").0;
+    assert_eq!(
+        http_get(harness.output()).map(|value| value.2),
+        Some("/v2/versions")
+    );
+    deliver_http(&mut harness, versions_request, Some(200), VERSIONS).expect("catalog version");
     let request_id = http_get(harness.output()).expect("catalog request").0;
     assert_eq!(
         http_get(harness.output()).map(|value| value.2),
@@ -77,9 +89,33 @@ fn first_search_streams_catalog_and_publishes_cache_manifest_last() {
 }
 
 #[test]
+fn unavailable_version_marker_falls_back_to_the_bounded_catalog() {
+    let mut widget = WarframeMarketWidget::default();
+    let mut harness = WidgetHarness::from_init(&mut widget, init("en")).expect("market init");
+    bootstrap(&mut harness);
+
+    submit_query(&mut harness, "arcane");
+    let request_id = http_get(harness.output()).expect("versions request").0;
+    deliver_http(&mut harness, request_id, None, b"unavailable").expect("failed version check");
+
+    let request_id = http_get(harness.output())
+        .expect("fallback catalog request")
+        .0;
+    assert_eq!(
+        http_get(harness.output()).map(|value| value.2),
+        Some(ITEMS_PATH)
+    );
+    deliver_http(&mut harness, request_id, Some(200), ITEMS).expect("fallback catalog response");
+
+    assert!(button_id(harness.output(), "Arcane Energize").is_some());
+    assert!(!storage_sets(harness.output()).is_empty());
+}
+
+#[test]
 fn fresh_compact_cache_avoids_the_catalog_download() {
     let items = fixture_items();
-    let encoded = encode_cache(&items, NOW_MS - 1_000).expect("encode fixture cache");
+    let encoded =
+        encode_cache(&items, NOW_MS - 1_000, Some("catalog-v1")).expect("encode fixture cache");
     let mut widget = WarframeMarketWidget::default();
     let mut harness = WidgetHarness::from_init(&mut widget, init("en")).expect("market init");
     harness
@@ -115,7 +151,8 @@ fn fresh_compact_cache_avoids_the_catalog_download() {
 #[test]
 fn expired_cache_refreshes_once_but_keeps_search_results_available() {
     let items = fixture_items();
-    let encoded = encode_cache(&items, NOW_MS - CATALOG_TTL_MS).expect("encode stale cache");
+    let encoded = encode_cache(&items, NOW_MS - CATALOG_TTL_MS, Some("catalog-v1"))
+        .expect("encode stale cache");
     let mut widget = WarframeMarketWidget::default();
     let mut harness = WidgetHarness::from_init(&mut widget, init("en")).expect("market init");
     harness
@@ -139,11 +176,27 @@ fn expired_cache_refreshes_once_but_keeps_search_results_available() {
     harness.send(HostEvent::Tick(NOW_MS)).expect("host time");
 
     submit_query(&mut harness, "arcane");
+    let versions_request = http_get(harness.output()).expect("versions request").0;
+    assert_eq!(
+        http_get(harness.output()).map(|value| value.2),
+        Some("/v2/versions")
+    );
+    assert!(button_id(harness.output(), "Arcane Energize").is_some());
+    deliver_http(&mut harness, versions_request, Some(200), VERSIONS)
+        .expect("matching catalog version");
+    assert!(http_get(harness.output()).is_none());
+    assert!(button_id(harness.output(), "Arcane Energize").is_some());
+
+    harness
+        .send(HostEvent::Tick(NOW_MS + CATALOG_TTL_MS))
+        .expect("next catalog check");
+    let versions_request = http_get(harness.output()).expect("next versions request").0;
+    deliver_http(&mut harness, versions_request, Some(200), VERSIONS_CHANGED)
+        .expect("changed catalog version");
     assert_eq!(
         http_get(harness.output()).map(|value| value.2),
         Some(ITEMS_PATH)
     );
-    assert!(button_id(harness.output(), "Arcane Energize").is_some());
 }
 
 #[test]
@@ -152,7 +205,7 @@ fn item_orders_and_clipboard_use_stable_public_identity() {
     let mut harness = WidgetHarness::from_init(&mut widget, init("en")).expect("market init");
     bootstrap(&mut harness);
     submit_query(&mut harness, "arcane");
-    let request_id = http_get(harness.output()).expect("catalog request").0;
+    let request_id = catalog_request_after_version(&mut harness);
     deliver_http(&mut harness, request_id, Some(200), ITEMS).expect("catalog response");
     let item_id = button_id(harness.output(), "Arcane Energize").expect("search result");
 
@@ -163,7 +216,10 @@ fn item_orders_and_clipboard_use_stable_public_identity() {
         .send(HostEvent::Tick(NOW_MS + 15_000))
         .expect("HTTP cadence");
     let (orders_request, host, path) = http_get(harness.output()).expect("orders request");
-    assert_eq!((host, path), (HTTP_HOST, "/v2/orders/item/arcane_energize"));
+    assert_eq!(
+        (host, path),
+        (HTTP_HOST, "/v2/orders/item/arcane_energize/top")
+    );
     deliver_http(&mut harness, orders_request, Some(200), ORDERS).expect("orders response");
     assert!(texts(harness.output()).contains(&"SellerOne · online · 100p"));
     assert!(
@@ -188,7 +244,7 @@ fn malformed_and_failed_responses_fail_closed_without_retaining_payloads() {
     let mut harness = WidgetHarness::from_init(&mut widget, init("en")).expect("market init");
     bootstrap(&mut harness);
     submit_query(&mut harness, "arcane");
-    let request_id = http_get(harness.output()).expect("catalog request").0;
+    let request_id = catalog_request_after_version(&mut harness);
     deliver_http(&mut harness, request_id, Some(200), HOSTILE).expect("malformed response drained");
     assert!(texts(harness.output()).contains(&"Market data is unavailable."));
 
@@ -223,6 +279,23 @@ fn passive_mode_blocks_interaction_and_network_wakes() {
     ));
     assert!(http_get(harness.output()).is_none());
     assert!(harness.output().next_wake_ms.is_none());
+}
+
+#[test]
+fn focus_and_hover_edges_do_not_republish_an_identical_view() {
+    for kind in [
+        InteractionKind::Focused(true),
+        InteractionKind::Hovered(true),
+    ] {
+        let mut widget = WarframeMarketWidget::default();
+        let mut harness = WidgetHarness::from_init(&mut widget, init("en")).expect("market init");
+        bootstrap(&mut harness);
+        harness
+            .send(interaction("market-query", kind))
+            .expect("known presentation edge");
+        assert!(harness.output().view.is_none());
+        assert!(harness.output().commands.is_empty());
+    }
 }
 
 #[test]
@@ -369,6 +442,15 @@ fn submit_query(harness: &mut WidgetHarness<'_, WarframeMarketWidget>, query: &s
             InteractionKind::Submitted(query.to_owned()),
         ))
         .expect("submit query");
+}
+
+fn catalog_request_after_version(harness: &mut WidgetHarness<'_, WarframeMarketWidget>) -> u32 {
+    let (request_id, host, path) = http_get(harness.output()).expect("catalog version request");
+    assert_eq!((host, path), (HTTP_HOST, "/v2/versions"));
+    deliver_http(harness, request_id, Some(200), VERSIONS).expect("catalog version response");
+    let (request_id, host, path) = http_get(harness.output()).expect("catalog request");
+    assert_eq!((host, path), (HTTP_HOST, ITEMS_PATH));
+    request_id
 }
 
 fn deliver_http(
