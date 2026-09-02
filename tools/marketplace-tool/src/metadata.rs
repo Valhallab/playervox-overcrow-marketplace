@@ -22,7 +22,8 @@ const MAX_MANIFEST_GAMES: usize = 32;
 const MAX_MANIFEST_DEPENDENCIES: usize = 32;
 const MAX_HTTP_HOSTS: usize = 16;
 const MAX_LISTING_LOCALIZATIONS: usize = 32;
-const EXPECTED_WIT: &str = include_str!("../../../wit/widget-v1.wit");
+const EXPECTED_WIT_V1: &str = include_str!("../../../wit/widget-v1.wit");
+const EXPECTED_WIT_V2: &str = include_str!("../../../wit/widget-v2.wit");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PolicyCode {
@@ -53,7 +54,7 @@ impl fmt::Display for PolicyError {
             PolicyCode::Targets => "invalid marketplace targets",
             PolicyCode::Component => "invalid WebAssembly component",
             PolicyCode::ForbiddenImport => "component imports are forbidden",
-            PolicyCode::ForbiddenExport => "component exports do not match widget-v1",
+            PolicyCode::ForbiddenExport => "component exports do not match its declared widget API",
         })
     }
 }
@@ -84,6 +85,10 @@ impl Manifest {
 
     pub(crate) fn version(&self) -> &str {
         &self.version
+    }
+
+    pub(crate) fn api_version(&self) -> &str {
+        &self.api_version
     }
 
     pub(crate) const fn kind(&self) -> PackageKind {
@@ -480,6 +485,14 @@ pub(crate) fn bind_manifest_digests(
 }
 
 pub(crate) fn inspect_component(bytes: &[u8]) -> Result<(), PolicyCode> {
+    inspect_component_for_versions(bytes, &["1", "2"])
+}
+
+pub(crate) fn inspect_component_for_api(bytes: &[u8], api_version: &str) -> Result<(), PolicyCode> {
+    inspect_component_for_versions(bytes, &[api_version])
+}
+
+fn inspect_component_for_versions(bytes: &[u8], api_versions: &[&str]) -> Result<(), PolicyCode> {
     if bytes.len() > MAX_COMPONENT_BYTES {
         return Err(PolicyCode::Component);
     }
@@ -511,23 +524,55 @@ pub(crate) fn inspect_component(bytes: &[u8]) -> Result<(), PolicyCode> {
         _ => return Err(PolicyCode::Component),
     };
 
-    let mut expected_resolve = wit_parser::Resolve::default();
-    let expected_package = expected_resolve
-        .push_str("widget-v1.wit", EXPECTED_WIT)
-        .map_err(|_| PolicyCode::Component)?;
     let actual_package = actual_resolve.worlds[actual_world]
         .package
         .ok_or(PolicyCode::Component)?;
+    let actual_world_name = actual_resolve.worlds[actual_world].name.as_str();
     let actual = print_wit(&actual_resolve, actual_package)?;
-    let expected = print_wit(&expected_resolve, expected_package)?;
-    if world_body(&actual) != world_body(&expected) {
-        return Err(PolicyCode::ForbiddenExport);
+    if api_versions
+        .iter()
+        .any(|api_version| !matches!(*api_version, "1" | "2"))
+    {
+        return Err(PolicyCode::Manifest);
     }
-    Ok(())
+    for api_version in api_versions {
+        let (file_name, expected_world_name, expected_source) = match *api_version {
+            "1" => ("widget-v1.wit", "widget-v1", EXPECTED_WIT_V1),
+            "2" => ("widget-v2.wit", "widget-v2", EXPECTED_WIT_V2),
+            _ => return Err(PolicyCode::Manifest),
+        };
+        let mut expected_resolve = wit_parser::Resolve::default();
+        let expected_package = expected_resolve
+            .push_str(file_name, expected_source)
+            .map_err(|_| PolicyCode::Component)?;
+        let expected = print_wit(&expected_resolve, expected_package)?;
+        if world_body(&actual, actual_world_name) == world_body(&expected, expected_world_name) {
+            return Ok(());
+        }
+    }
+    Err(PolicyCode::ForbiddenExport)
 }
 
-fn world_body(document: &str) -> Option<&str> {
-    document.split_once(" {\n").map(|(_, body)| body)
+fn world_body<'a>(document: &'a str, world_name: &str) -> Option<&'a str> {
+    let marker = format!("world {world_name} {{");
+    let body_start = document.find(&marker)?.checked_add(marker.len())?;
+    let bytes = document.as_bytes();
+    let mut depth = 1_usize;
+    let mut cursor = body_start;
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'{' => depth = depth.checked_add(1)?,
+            b'}' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return document.get(body_start..cursor);
+                }
+            }
+            _ => {}
+        }
+        cursor += 1;
+    }
+    None
 }
 
 fn print_wit(
@@ -544,7 +589,7 @@ fn print_wit(
 fn validate_manifest(mut manifest: Manifest) -> Result<Manifest, PolicyError> {
     if manifest.schema_version != 1
         || !valid_extension_id(&manifest.id)
-        || manifest.api_version != "1"
+        || !matches!(manifest.api_version.as_str(), "1" | "2")
     {
         return Err(PolicyError::new(PolicyCode::Manifest));
     }

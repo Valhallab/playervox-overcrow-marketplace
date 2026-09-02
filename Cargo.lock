@@ -861,11 +861,12 @@ dependencies = [
 
 [[package]]
 name = "warframe-market-widget"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "overcrow-widget-sdk",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

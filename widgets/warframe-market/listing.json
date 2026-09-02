@@ -6,12 +6,12 @@
     {
       "locale": "en",
       "name": "Warframe Market",
-      "description": "Searches public PC item listings, filters bounded buy and sell orders, and copies an explicit trade message on request."
+      "description": "Searches public PC item listings from a compact 24-hour cache, filters bounded buy and sell orders, and copies an explicit trade message on request."
     },
     {
       "locale": "fr",
       "name": "Marché Warframe",
-      "description": "Recherche les annonces publiques PC, filtre un nombre limité d’offres d’achat et de vente, et copie un message d’échange uniquement sur demande."
+      "description": "Recherche les annonces publiques PC depuis un cache compact de 24 heures, filtre un nombre limité d’offres d’achat et de vente, et copie un message d’échange uniquement sur demande."
     }
   ]
 }

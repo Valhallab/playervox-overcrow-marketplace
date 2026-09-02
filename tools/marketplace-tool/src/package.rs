@@ -15,7 +15,9 @@ use rustix::{
     },
 };
 
-use crate::metadata::{TargetSpec, ValidatedMetadata, inspect_component, validate_metadata};
+use crate::metadata::{
+    TargetSpec, ValidatedMetadata, inspect_component_for_api, validate_metadata,
+};
 
 const MAX_PACKAGE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ENTRIES: usize = 64;
@@ -473,7 +475,8 @@ pub(crate) fn build_package(
         metadata.manifest().files().component(),
         4 * 1024 * 1024,
     )?;
-    inspect_component(&component).map_err(|_| PackageCode::Component)?;
+    inspect_component_for_api(&component, metadata.manifest().api_version())
+        .map_err(|_| PackageCode::Component)?;
     files.insert("component.wasm".to_owned(), component);
 
     for file in metadata.manifest().files().locales().values() {
