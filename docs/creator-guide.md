@@ -1,8 +1,12 @@
 # Rust widget creator guide
 
-The reference SDK builds Rust 2024 components for the exact vendored
-`overcrow:extension/widget-v1@1.0.0` world. It targets Rust 1.98 and
-`wasm32-wasip2`; the component has no WIT imports and receives no WASI API.
+The reference SDK builds Rust 2024 components for one exact vendored widget
+world. API v1 remains the default. API v2 is an additive opt-in for streamed
+HTTP responses, explicit row/grid layouts, surfaces, scroll regions, and text
+roles. Select exactly one SDK feature and declare the matching `apiVersion` in
+the manifest; admission rejects any other feature set and component inspection
+rejects an ABI mismatch. Both versions target Rust 1.98 and `wasm32-wasip2`;
+components have no WIT imports and receive no WASI API.
 
 Start from [`examples/hello-widget`](../examples/hello-widget). Implement
 `Widget` on a `Default` state type, build native view nodes with `ViewBuilder`,
@@ -68,8 +72,9 @@ locale list; see the [localization policy](localization.md).
 
 The Control Center can install a local package only after an explicit
 unverified-development confirmation. Local packages receive the same manifest,
-archive, and sandbox validation as signed packages and remain disabled until
-the user enables them. The website never installs packages.
+archive, and sandbox validation as signed packages. Installed packages appear
+in the overlay's Widget library; activation and visibility are managed there,
+not in the Control Center. The website never installs packages.
 
 ## Submit for review
 
@@ -88,6 +93,18 @@ input invalidate its evidence.
 The Rust SDK is the current authoring path. A later visual builder will target
 the same manifest, component, capability, and review contracts rather than a
 separate trust path.
+
+For the shortest installed-app loop, enter one package directory and run:
+
+```sh
+overcrow-widget dev --watch .
+```
+
+The command compiles only that package, reuses Cargo's target cache, validates
+the archive in the installed runner, and atomically replaces the same local
+widget without losing its geometry, settings, storage, or active state. A
+failed iteration leaves the previous generation running, and a capability
+increase requires restarting the command for explicit confirmation.
 
 For local catalog development, build all components, run
 `scripts/build-local.sh`, verify `public/marketplace/v1/catalog.json`, then

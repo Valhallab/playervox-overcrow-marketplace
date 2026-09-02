@@ -67,7 +67,7 @@ pub(crate) fn affected_sources(
         sources.insert(source.to_owned());
     }
     for root in &roots {
-        let submission = repository.join(&root);
+        let submission = repository.join(root);
         match fs::symlink_metadata(&submission) {
             Ok(metadata) => {
                 if !metadata.is_dir()

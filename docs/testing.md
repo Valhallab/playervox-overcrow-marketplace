@@ -24,6 +24,12 @@ the supported lifecycle exports and forbidden imports directly on the built
 WASM. There is no ignored environment-dependent unit test that repeats this
 inspection.
 
+API v1 and API v2 packages must be tested and built in separate Cargo
+invocations because Cargo unifies dependency features within one invocation.
+The reviewed build plan records the declared ABI and automatically forms at
+most two batches. This still compiles every affected package exactly once; it
+does not create a second validation pass.
+
 Widget tests should exercise observable state transitions, malformed and
 bounded inputs, capability denial, locale fallback, and provider failure. Do
 not duplicate parser assertions, assert implementation text, or repeat the

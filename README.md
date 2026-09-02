@@ -27,8 +27,10 @@ directories. Serve `/public` through a local loopback HTTP server to browse the
 catalog. The static site uses English by default, offers French application
 copy, loads no remote resources, and is labelled **Development - unverified**.
 It displays catalog information only; installation happens in the Control
-Center. A local unverified `.ocpkg` installs disabled and remains disabled until
-the user enables it.
+Center. Installed packages stay visible in the Available list with an Installed
+marker and appear in the overlay's Widget library, where activation and
+visibility are managed. A local unverified `.ocpkg` always requires explicit
+confirmation.
 
 Reviewed community submissions are accepted under
 [`community/<publisher>/<widget-id>/`](community/README.md) through pull

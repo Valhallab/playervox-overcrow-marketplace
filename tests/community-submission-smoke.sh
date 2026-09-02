@@ -91,7 +91,7 @@ accepted_plan="$scratch/accepted-plan.tsv"
 community_plan "$fixture" "$changed_paths" >"$accepted_plan"
 test "$(/usr/bin/wc -l <"$accepted_plan")" -eq 1
 /usr/bin/grep -F -x \
-    'hello-widget	hello_widget	community/example/hello-widget' \
+    'hello-widget	hello_widget	community/example/hello-widget	1' \
     "$accepted_plan" >/dev/null
 
 write_path 'sdk/rust/overcrow-widget-sdk/src/lib.rs' "$changed_paths"
@@ -230,7 +230,7 @@ fi
 test "$(/usr/bin/wc -l <"$deleted_plan")" -eq 1
 tab=$(printf '\t')
 /usr/bin/grep -F -x \
-    "warframe-worldstate-provider${tab}warframe_worldstate_provider${tab}providers/warframe-worldstate" \
+    "warframe-worldstate-provider${tab}warframe_worldstate_provider${tab}providers/warframe-worldstate${tab}1" \
     "$deleted_plan" >/dev/null
 /usr/bin/cp -- "$accepted_targets" "$deleted_fixture/marketplace/targets.json"
 expect_plan_reject "$deleted_fixture"

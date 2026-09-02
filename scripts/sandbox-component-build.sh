@@ -37,7 +37,8 @@ if test ! -f "$build_plan" || test -L "$build_plan" \
 fi
 tab=$(printf '\t')
 package_count=0
-while IFS="$tab" read -r cargo_package component_artifact source_directory; do
+while IFS="$tab" read -r cargo_package component_artifact source_directory \
+        api_version extra; do
     case "$cargo_package" in
         '' | *[!a-z0-9-]* | -* )
             printf '%s\n' 'error: unsafe validated build plan' >&2
@@ -57,6 +58,13 @@ while IFS="$tab" read -r cargo_package component_artifact source_directory; do
     fi
     case "$source_directory" in
         '' | /* | */ | *[!A-Za-z0-9._/-]* | *//* | */../* | ../* | */.. | */./* | ./* | */.)
+            printf '%s\n' 'error: unsafe validated build plan' >&2
+            exit 1
+            ;;
+    esac
+    case "$api_version:$extra" in
+        1: | 2:) ;;
+        *)
             printf '%s\n' 'error: unsafe validated build plan' >&2
             exit 1
             ;;
@@ -217,14 +225,17 @@ run_sandboxed_build() {
                     RUSTFLAGS="--remap-path-prefix=/source=/usr/src/overcrow" \
                     /bin/sh -c '\''
                         tab=$(printf "\t")
-                        set --
-                        while IFS="$tab" read -r package artifact source; do
-                            set -- "$@" -p "$package"
-                        done </build/compile-plan.tsv
-                        /rust-toolchain/bin/cargo build \
-                            --manifest-path /source/Cargo.toml \
-                            --release --target wasm32-wasip2 \
-                            --locked --offline --lib "$@"
+                        for api_version in 1 2; do
+                            set --
+                            while IFS="$tab" read -r package artifact source package_api; do
+                                test "$package_api" = "$api_version" \
+                                    && set -- "$@" -p "$package"
+                            done </build/compile-plan.tsv
+                            test "$#" -eq 0 || /rust-toolchain/bin/cargo build \
+                                --manifest-path /source/Cargo.toml \
+                                --release --target wasm32-wasip2 \
+                                --locked --offline --lib "$@" || exit 1
+                        done
                     '\'' </dev/null >/dev/null 2>/dev/null || exit 1
                 self_id=$(/bin/sh -c '\''printf "%s\n" "$PPID"'\'')
                 for pass in 1 2 3; do
@@ -247,7 +258,7 @@ run_sandboxed_build() {
                 tab=$(printf "\t")
                 set --
                 expected=0
-                while IFS="$tab" read -r package artifact source; do
+                while IFS="$tab" read -r package artifact source api_version; do
                     file="/build/output/target/wasm32-wasip2/release/$artifact.wasm"
                     test -f "$file" && test ! -L "$file" \
                         && test "$(/usr/bin/stat -c "%u" "$file")" \

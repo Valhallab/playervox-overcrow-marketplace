@@ -581,11 +581,21 @@ fn build_plan(arguments: &[String]) -> Result<(), AppError> {
         {
             continue;
         }
+        let manifest_path = format!("{}/manifest.json", entry.source_directory);
+        let listing_path = format!("{}/listing.json", entry.source_directory);
+        let manifest = read_source_file(repository, &manifest_path, 64 * 1024)
+            .map_err(|_| AppError::Policy)?;
+        let listing =
+            read_source_file(repository, &listing_path, 64 * 1024).map_err(|_| AppError::Policy)?;
+        let metadata = validate_metadata(&manifest, &listing).map_err(|_| AppError::Policy)?;
         use std::fmt::Write as _;
         writeln!(
             output,
-            "{}\t{}\t{}",
-            entry.cargo_package, entry.component_artifact, entry.source_directory
+            "{}\t{}\t{}\t{}",
+            entry.cargo_package,
+            entry.component_artifact,
+            entry.source_directory,
+            metadata.manifest().api_version()
         )
         .map_err(|_| AppError::Output)?;
     }

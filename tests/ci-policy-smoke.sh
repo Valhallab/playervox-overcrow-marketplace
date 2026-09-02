@@ -170,6 +170,7 @@ if ! /usr/bin/grep -F -- 'CARGO_NET_OFFLINE=true' "$sandbox" >/dev/null \
         || ! /usr/bin/grep -F -- '--bounding-set=-all' "$sandbox" >/dev/null \
         || ! /usr/bin/grep -F -- 'test "$3" = true' "$sandbox" >/dev/null \
         || ! /usr/bin/grep -F -- 'done </review-plan.tsv' "$sandbox" >/dev/null \
+        || ! /usr/bin/grep -F -- 'for api_version in 1 2' "$sandbox" >/dev/null \
         || /usr/bin/grep -F -- 'cargo clippy' "$sandbox" >/dev/null \
         || /usr/bin/grep -F -- 'rm -rf -- /build/target' "$sandbox" >/dev/null; then
     printf '%s\n' 'error: sandbox review is not bounded, offline, and targeted' >&2

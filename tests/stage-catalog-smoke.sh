@@ -159,9 +159,15 @@ fi
 # Re-read only validated output now that it exists.
 component_count=0
 tab=$(printf '\t')
-while IFS="$tab" read -r cargo_package component_artifact source_directory; do
+while IFS="$tab" read -r cargo_package component_artifact source_directory \
+        api_version extra; do
     test -n "$cargo_package"
     test -n "$component_artifact"
+    test -z "$extra"
+    case "$api_version" in
+        1 | 2) ;;
+        *) exit 1 ;;
+    esac
     component="$staged/$source_directory/component.wasm"
     test -f "$component" && test ! -L "$component"
     expected=$(/usr/bin/sha256sum "$component" | /usr/bin/cut -d ' ' -f 1)

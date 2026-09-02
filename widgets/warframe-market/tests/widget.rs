@@ -1,6 +1,7 @@
 use overcrow_widget_sdk::{
-    GrantedCapabilities, GuestError, HarnessError, HostCommand, HostEvent, HttpResponseMetadata,
-    InitInput, Interaction, InteractionKind, OverlayModeCode, SessionData, ViewNode, WidgetHarness,
+    ContainerLayout, GrantedCapabilities, GuestError, HarnessError, HostCommand, HostEvent,
+    HttpResponseMetadata, InitInput, Interaction, InteractionKind, Layout, OverlayModeCode,
+    SessionData, ViewNode, WidgetHarness,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -15,6 +16,28 @@ const ITEMS: &[u8] = include_bytes!("fixtures/items.json");
 const ORDERS: &[u8] = include_bytes!("fixtures/orders.json");
 const HOSTILE: &[u8] = include_bytes!("fixtures/hostile.json");
 const NOW_MS: u64 = 1_777_000_000_000;
+
+#[test]
+fn active_market_uses_structured_bounded_layout() {
+    let mut widget = WarframeMarketWidget::default();
+    let mut harness = WidgetHarness::from_init(&mut widget, init("en")).expect("market init");
+    bootstrap(&mut harness);
+    submit_query(&mut harness, "arcane");
+    let request_id = http_get(harness.output()).expect("catalog request").0;
+    deliver_http(&mut harness, request_id, Some(200), ITEMS).expect("catalog response");
+
+    let nodes = &harness.output().view.as_ref().expect("market view").nodes;
+    assert!(
+        nodes
+            .iter()
+            .any(|node| matches!(node, ViewNode::Surface(_)))
+    );
+    assert!(nodes.iter().any(|node| matches!(node, ViewNode::Scroll(_))));
+    assert!(nodes.iter().any(|node| matches!(
+        node,
+        ViewNode::Container((Layout::Linear(ContainerLayout::Row), _))
+    )));
+}
 
 #[test]
 fn first_search_streams_catalog_and_publishes_cache_manifest_last() {

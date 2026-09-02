@@ -775,18 +775,22 @@ impl WarframeMarketWidget {
                 "En attente d’une session Warframe active.",
             )?)?);
         } else {
-            nodes.push(builder.text(localized(
-                "PC market · crossplay off",
-                "Marché PC · cross-play désactivé",
-            )?)?);
-            nodes.push(builder.text_input(
+            nodes.push(builder.text_role(
+                TextRole::Muted,
+                localized(
+                    "PC market · crossplay off",
+                    "Marché PC · cross-play désactivé",
+                )?,
+            )?);
+            let query = builder.text_input(
                 "market-query",
                 &self.query,
                 localized("Search items", "Rechercher des objets")?,
-            )?);
-            nodes.push(builder.button("market-search", localized("Search", "Rechercher")?)?);
-            nodes.push(builder.button("market-clear", localized("Clear", "Effacer")?)?);
-            nodes.push(builder.selection(
+            )?;
+            let search = builder.button("market-search", localized("Search", "Rechercher")?)?;
+            let clear = builder.button("market-clear", localized("Clear", "Effacer")?)?;
+            nodes.push(builder.row(&[query, search, clear])?);
+            let side = builder.selection(
                 "filter-side",
                 vec![
                     localized("All orders", "Toutes les offres")?,
@@ -794,8 +798,8 @@ impl WarframeMarketWidget {
                     localized("Buyers", "Acheteurs")?,
                 ],
                 self.preferences.side.index(),
-            )?);
-            nodes.push(builder.selection(
+            )?;
+            let status = builder.selection(
                 "filter-status",
                 vec![
                     localized("Online", "En ligne")?,
@@ -803,19 +807,30 @@ impl WarframeMarketWidget {
                     localized("Any status", "Tous les statuts")?,
                 ],
                 self.preferences.status.index(),
-            )?);
+            )?;
+            nodes.push(builder.row(&[side, status])?);
 
+            let mut results = Vec::new();
             for item in self.search_results() {
-                nodes.push(builder.button(&item.element_id, LocalizedText::new(&item.name))?);
+                results.push(builder.button(&item.element_id, LocalizedText::new(&item.name))?);
+            }
+            if !results.is_empty() {
+                let result_list = builder.container(&results)?;
+                let result_scroll = builder.scroll(result_list)?;
+                nodes.push(builder.surface(&[result_scroll])?);
             }
             if !self.preferences.watchlist.is_empty() {
-                nodes.push(builder.text(localized("Watchlist", "Liste de suivi")?)?);
+                let mut watchlist = vec![
+                    builder
+                        .text_role(TextRole::Heading, localized("Watchlist", "Liste de suivi")?)?,
+                ];
                 for slug in &self.preferences.watchlist {
-                    nodes.push(builder.button(
+                    watchlist.push(builder.button(
                         &stable_element_id("watch-", slug),
                         LocalizedText::new(self.selected_name(slug)),
                     )?);
                 }
+                nodes.push(builder.surface(&watchlist)?);
             }
             self.render_detail(&mut builder, &mut nodes)?;
             if let Some(error) = self.error {
@@ -860,13 +875,14 @@ impl WarframeMarketWidget {
         let Some(selected) = self.preferences.selected_slug.as_deref() else {
             return Ok(());
         };
-        nodes.push(builder.toggle(
+        let mut detail = Vec::new();
+        let name = self.selected_name(selected);
+        detail.push(builder.text_role(TextRole::Heading, LocalizedText::new(name))?);
+        detail.push(builder.toggle(
             "watch-selected",
             localized("Watch this item", "Suivre cet objet")?,
             self.preferences.selected_is_watched(),
         )?);
-        let name = self.selected_name(selected);
-        nodes.push(builder.text(LocalizedText::new(name))?);
 
         if self
             .detail
@@ -874,25 +890,38 @@ impl WarframeMarketWidget {
             .is_some_and(|detail| detail.slug == selected)
         {
             if self.now_ms.is_none() {
-                nodes.push(builder.text(localized("Synchronizing time…", "Synchronisation…")?)?);
+                detail.push(builder.text_role(
+                    TextRole::Muted,
+                    localized("Synchronizing time…", "Synchronisation…")?,
+                )?);
             } else if !self.detail_is_fresh() {
-                nodes.push(builder.text(localized(
-                    "Market data is stale.",
-                    "Les données du marché sont périmées.",
-                )?)?);
+                detail.push(builder.text_role(
+                    TextRole::Muted,
+                    localized(
+                        "Market data is stale.",
+                        "Les données du marché sont périmées.",
+                    )?,
+                )?);
             } else {
+                let mut order_rows = Vec::new();
                 for order in self.visible_orders() {
-                    nodes.push(builder.text(order_text(order)?)?);
-                    nodes.push(builder.button(
+                    let summary = builder.text_role(TextRole::Metric, order_text(order)?)?;
+                    let action = builder.button(
                         &order.element_id,
                         localized(
                             format!("Whisper {}", order.trader),
                             format!("Contacter {}", order.trader),
                         )?,
-                    )?);
+                    )?;
+                    order_rows.push(builder.row(&[summary, action])?);
+                }
+                if !order_rows.is_empty() {
+                    let order_list = builder.container(&order_rows)?;
+                    detail.push(builder.scroll(order_list)?);
                 }
             }
         }
+        nodes.push(builder.surface(&detail)?);
         Ok(())
     }
 

@@ -199,19 +199,35 @@ if ! {
                             || exit 1
                         if test "$3" = true; then
                             tab=$(printf "\t")
-                            set --
-                            while IFS="$tab" read -r package artifact source extra; do
-                                test -z "$extra" && test -n "$package" \
-                                    && test -n "$artifact" && test -n "$source" \
-                                    || exit 1
-                                set -- "$@" -p "$package"
-                            done </review-plan.tsv
-                            test "$#" -eq 0 \
-                                || /rust-toolchain/bin/cargo test \
-                                    --all-targets --locked --offline "$@"
+                            for api_version in 1 2; do
+                                set --
+                                while IFS="$tab" read -r package artifact source \
+                                        package_api extra; do
+                                    test -z "$extra" && test -n "$package" \
+                                        && test -n "$artifact" && test -n "$source" \
+                                        || exit 1
+                                    case "$package_api" in 1 | 2) ;; *) exit 1 ;; esac
+                                    test "$package_api" = "$api_version" \
+                                        && set -- "$@" -p "$package"
+                                done </review-plan.tsv
+                                test "$#" -eq 0 \
+                                    || /rust-toolchain/bin/cargo test \
+                                        --all-targets --locked --offline "$@"
+                            done
                         else
-                            /rust-toolchain/bin/cargo test \
-                                --workspace --all-targets --locked --offline
+                            if test -f \
+                                    /source/widgets/warframe-market/Cargo.toml; then
+                                /rust-toolchain/bin/cargo test \
+                                    --workspace \
+                                    --exclude warframe-market-widget \
+                                    --all-targets --locked --offline
+                                /rust-toolchain/bin/cargo test \
+                                    -p warframe-market-widget --all-targets \
+                                    --locked --offline
+                            else
+                                /rust-toolchain/bin/cargo test \
+                                    --workspace --all-targets --locked --offline
+                            fi
                         fi
                         ;;
                     site)
