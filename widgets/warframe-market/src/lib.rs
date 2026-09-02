@@ -20,11 +20,12 @@ use overcrow_widget_sdk::{
     GuestError, GuestOutput, HostEvent, HttpResponseMetadata, Interaction, InteractionKind,
     LocalizedText, OutputBuilder, OverlayModeCode, TextRole, ViewBuilder, Widget, WidgetContext,
 };
-use parse::{CatalogStream, parse_orders};
+use parse::{CatalogStream, parse_catalog_version, parse_orders};
 use state::{Preferences, STORAGE_KEY};
 
 const HTTP_HOST: &str = "api.warframe.market";
 const ITEMS_PATH: &str = "/v2/items";
+const VERSIONS_PATH: &str = "/v2/versions";
 const SESSION_SCHEMA: &str = "overcrow.session.v1";
 const STEAM_APP_ID: u32 = 230_410;
 const MAX_HOST_UTC_MS: u64 = 253_402_300_799_999;
@@ -33,9 +34,12 @@ const REFRESH_MS: u64 = 30_000;
 const STALE_MS: u64 = 120_000;
 const CATALOG_TTL_MS: u64 = 24 * 60 * 60 * 1_000;
 const MAX_HTTP_BODY_BYTES: usize = 2 * 1024 * 1024;
+const MAX_ORDERS_BODY_BYTES: usize = 128 * 1024;
+const MAX_VERSIONS_BODY_BYTES: usize = 16 * 1024;
 
 #[derive(Clone)]
 enum PendingHttp {
+    Versions { request_id: u32 },
     Items { request_id: u32 },
     Orders { request_id: u32, slug: String },
 }
@@ -43,7 +47,9 @@ enum PendingHttp {
 impl PendingHttp {
     fn request_id(&self) -> u32 {
         match self {
-            Self::Items { request_id } | Self::Orders { request_id, .. } => *request_id,
+            Self::Versions { request_id }
+            | Self::Items { request_id }
+            | Self::Orders { request_id, .. } => *request_id,
         }
     }
 }
@@ -108,6 +114,10 @@ struct WarframeMarketWidget {
     cache_cleanup_requests: Vec<u32>,
     committed_part_keys: Vec<String>,
     catalog_fetched_at_ms: Option<u64>,
+    catalog_version: Option<String>,
+    pending_catalog_version: Option<String>,
+    version_check_queued: bool,
+    version_checked: bool,
     store_request: Option<u32>,
     next_request_id: u32,
     preferences_changed: bool,
@@ -138,28 +148,43 @@ impl Widget for WarframeMarketWidget {
         context: &mut WidgetContext,
     ) -> Result<GuestOutput, GuestError> {
         let mut actions = Vec::new();
-        match event {
+        let should_render = match event {
             HostEvent::Tick(now_ms) => {
                 if now_ms > MAX_HOST_UTC_MS || self.now_ms.is_some_and(|last| now_ms < last) {
                     return Err(GuestError::InvalidInput);
                 }
                 self.now_ms = Some(now_ms);
                 self.request_if_due(context, &mut actions)?;
+                true
             }
             HostEvent::Interaction(interaction) => {
-                self.handle_interaction(interaction, context, &mut actions)?;
+                self.handle_interaction(interaction, context, &mut actions)?
             }
             HostEvent::StorageResult((request_id, value)) => {
                 self.handle_storage(request_id, value.as_deref(), context, &mut actions)?;
+                true
             }
-            HostEvent::SessionData(_) => self.request_if_due(context, &mut actions)?,
-            HostEvent::LocaleChanged(_) => {}
+            HostEvent::SessionData(_) => {
+                self.request_if_due(context, &mut actions)?;
+                true
+            }
+            HostEvent::LocaleChanged(_) => true,
             HostEvent::SettingsChanged(_) => {
                 if !context.settings().is_empty() {
                     return Err(GuestError::InvalidInput);
                 }
+                true
             }
             HostEvent::ProviderData(_) => return Err(GuestError::InvalidInput),
+        };
+        if !should_render {
+            return Ok(GuestOutput {
+                view: None,
+                commands: Vec::new(),
+                next_wake_ms: interactive_active(context)
+                    .then(|| self.next_wake_ms())
+                    .flatten(),
+            });
         }
         self.render(context, actions)
     }
@@ -178,7 +203,13 @@ impl Widget for WarframeMarketWidget {
             return Err(GuestError::InvalidInput);
         }
         let expected = usize::try_from(body_length).map_err(|_| GuestError::InvalidInput)?;
-        if expected == 0 || expected > MAX_HTTP_BODY_BYTES {
+        let maximum = match self.pending_http.as_ref() {
+            Some(PendingHttp::Versions { .. }) => MAX_VERSIONS_BODY_BYTES,
+            Some(PendingHttp::Items { .. }) => MAX_HTTP_BODY_BYTES,
+            Some(PendingHttp::Orders { .. }) => MAX_ORDERS_BODY_BYTES,
+            None => return Err(GuestError::InvalidState),
+        };
+        if expected == 0 || expected > maximum {
             return Err(GuestError::InvalidInput);
         }
         self.http_transfer = Some(if status != Some(200) {
@@ -268,6 +299,15 @@ impl WarframeMarketWidget {
         Ok(())
     }
 
+    fn dispatch_versions(&mut self, actions: &mut Vec<Action>) -> Result<(), GuestError> {
+        let request_id = self.allocate_request()?;
+        self.pending_http = Some(PendingHttp::Versions { request_id });
+        self.pending_catalog_version = None;
+        self.version_check_queued = false;
+        actions.push(Action::HttpGet(request_id, VERSIONS_PATH.into()));
+        Ok(())
+    }
+
     fn dispatch_orders(
         &mut self,
         now_ms: u64,
@@ -280,7 +320,7 @@ impl WarframeMarketWidget {
             return Err(GuestError::InvalidInput);
         }
         let request_id = self.allocate_request()?;
-        let path = format!("/v2/orders/item/{slug}");
+        let path = format!("/v2/orders/item/{slug}/top");
         self.pending_http = Some(PendingHttp::Orders { request_id, slug });
         self.last_http_attempt_ms = Some(now_ms);
         self.last_orders_attempt_ms = Some(now_ms);
@@ -302,6 +342,13 @@ impl WarframeMarketWidget {
         };
         if !self.query.is_empty() && self.catalog_needs_refresh(now_ms) {
             self.items_queued = true;
+            if !self.version_checked {
+                self.version_check_queued = true;
+            }
+        }
+        if self.version_check_queued {
+            self.dispatch_versions(actions)?;
+            return Ok(());
         }
         if self
             .last_http_attempt_ms
@@ -338,6 +385,29 @@ impl WarframeMarketWidget {
             .ok_or(GuestError::InvalidInput)?;
         let transfer = self.http_transfer.take().ok_or(GuestError::InvalidState)?;
         match pending {
+            PendingHttp::Versions { .. } => {
+                self.version_checked = true;
+                if let HttpTransfer::Buffered {
+                    expected,
+                    received,
+                    bytes,
+                    ..
+                } = transfer
+                    && expected == received
+                    && let Ok(version) = parse_catalog_version(&bytes)
+                {
+                    let unchanged = !self.items.is_empty()
+                        && self.catalog_version.as_deref() == Some(version.as_str());
+                    self.pending_catalog_version = Some(version);
+                    if unchanged {
+                        self.items_queued = false;
+                        self.catalog_fetched_at_ms = self.now_ms;
+                        self.version_checked = false;
+                        self.error = None;
+                    }
+                }
+                self.request_if_due(context, actions)?;
+            }
             PendingHttp::Items { .. } => {
                 match transfer {
                     HttpTransfer::Catalog(stream) => match stream.finish() {
@@ -345,6 +415,8 @@ impl WarframeMarketWidget {
                             let fetched_at_ms = self.now_ms.ok_or(GuestError::InvalidState)?;
                             self.items = items;
                             self.catalog_fetched_at_ms = Some(fetched_at_ms);
+                            self.catalog_version = self.pending_catalog_version.take();
+                            self.version_checked = false;
                             self.start_cache_write(fetched_at_ms, actions)?;
                             self.error = None;
                         }
@@ -441,6 +513,7 @@ impl WarframeMarketWidget {
                     {
                         self.items = items;
                         self.catalog_fetched_at_ms = Some(load.manifest.fetched_at_ms);
+                        self.catalog_version = load.manifest.catalog_version;
                     }
                     self.request_if_due(context, actions)?;
                 }
@@ -510,11 +583,11 @@ impl WarframeMarketWidget {
         interaction: Interaction,
         context: &WidgetContext,
         actions: &mut Vec<Action>,
-    ) -> Result<(), GuestError> {
+    ) -> Result<bool, GuestError> {
         if !interactive_active(context) {
             return Err(GuestError::InvalidInput);
         }
-        match interaction.kind {
+        let should_render = match interaction.kind {
             InteractionKind::Submitted(value) if interaction.element_id == "market-query" => {
                 self.query = normalize_query(&value).ok_or(GuestError::InvalidInput)?;
                 self.items_queued = !self.query.is_empty()
@@ -522,9 +595,11 @@ impl WarframeMarketWidget {
                         .now_ms
                         .is_none_or(|now_ms| self.catalog_needs_refresh(now_ms));
                 self.request_if_due(context, actions)?;
+                true
             }
             InteractionKind::ValueChanged(value) if interaction.element_id == "market-query" => {
                 self.query = normalize_query(&value).ok_or(GuestError::InvalidInput)?;
+                true
             }
             InteractionKind::Clicked if interaction.element_id == "market-search" => {
                 self.items_queued = !self.query.is_empty()
@@ -532,11 +607,13 @@ impl WarframeMarketWidget {
                         .now_ms
                         .is_none_or(|now_ms| self.catalog_needs_refresh(now_ms));
                 self.request_if_due(context, actions)?;
+                true
             }
             InteractionKind::Clicked if interaction.element_id == "market-clear" => {
                 self.query.clear();
                 self.items_queued = false;
                 self.error = None;
+                true
             }
             InteractionKind::Clicked if interaction.element_id.starts_with("item-") => {
                 let item = self
@@ -551,6 +628,7 @@ impl WarframeMarketWidget {
                     self.mark_preferences_changed(actions)?;
                     self.request_if_due(context, actions)?;
                 }
+                true
             }
             InteractionKind::Clicked if interaction.element_id.starts_with("watch-") => {
                 let slug = self
@@ -566,6 +644,7 @@ impl WarframeMarketWidget {
                     self.mark_preferences_changed(actions)?;
                     self.request_if_due(context, actions)?;
                 }
+                true
             }
             InteractionKind::Clicked if interaction.element_id.starts_with("order-") => {
                 let order = self
@@ -579,11 +658,13 @@ impl WarframeMarketWidget {
                     .map(|detail| detail.name.as_str())
                     .ok_or(GuestError::InvalidInput)?;
                 actions.push(Action::Clipboard(whisper_line(order, item)));
+                true
             }
             InteractionKind::Toggled(value) if interaction.element_id == "watch-selected" => {
                 if self.preferences.set_selected_watched(value) {
                     self.mark_preferences_changed(actions)?;
                 }
+                true
             }
             InteractionKind::SelectionChanged(index) if interaction.element_id == "filter-side" => {
                 let value = SideFilter::from_index(index).ok_or(GuestError::InvalidInput)?;
@@ -591,6 +672,7 @@ impl WarframeMarketWidget {
                     self.preferences.side = value;
                     self.mark_preferences_changed(actions)?;
                 }
+                true
             }
             InteractionKind::SelectionChanged(index)
                 if interaction.element_id == "filter-status" =>
@@ -600,12 +682,16 @@ impl WarframeMarketWidget {
                     self.preferences.status = value;
                     self.mark_preferences_changed(actions)?;
                 }
+                true
             }
             InteractionKind::Focused(_) | InteractionKind::Hovered(_)
-                if self.known_element(&interaction.element_id) => {}
+                if self.known_element(&interaction.element_id) =>
+            {
+                false
+            }
             _ => return Err(GuestError::InvalidInput),
-        }
-        Ok(())
+        };
+        Ok(should_render)
     }
 
     fn mark_preferences_changed(&mut self, actions: &mut Vec<Action>) -> Result<(), GuestError> {
@@ -631,8 +717,8 @@ impl WarframeMarketWidget {
         fetched_at_ms: u64,
         actions: &mut Vec<Action>,
     ) -> Result<(), GuestError> {
-        let encoded =
-            encode_cache(&self.items, fetched_at_ms).map_err(|_| GuestError::Unavailable)?;
+        let encoded = encode_cache(&self.items, fetched_at_ms, self.catalog_version.as_deref())
+            .map_err(|_| GuestError::Unavailable)?;
         let mut part_requests = Vec::with_capacity(encoded.parts.len());
         for (key, bytes) in encoded.part_keys.iter().zip(&encoded.parts) {
             let request_id = self.allocate_request()?;
@@ -838,7 +924,8 @@ impl WarframeMarketWidget {
             }
         }
 
-        let root = builder.container(&nodes)?;
+        let content = builder.container(&nodes)?;
+        let root = builder.scroll(content)?;
         let view = builder.finish(root, self.view_revision)?;
         let next_wake_ms = interactive_active(context)
             .then(|| self.next_wake_ms())

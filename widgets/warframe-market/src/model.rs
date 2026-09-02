@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 pub const MAX_QUERY_CHARS: usize = 64;
 pub const MAX_SLUG_BYTES: usize = 96;
 pub const MAX_RESULTS: usize = 12;
-pub const MAX_ORDERS_PER_SIDE: usize = 6;
+pub const MAX_ORDERS_PER_SIDE: usize = 5;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]

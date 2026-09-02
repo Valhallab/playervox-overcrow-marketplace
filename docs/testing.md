@@ -7,22 +7,21 @@ and do not repeat source validation.
 
 ## Contributor checks
 
-Run the behavior tests for the package being changed, then build its component
-once. For the example widget:
+Run the behavior tests for the package being changed, then exercise the
+installed-app loop once. For the example widget:
 
 ```sh
 cargo fmt --all -- --check
 cargo test -p hello-widget --locked
-cargo build -p hello-widget --release --target wasm32-wasip2 --locked
-cargo run -p marketplace-tool --locked -- inspect-component \
-  target/wasm32-wasip2/release/hello_widget.wasm
+overcrow-widget dev widgets/hello-widget
 scripts/check-policy.sh
 ```
 
-`inspect-component` is the single component-model boundary check. It verifies
-the supported lifecycle exports and forbidden imports directly on the built
-WASM. There is no ignored environment-dependent unit test that repeats this
-inspection.
+`overcrow-widget dev` compiles that package once, validates the component and
+archive in the installed runner, and atomically replaces the local widget. The
+maintainer build gate retains `inspect-component` as its single component-model
+boundary check; there is no ignored environment-dependent unit test that
+repeats it.
 
 API v1 and API v2 packages must be tested and built in separate Cargo
 invocations because Cargo unifies dependency features within one invocation.
