@@ -2,16 +2,17 @@
   "author": "PlayerVox",
   "spdxLicense": "AGPL-3.0-only",
   "sourceUrl": "https://github.com/PlayerVox/playervox-overcrow-marketplace",
+  "defaultLocale": "en",
   "localizations": [
     {
       "locale": "en",
       "name": "Warframe Market",
-      "description": "Searches public PC items from a compact versioned cache, shows the top bounded buy and sell orders, and copies an explicit trade message on request."
+      "description": "Searches public PC items from a versioned IndexedDB catalog, shows bounded buy and sell orders, and copies an explicit trade whisper on request."
     },
     {
       "locale": "fr",
       "name": "Marché Warframe",
-      "description": "Recherche les objets publics PC depuis un cache compact versionné, affiche les meilleures offres d’achat et de vente bornées, et copie un message d’échange uniquement sur demande."
+      "description": "Recherche les objets publics PC depuis un catalogue IndexedDB versionné, affiche les meilleures offres d’achat et de vente bornées, et copie un message d’échange uniquement sur demande."
     }
   ]
 }

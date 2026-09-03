@@ -1,0 +1,13 @@
+{
+  "author": "PlayerVox",
+  "spdxLicense": "AGPL-3.0-only",
+  "sourceUrl": "https://github.com/PlayerVox/playervox-overcrow-marketplace",
+  "defaultLocale": "en",
+  "localizations": [
+    {
+      "locale": "en",
+      "name": "Hello OverCrow",
+      "description": "Minimal Web API v1 fixture used to prove packaging and inspection."
+    }
+  ]
+}

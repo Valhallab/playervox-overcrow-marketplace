@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "com.playervox.overcrow.hello",
+  "version": "1.0.0",
+  "apiVersion": "1",
+  "entrypoints": {
+    "view": "index.html"
+  },
+  "permissions": {},
+  "files": {
+    "index.html": {
+      "sha256": "be4bc66ff2cdd10654b9bd10aa7dca924da34ac8e8bbc40680a42b53d760599d",
+      "bytes": 180
+    }
+  }
+}
