@@ -10,8 +10,8 @@ OverCrow owns the outer chrome. The plugin owns its internal UX.
 
 ## Current status
 
-The component/WIT/WASM product surface has been replaced with a Web API
-v1 skeleton:
+The component/WIT/WASM product surface has been replaced with Web API
+v1:
 
 - `tools/marketplace-tool` validates a web directory and writes a
   deterministic stored-zip `.ocpkg`.
