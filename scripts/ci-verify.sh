@@ -4,6 +4,7 @@ umask 077
 
 cargo test -p marketplace-tool --locked
 node --test tests/warframe-market/market.test.mjs
+node --test tests/site-runtime.test.js
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 cargo run -p marketplace-tool --locked --quiet -- package fixtures/hello-web "$tmp/hello.ocpkg"

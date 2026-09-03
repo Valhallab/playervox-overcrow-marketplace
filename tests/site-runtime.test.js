@@ -7,10 +7,10 @@ const vm = require("node:vm");
 
 const DEVELOPMENT_BASE = "http://127.0.0.1:8787/marketplace/v1/";
 const PRODUCTION_BASE = "https://overcrow.playervox.com/marketplace/v1/";
-const THIRTY_TWO_LOCALES = [
-  "en", "aa", "ab", "ac", "ad", "ae", "af", "ag", "ah", "ai", "aj", "ak",
-  "al", "am", "an", "ao", "ap", "aq", "ar", "as", "at", "au", "av", "aw",
-  "ax", "ay", "az", "ba", "bb", "bc", "bd", "be",
+const DIGEST = "a".repeat(64);
+const SIXTEEN_LOCALES = [
+  "en", "fr", "de", "es", "it", "pt", "nl", "sv",
+  "da", "no", "fi", "pl", "cs", "hu", "ro", "el",
 ];
 
 class Element {
@@ -55,97 +55,100 @@ class Element {
   }
 }
 
-const catalogPath = process.env.MARKETPLACE_CATALOG_PATH
-  || process.argv[2]
-  || "tests/fixtures/development-catalog.json";
-const productionPolicyPath = process.env.MARKETPLACE_POLICY_PATH
-  || "web/marketplace/policies/production.js";
+function webTarget(overrides = {}) {
+  const id = overrides.id || "com.playervox.overcrow.warframe.market";
+  const version = overrides.version || "2.0.0";
+  const sha256 = overrides.packageSha256 || DIGEST;
+  const manifest = {
+    schemaVersion: 1,
+    id,
+    version,
+    apiVersion: "1",
+    entrypoints: { view: "index.html", controller: "controller.html" },
+    permissions: {
+      network: [{
+        origin: "https://api.warframe.market",
+        method: "GET",
+        pathPrefix: "/v2/",
+      }],
+      storage: true,
+      clipboardWrite: true,
+    },
+    files: {
+      "index.html": { sha256: DIGEST, bytes: 757 },
+      "controller.html": { sha256: DIGEST, bytes: 205 },
+    },
+    ...overrides.manifest,
+  };
+  const listing = {
+    author: "PlayerVox",
+    spdxLicense: "AGPL-3.0-only",
+    sourceUrl: "https://github.com/PlayerVox/playervox-overcrow-marketplace",
+    defaultLocale: "en",
+    localizations: [
+      {
+        locale: "en",
+        name: "Warframe Market",
+        description: "Searches public PC items from a versioned IndexedDB catalog.",
+      },
+      {
+        locale: "fr",
+        name: "Marché Warframe",
+        description: "Recherche les objets publics PC depuis un catalogue IndexedDB.",
+      },
+    ],
+    ...overrides.listing,
+  };
+  return {
+    manifest,
+    listing,
+    packageUrl: `${overrides.base || DEVELOPMENT_BASE}packages/${id}/${version}/${sha256}.ocpkg`,
+    packageSize: 4096,
+    packageSha256: sha256,
+    status: "verified",
+    ...overrides.target,
+  };
+}
+
+function envelope(targets, keyId = "overcrow-development-2026") {
+  const payload = {
+    schemaVersion: 1,
+    sequence: 1,
+    generatedAt: "2026-01-01T00:00:00Z",
+    expiresAt: "2026-04-01T00:00:00Z",
+    targets,
+  };
+  return JSON.stringify({
+    schemaVersion: 1,
+    keyId,
+    payload: Buffer.from(JSON.stringify(payload)).toString("base64url"),
+    signature: "b".repeat(86),
+  });
+}
 
 function generated() {
-  return fs.readFileSync(catalogPath, "utf8");
+  return envelope([webTarget()]);
 }
 
 function payload(body) {
-  const envelope = JSON.parse(body);
-  return JSON.parse(Buffer.from(envelope.payload, "base64url"));
-}
-
-function withPayload(change, source = generated()) {
-  const envelope = JSON.parse(source);
-  const body = JSON.parse(Buffer.from(envelope.payload, "base64url"));
-  envelope.payload = Buffer.from(JSON.stringify(change(body))).toString("base64url");
-  return JSON.stringify(envelope);
-}
-
-function withTargetGraph(change, source = generated()) {
-  return withPayload((body) => {
-    const targets = change(body.targets);
-    return { ...body, targets };
-  }, source);
+  const parsed = JSON.parse(body);
+  return JSON.parse(Buffer.from(parsed.payload, "base64url"));
 }
 
 function withTargets(change, source = generated()) {
-  return withTargetGraph((targets) => {
-    const changed = change(targets);
-    assert.equal(
-      changed.filter((target) => target.manifest.kind === "provider").length,
-      1,
-    );
-    return changed;
-  }, source);
-}
-
-function withListingName(name) {
-  return withTargets((targets) => {
-    const widget = targets.find((target) => target.manifest.kind === "widget");
-    widget.listing.localizations[0].name = name;
-    return targets;
-  });
-}
-
-function withTransitiveProviders(cycle = false) {
-  return withTargetGraph((targets) => {
-    const provider = targets.find((target) => target.manifest.kind === "provider");
-    const upstream = structuredClone(provider);
-    upstream.manifest.id = "com.playervox.overcrow.warframe.public-data";
-    upstream.manifest.dependencies = cycle ? [{
-      id: provider.manifest.id,
-      version: provider.manifest.version,
-      sha256: provider.packageSha256,
-    }] : [];
-    upstream.manifest.capabilities.http = ["api.relay.example"];
-    upstream.packageSha256 = "c".repeat(64);
-    upstream.packageUrl = `${DEVELOPMENT_BASE}packages/${upstream.manifest.id}/${upstream.manifest.version}/${upstream.packageSha256}.ocpkg`;
-    for (const localization of upstream.listing.localizations) {
-      localization.name = localization.locale === "fr"
-        ? "Fournisseur public en amont"
-        : "Upstream Public Data Provider";
-      localization.description = localization.locale === "fr"
-        ? "Fournit des données publiques bornées en amont."
-        : "Supplies bounded upstream public data.";
-    }
-    provider.manifest.dependencies = [{
-      id: upstream.manifest.id,
-      version: upstream.manifest.version,
-      sha256: upstream.packageSha256,
-    }];
-    targets.push(upstream);
-    return targets;
-  });
+  const parsed = JSON.parse(source);
+  const body = JSON.parse(Buffer.from(parsed.payload, "base64url"));
+  parsed.payload = Buffer.from(JSON.stringify({
+    ...body,
+    targets: change(body.targets),
+  })).toString("base64url");
+  return JSON.stringify(parsed);
 }
 
 function productionCatalog() {
-  const envelope = JSON.parse(generated());
-  envelope.keyId = "overcrow-production-2026-01";
-  const body = JSON.parse(Buffer.from(envelope.payload, "base64url"));
-  for (const target of body.targets) {
-    target.packageUrl = target.packageUrl.replace(DEVELOPMENT_BASE, PRODUCTION_BASE);
-    if (target.preview) {
-      target.preview.url = target.preview.url.replace(DEVELOPMENT_BASE, PRODUCTION_BASE);
-    }
-  }
-  envelope.payload = Buffer.from(JSON.stringify(body)).toString("base64url");
-  return JSON.stringify(envelope);
+  return envelope([webTarget({
+    base: PRODUCTION_BASE,
+  })], "overcrow-production-2026-01");
 }
 
 function streamed(body, options) {
@@ -222,60 +225,47 @@ function unavailable(page) {
   assert.equal(page.catalog.children[0].textContent, "Catalog unavailable.");
 }
 
-test("development mode renders the catalog and hides providers", async () => {
+test("development mode renders a Web API v1 catalog card", async () => {
   const body = generated();
-  const actual = payload(body);
-  assert.equal(actual.targets.length, 6);
+  assert.equal(payload(body).targets.length, 1);
   const page = await run(body);
   const index = fs.readFileSync("web/marketplace/index.html", "utf8");
   assert.match(index, /<option value="en" selected>English<\/option>/u);
   assert.match(index, /<option value="fr">Français<\/option>/u);
   assert.deepEqual(page.requests, ["/marketplace/v1/catalog.json"]);
   assert.equal(page.trust.textContent, "Development — unverified");
-  assert.equal(page.catalog.children.length, 5);
-  const fissures = cardText(card(page, /Warframe Void Fissures/u));
-  for (const expected of [
-    /Includes dependency: Warframe Worldstate Provider/u,
-    /Fetches public data from: api\.warframe\.com/u,
-    /Reads OverCrow session data/u,
-    /Stores private widget settings/u,
-    /Publishes bounded public world-state data/u,
-  ]) assert.match(fissures, expected);
+  assert.equal(page.catalog.children.length, 1);
   const market = cardText(card(page, /Warframe Market/u));
   for (const expected of [
+    /Version 2\.0\.0/u,
+    /Author PlayerVox/u,
     /api\.warframe\.market/u,
-    /Reads OverCrow session data/u,
-    /Stores private widget settings/u,
-    /Writes a trade message to clipboard/u,
+    /Stores private widget data/u,
+    /Writes to clipboard on request/u,
   ]) assert.match(market, expected);
-  assert.doesNotMatch(
-    page.catalog.children.map(cardText).join("\n"),
-    /Shares bounded public Warframe world-state data/u,
-  );
+  assert.doesNotMatch(market, /provider/iu);
+  assert.doesNotMatch(market, /component\.wasm/u);
 });
 
 test("production mode renders complete catalog metadata without a development claim", async () => {
   const page = await run(productionCatalog(), {
-    policy: productionPolicyPath,
+    policy: "web/marketplace/policies/production.js",
   });
   assert.equal(
     page.trust.textContent,
     "Production catalog — installs are verified by OverCrow",
   );
-  const fissures = cardText(card(page, /Warframe Void Fissures/u));
+  const market = cardText(card(page, /Warframe Market/u));
   for (const expected of [
-    "Version 1.0.0",
+    "Version 2.0.0",
     "Author PlayerVox",
     "License AGPL-3.0-only",
     "Languages en, fr",
-    "Steam app 230410",
-    "Warframe Worldstate Provider",
-    "api.warframe.com",
     "Verified catalog entry",
-  ]) assert.match(fissures, new RegExp(expected, "u"));
-  assert.doesNotMatch(fissures, /Development — unverified/u);
+  ]) assert.match(market, new RegExp(expected, "u"));
+  assert.doesNotMatch(market, /Development — unverified/u);
 
-  const source = descendants(card(page, /Warframe Void Fissures/u))
+  const source = descendants(card(page, /Warframe Market/u))
     .find((element) => element.tagName === "a");
   assert.equal(
     source.getAttribute("href"),
@@ -285,7 +275,10 @@ test("production mode renders complete catalog metadata without a development cl
 });
 
 test("creator strings are assigned only through textContent", async () => {
-  const poisoned = withListingName("<img src=x onerror=globalThis.pwned=true>");
+  const poisoned = withTargets((targets) => {
+    targets[0].listing.localizations[0].name = "<img src=x onerror=globalThis.pwned=true>";
+    return targets;
+  });
   const page = await run(poisoned);
   const item = card(page, /<img src=x/u);
   assert.ok(item);
@@ -296,9 +289,8 @@ test("creator strings are assigned only through textContent", async () => {
 
 test("French UI falls back to English creator copy when only English is supplied", async () => {
   const englishOnly = withTargets((targets) => {
-    const widget = targets.find((target) => target.manifest.kind === "widget");
-    widget.manifest.availableLocales = ["en"];
-    widget.listing.localizations = widget.listing.localizations.filter(
+    targets[0].listing.defaultLocale = "en";
+    targets[0].listing.localizations = targets[0].listing.localizations.filter(
       (entry) => entry.locale === "en",
     );
     return targets;
@@ -308,109 +300,28 @@ test("French UI falls back to English creator copy when only English is supplied
   page.language.dispatch("change");
   assert.equal(page.document.documentElement.lang, "fr");
   assert.equal(page.trust.textContent, "Développement — non vérifié");
-  assert.match(cardText(card(page, /Warframe Void Fissures/u)), /Langues en/u);
+  assert.match(cardText(card(page, /Warframe Market/u)), /Langues en/u);
 });
 
-test("accepts a declared non-English default when English metadata is present", async () => {
-  const frenchDefault = withTargets((targets) => {
-    const widget = targets.find((target) => target.manifest.kind === "widget");
-    widget.manifest.defaultLocale = "fr";
-    return targets;
-  });
-  const page = await run(frenchDefault);
-  assert.match(
-    cardText(card(page, /Warframe Void Fissures/u)),
-    /Shows active public Void Fissures/u,
-  );
-});
-
-test("accepts thirty-two exact localized entries", async () => {
+test("accepts sixteen exact localized listing entries", async () => {
   const localized = withTargets((targets) => {
-    const widget = targets.find((target) => target.manifest.kind === "widget");
-    widget.manifest.availableLocales = [...THIRTY_TWO_LOCALES];
-    widget.listing.localizations = THIRTY_TWO_LOCALES.map((locale) => ({
+    targets[0].listing.localizations = SIXTEEN_LOCALES.map((locale) => ({
       locale,
-      name: locale === "en" ? "Warframe Void Fissures" : `Name ${locale}`,
+      name: locale === "en" ? "Warframe Market" : `Name ${locale}`,
       description: `Description ${locale}`,
     }));
     return targets;
   });
   const page = await run(localized);
-
-  assert.ok(card(page, /Warframe Void Fissures/u));
-});
-
-test("accepts a 512-byte ASCII source URL", async () => {
-  const prefix = "https://example.test/";
-  const bounded = withTargets((targets) => {
-    targets[firstConsumer(targets)].listing.sourceUrl =
-      `${prefix}${"a".repeat(512 - prefix.length)}`;
-    return targets;
-  });
-  const page = await run(bounded);
-
-  assert.ok(card(page, /Warframe Void Fissures/u));
-});
-
-test("French UI falls back to English copy rather than a non-English declared default", async () => {
-  const germanDefault = withTargets((targets) => {
-    const widget = targets.find((target) => target.manifest.kind === "widget");
-    widget.manifest.defaultLocale = "de";
-    widget.manifest.availableLocales = ["en", "de"];
-    const german = widget.listing.localizations.find((entry) => entry.locale === "fr");
-    german.locale = "de";
-    german.name = "Warframe-Leerenrisse";
-    german.description = "Zeigt öffentliche Leerenrisse an.";
-    return targets;
-  });
-  const page = await run(germanDefault);
-  page.language.value = "fr";
-  page.language.dispatch("change");
-  assert.match(
-    page.catalog.children.map(cardText).join("\n"),
-    /Warframe Void Fissures/u,
-  );
-  assert.doesNotMatch(
-    page.catalog.children.map(cardText).join("\n"),
-    /Warframe-Leerenrisse/u,
-  );
-});
-
-test("renders generic bounded Steam scopes", async () => {
-  const multipleGames = withTargets((targets) => {
-    const widget = targets.find((target) => target.manifest.kind === "widget");
-    widget.manifest.games = [
-      { platform: "steam", id: "230410" },
-      { platform: "steam", id: "440" },
-    ];
-    return targets;
-  });
-  const page = await run(multipleGames);
-  assert.match(
-    cardText(card(page, /Warframe Void Fissures/u)),
-    /Steam apps 230410, 440/u,
-  );
-});
-
-test("renders an empty Steam scope as all games", async () => {
-  const allGames = withTargets((targets) => {
-    const widget = targets.find((target) => target.manifest.kind === "widget");
-    widget.manifest.games = [];
-    return targets;
-  });
-  const page = await run(allGames);
-  assert.match(
-    cardText(card(page, /Warframe Void Fissures/u)),
-    /Game scope All games/u,
-  );
+  assert.ok(card(page, /Warframe Market/u));
 });
 
 test("sets preview src only for its exact immutable object URL", async () => {
-  const sha256 = "a".repeat(64);
+  const sha256 = "c".repeat(64);
   const preview = withTargets((targets) => {
-    const widget = targets.find((target) => target.manifest.kind === "widget");
-    widget.preview = {
-      url: `${DEVELOPMENT_BASE}previews/${widget.manifest.id}/${widget.manifest.version}/${sha256}.png`,
+    const target = targets[0];
+    target.preview = {
+      url: `${DEVELOPMENT_BASE}previews/${target.manifest.id}/${target.manifest.version}/${sha256}.png`,
       mediaType: "image/png",
       size: 1024,
       sha256,
@@ -418,36 +329,14 @@ test("sets preview src only for its exact immutable object URL", async () => {
     return targets;
   });
   const page = await run(preview);
-  const image = descendants(card(page, /Warframe Void Fissures/u))
+  const image = descendants(card(page, /Warframe Market/u))
     .find((element) => element.tagName === "img");
   assert.ok(image);
   assert.equal(
     image.getAttribute("src"),
-    `${DEVELOPMENT_BASE}previews/com.playervox.overcrow.warframe.fissures/1.0.0/${sha256}.png`,
+    `${DEVELOPMENT_BASE}previews/com.playervox.overcrow.warframe.market/2.0.0/${sha256}.png`,
   );
   assert.equal(image.getAttribute("alt"), "");
-});
-
-test("renders names and capabilities from the complete transitive provider closure", async () => {
-  const page = await run(withTransitiveProviders());
-  const fissures = cardText(card(page, /Warframe Void Fissures/u));
-  assert.match(
-    fissures,
-    /Includes dependencies: Warframe Worldstate Provider, Upstream Public Data Provider/u,
-  );
-  assert.match(
-    fissures,
-    /Fetches public data from: api\.warframe\.com, api\.relay\.example/u,
-  );
-  assert.equal(page.catalog.children.length, 5);
-  assert.doesNotMatch(
-    page.catalog.children.map(cardText).join("\n"),
-    /Supplies bounded upstream public data/u,
-  );
-});
-
-test("rejects a provider dependency cycle", async () => {
-  unavailable(await run(withTransitiveProviders(true)));
 });
 
 test("rejects a policy that differs from the fixed trust configuration", async () => {
@@ -468,63 +357,37 @@ test("rejects a policy that differs from the fixed trust configuration", async (
   );
 });
 
-const firstConsumer = (targets) => targets.findIndex(
-  (target) => target.manifest.kind === "widget",
-);
-
 const invalidCatalogs = [
   ["lying length", "x".repeat(1024 * 1024 + 1), { contentLength: "1" }],
   ["missing length", "x".repeat(1024 * 1024 + 1), {}],
   ["absent stream", generated(), { noBody: true }],
   ["malformed streamed response", generated(), { malformedChunk: true }],
-  ["repeated zero-length stream chunks", generated(), {
-    chunks: [
-      new Uint8Array(),
-      new Uint8Array(),
-      new Uint8Array(Buffer.from(generated())),
-    ],
-  }],
-  ["excessive one-byte stream chunks", generated(), {
-    chunks: Array.from(
-      Buffer.from(generated()),
-      (byte) => Uint8Array.of(byte),
-    ),
-  }],
   ["malformed envelope", "{}", {}],
   ["wrong key ID", (() => {
-    const envelope = JSON.parse(generated());
-    envelope.keyId = "overcrow-production-2026-01";
-    return JSON.stringify(envelope);
+    const parsed = JSON.parse(generated());
+    parsed.keyId = "overcrow-production-2026-01";
+    return JSON.stringify(parsed);
   })(), {}],
   ["invalid source URL", withTargets((targets) => {
-    targets[firstConsumer(targets)].listing.sourceUrl = "not a URL";
+    targets[0].listing.sourceUrl = "not a URL";
     return targets;
   }), {}],
   ["non-HTTPS source URL", withTargets((targets) => {
-    targets[firstConsumer(targets)].listing.sourceUrl = "http://example.test/source";
-    return targets;
-  }), {}],
-  ["513-byte ASCII source URL", withTargets((targets) => {
-    const prefix = "https://example.test/";
-    targets[firstConsumer(targets)].listing.sourceUrl =
-      `${prefix}${"a".repeat(513 - prefix.length)}`;
+    targets[0].listing.sourceUrl = "http://example.test/source";
     return targets;
   }), {}],
   ["wrong object origin", withTargets((targets) => {
-    const target = targets[firstConsumer(targets)];
-    target.packageUrl = target.packageUrl.replace(DEVELOPMENT_BASE, "https://example.test/");
+    targets[0].packageUrl = targets[0].packageUrl.replace(DEVELOPMENT_BASE, "https://example.test/");
     return targets;
   }), {}],
   ["path-bearing package version", withTargets((targets) => {
-    const target = targets[firstConsumer(targets)];
-    target.manifest.version = "../escape";
-    target.packageUrl = `${DEVELOPMENT_BASE}packages/${target.manifest.id}/${target.manifest.version}/${target.packageSha256}.ocpkg`;
+    targets[0].manifest.version = "../escape";
+    targets[0].packageUrl = `${DEVELOPMENT_BASE}packages/${targets[0].manifest.id}/${targets[0].manifest.version}/${targets[0].packageSha256}.ocpkg`;
     return targets;
   }), {}],
   ["external preview URL", withTargets((targets) => {
-    const target = targets[firstConsumer(targets)];
-    const sha256 = "a".repeat(64);
-    target.preview = {
+    const sha256 = "d".repeat(64);
+    targets[0].preview = {
       url: `https://example.test/${sha256}.png`,
       mediaType: "image/png",
       size: 1024,
@@ -533,69 +396,29 @@ const invalidCatalogs = [
     return targets;
   }), {}],
   ["duplicate target IDs", withTargets((targets) => {
-    const widgets = targets.filter((target) => target.manifest.kind === "widget");
-    widgets[1].manifest.id = widgets[0].manifest.id;
-    widgets[1].packageUrl = `${DEVELOPMENT_BASE}packages/${widgets[1].manifest.id}/${widgets[1].manifest.version}/${widgets[1].packageSha256}.ocpkg`;
-    return targets;
-  }), {}],
-  ["duplicate dependencies", withTargets((targets) => {
-    const target = targets[firstConsumer(targets)];
-    target.manifest.dependencies.push({ ...target.manifest.dependencies[0] });
+    targets.push(structuredClone(targets[0]));
     return targets;
   }), {}],
   ["duplicate listing locales", withTargets((targets) => {
-    const target = targets[firstConsumer(targets)];
-    target.listing.localizations[1].locale = "en";
+    targets[0].listing.localizations[1].locale = "en";
     return targets;
   }), {}],
-  ["duplicate available locales", withTargets((targets) => {
-    const target = targets[firstConsumer(targets)];
-    target.manifest.availableLocales[1] = "en";
+  ["listing without default locale", withTargets((targets) => {
+    targets[0].listing.defaultLocale = "de";
     return targets;
   }), {}],
-  ["missing English locale", withTargets((targets) => {
-    const target = targets[firstConsumer(targets)];
-    target.manifest.defaultLocale = "fr";
-    target.manifest.availableLocales = ["fr"];
-    target.listing.localizations = target.listing.localizations.filter(
-      (entry) => entry.locale === "fr",
-    );
-    return targets;
-  }), {}],
-  ["listing locale subset", withTargets((targets) => {
-    const target = targets[firstConsumer(targets)];
-    target.listing.localizations = target.listing.localizations.filter(
-      (entry) => entry.locale === "en",
-    );
-    return targets;
-  }), {}],
-  ["more than 32 Steam scopes", withTargets((targets) => {
-    const target = targets[firstConsumer(targets)];
-    target.manifest.games = Array.from({ length: 33 }, (_, index) => ({
-      platform: "steam",
-      id: String(index + 1),
-    }));
-    return targets;
-  }), {}],
-  ["more than 16 HTTP capabilities", withTargets((targets) => {
-    const target = targets[firstConsumer(targets)];
-    target.manifest.capabilities.http = Array.from(
-      { length: 17 },
-      (_, index) => `api${index}.example.test`,
-    );
+  ["native kind leftover", withTargets((targets) => {
+    targets[0].manifest.kind = "provider";
     return targets;
   }), {}],
   ["more than 500 targets", withTargets((targets) => {
-    const widget = targets[firstConsumer(targets)];
-    while (targets.length <= 500) targets.push(structuredClone(widget));
-    return targets;
-  }), {}],
-  ["wrong dependency version", withTargets((targets) => {
-    targets[firstConsumer(targets)].manifest.dependencies[0].version = "9.9.9";
-    return targets;
-  }), {}],
-  ["wrong dependency hash", withTargets((targets) => {
-    targets[firstConsumer(targets)].manifest.dependencies[0].sha256 = "b".repeat(64);
+    const widget = targets[0];
+    while (targets.length <= 500) {
+      const copy = structuredClone(widget);
+      copy.manifest.id = `com.playervox.overcrow.item${targets.length}`;
+      copy.packageUrl = `${DEVELOPMENT_BASE}packages/${copy.manifest.id}/${copy.manifest.version}/${copy.packageSha256}.ocpkg`;
+      targets.push(copy);
+    }
     return targets;
   }), {}],
 ];

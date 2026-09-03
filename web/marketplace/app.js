@@ -3,6 +3,12 @@
 const MAX_ENVELOPE_BYTES = 1024 * 1024;
 const MAX_STREAM_CHUNKS = 4096;
 const MAX_TARGETS = 500;
+const MAX_PACKAGE_BYTES = 128 * 1024 * 1024;
+const MAX_PREVIEW_BYTES = 256 * 1024;
+const MAX_LISTING_LOCALES = 16;
+const MAX_NETWORK_GRANTS = 16;
+const MAX_GAME_EVENTS = 16;
+const MAX_FILES = 4096;
 const policy = globalThis.overcrowMarketplacePolicy;
 const fixedPolicies = {
   development: {
@@ -59,18 +65,10 @@ const copy = {
     source: "Source",
     license: "License",
     languages: "Languages",
-    gameScope: "Game scope",
-    steamApp: "Steam app",
-    steamApps: "Steam apps",
-    allGames: "All games",
     http: "Fetches public data from",
-    session: "Reads OverCrow session data",
-    storage: "Stores private widget settings",
-    clipboard: "Writes a trade message to clipboard",
-    provider: "Publishes bounded public world-state data",
-    dependency: "Includes dependency",
-    dependencies: "Includes dependencies",
-    standalone: "Standalone package",
+    events: "Receives OverCrow game events",
+    storage: "Stores private widget data",
+    clipboard: "Writes to clipboard on request",
     verified: "Verified catalog entry",
     suspended: "Security-suspended catalog entry",
     revoked: "Revoked catalog entry",
@@ -81,18 +79,10 @@ const copy = {
     source: "Source",
     license: "Licence",
     languages: "Langues",
-    gameScope: "Périmètre de jeu",
-    steamApp: "Application Steam",
-    steamApps: "Applications Steam",
-    allGames: "Tous les jeux",
     http: "Récupère des données publiques depuis",
-    session: "Lit les données de session OverCrow",
-    storage: "Stocke des réglages privés du widget",
-    clipboard: "Écrit un message d’échange dans le presse-papiers",
-    provider: "Publie des données publiques bornées de l’état mondial",
-    dependency: "Inclut la dépendance",
-    dependencies: "Inclut les dépendances",
-    standalone: "Paquet autonome",
+    events: "Reçoit les événements de jeu OverCrow",
+    storage: "Stocke des données privées du widget",
+    clipboard: "Écrit dans le presse-papiers uniquement sur demande",
     verified: "Entrée de catalogue vérifiée",
     suspended: "Entrée de catalogue suspendue pour sécurité",
     revoked: "Entrée de catalogue révoquée",
@@ -125,7 +115,7 @@ function version(value) {
 }
 
 function httpsUrl(value) {
-  if (!string(value, 512)) return false;
+  if (!string(value, 2048)) return false;
   try {
     const parsed = new URL(value);
     return parsed.protocol === "https:"
@@ -136,11 +126,14 @@ function httpsUrl(value) {
   }
 }
 
-function httpHost(value) {
-  if (!string(value, 253) || !value.includes(".")) return false;
-  return value.split(".").every((label) => (
-    /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label)
-  ));
+function htmlEntrypoint(value) {
+  return typeof value === "string"
+    && value.length > 0
+    && value.length <= 256
+    && !value.startsWith("/")
+    && !value.includes("\\")
+    && !value.split("/").includes("..")
+    && value.endsWith(".html");
 }
 
 function immutableObjectUrl(area, manifest, sha256, extension) {
@@ -159,127 +152,112 @@ function decode(value) {
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
-function capabilities(value) {
-  if (!exactKeys(value, ["http", "gameData", "storage", "clipboardWrite", "provider"])) {
-    return false;
-  }
-  if (!Array.isArray(value.http) || value.http.length > 16) return false;
-  if (new Set(value.http).size !== value.http.length || !value.http.every(httpHost)) return false;
-  if (!Array.isArray(value.gameData) || value.gameData.length > 1) return false;
-  if (new Set(value.gameData).size !== value.gameData.length
-      || !value.gameData.every((feed) => feed === "overcrow.session.v1")) return false;
-  return typeof value.storage === "boolean"
-    && typeof value.clipboardWrite === "boolean"
-    && typeof value.provider === "boolean";
+function networkGrant(value) {
+  return value
+    && exactKeys(value, ["origin", "method", "pathPrefix"])
+    && httpsUrl(value.origin)
+    && ["GET", "POST", "PUT", "PATCH", "DELETE"].includes(value.method)
+    && typeof value.pathPrefix === "string"
+    && value.pathPrefix.startsWith("/")
+    && value.pathPrefix.length <= 256;
 }
 
-function locales(manifest, listing) {
-  const available = manifest.availableLocales;
-  const localized = listing.localizations;
-  if (!Array.isArray(available) || available.length === 0 || available.length > 32) return false;
-  if (!available.every(locale) || new Set(available).size !== available.length) return false;
-  if (!locale(manifest.defaultLocale)
-      || !available.includes(manifest.defaultLocale)
-      || !available.includes("en")) return false;
-  if (!Array.isArray(localized) || localized.length !== available.length) return false;
+function permissions(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.some((key) => !["network", "gameEvents", "storage", "clipboardWrite"].includes(key))) {
+    return false;
+  }
+  const network = value.network ?? [];
+  const events = value.gameEvents ?? [];
+  if (!Array.isArray(network) || network.length > MAX_NETWORK_GRANTS) return false;
+  if (new Set(network.map((grant) => JSON.stringify(grant))).size !== network.length) return false;
+  if (!network.every(networkGrant)) return false;
+  if (!Array.isArray(events) || events.length > MAX_GAME_EVENTS) return false;
+  if (new Set(events).size !== events.length
+      || !events.every((event) => string(event, 64))) return false;
+  return (value.storage === undefined || typeof value.storage === "boolean")
+    && (value.clipboardWrite === undefined || typeof value.clipboardWrite === "boolean");
+}
+
+function files(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const paths = Object.keys(value);
+  if (paths.length === 0 || paths.length > MAX_FILES) return false;
+  return paths.every((path) => {
+    const file = value[path];
+    return htmlEntrypoint(path) || (string(path, 256) && !path.includes("\\") && !path.split("/").includes(".."))
+      ? file
+        && exactKeys(file, ["sha256", "bytes"])
+        && digest(file.sha256)
+        && Number.isSafeInteger(file.bytes)
+        && file.bytes > 0
+        && file.bytes <= MAX_PACKAGE_BYTES
+      : false;
+  });
+}
+
+function listing(value) {
+  if (!value || !string(value.author, 128)
+      || !string(value.spdxLicense, 64)
+      || !/^[A-Za-z0-9][A-Za-z0-9.+-]{0,63}$/u.test(value.spdxLicense)
+      || !httpsUrl(value.sourceUrl)
+      || !locale(value.defaultLocale)
+      || !Array.isArray(value.localizations)
+      || value.localizations.length === 0
+      || value.localizations.length > MAX_LISTING_LOCALES) return false;
   const listed = new Set();
-  for (const entry of localized) {
+  for (const entry of value.localizations) {
     if (!entry || !locale(entry.locale) || listed.has(entry.locale)
         || !string(entry.name, 128) || !string(entry.description, 512)) return false;
     listed.add(entry.locale);
   }
-  return available.every((entry) => listed.has(entry));
-}
-
-function games(value) {
-  if (!Array.isArray(value) || value.length > 32) return false;
-  const ids = new Set();
-  return value.every((game) => {
-    if (!game || game.platform !== "steam" || typeof game.id !== "string") return false;
-    const id = Number(game.id);
-    return Number.isInteger(id) && id > 0 && id <= 4294967295
-      && String(id) === game.id && !ids.has(game.id) && Boolean(ids.add(game.id));
-  });
-}
-
-function dependencies(value) {
-  if (!Array.isArray(value) || value.length > 32) return false;
-  const ids = new Set();
-  return value.every((dependency) => dependency
-    && extensionId(dependency.id)
-    && version(dependency.version)
-    && digest(dependency.sha256)
-    && !ids.has(dependency.id)
-    && Boolean(ids.add(dependency.id)));
+  return listed.has(value.defaultLocale);
 }
 
 function preview(value, manifest) {
-  if (value === undefined) return true;
-  return manifest.kind !== "provider"
-    && value
+  if (value === undefined || value === null) return true;
+  return value
     && value.mediaType === "image/png"
     && Number.isSafeInteger(value.size)
     && value.size > 0
-    && value.size <= 256 * 1024
+    && value.size <= MAX_PREVIEW_BYTES
     && digest(value.sha256)
     && value.url === immutableObjectUrl("previews", manifest, value.sha256, "png");
 }
 
 function target(value) {
   const manifest = value && value.manifest;
-  const listing = value && value.listing;
-  if (!value || !manifest || !listing) return false;
+  const listed = value && value.listing;
+  if (!value || !manifest || !listed) return false;
   if (!["verified", "security-suspended", "revoked"].includes(value.status)) return false;
   if (manifest.schemaVersion !== 1 || !extensionId(manifest.id)
       || !version(manifest.version)
-      || !["widget", "bundle", "provider"].includes(manifest.kind)
       || manifest.apiVersion !== "1") return false;
-  if (!locales(manifest, listing) || !games(manifest.games)
-      || !dependencies(manifest.dependencies) || !capabilities(manifest.capabilities)) return false;
-  if (!string(listing.author, 128)
-      || !string(listing.spdxLicense, 64)
-      || !/^[A-Za-z0-9][A-Za-z0-9.+-]{0,63}$/u.test(listing.spdxLicense)
-      || !httpsUrl(listing.sourceUrl)) return false;
+  if (manifest.kind !== undefined
+      || manifest.capabilities !== undefined
+      || manifest.dependencies !== undefined
+      || manifest.games !== undefined
+      || manifest.minHostApi !== undefined
+      || manifest.files?.component !== undefined) return false;
+  if (!manifest.entrypoints || !htmlEntrypoint(manifest.entrypoints.view)) return false;
+  if (manifest.entrypoints.controller !== undefined
+      && !htmlEntrypoint(manifest.entrypoints.controller)) return false;
+  if (!permissions(manifest.permissions) || !files(manifest.files)) return false;
+  if (!manifest.files[manifest.entrypoints.view]) return false;
+  if (manifest.entrypoints.controller
+      && !manifest.files[manifest.entrypoints.controller]) return false;
+  if (!listing(listed)) return false;
   return Number.isSafeInteger(value.packageSize)
     && value.packageSize > 0
-    && value.packageSize <= 16 * 1024 * 1024
+    && value.packageSize <= MAX_PACKAGE_BYTES
     && digest(value.packageSha256)
-    && value.minHostApi === 1
-    && value.maxHostApi === 1
     && value.packageUrl === immutableObjectUrl("packages", manifest, value.packageSha256, "ocpkg")
     && preview(value.preview, manifest);
 }
 
 function timestamp(value) {
   return string(value, 40) && Number.isFinite(Date.parse(value));
-}
-
-function validateDependencies(targets, byId) {
-  const edges = new Map();
-  for (const item of targets) {
-    const dependenciesForTarget = [];
-    for (const dependency of item.manifest.dependencies) {
-      const provider = byId.get(dependency.id);
-      if (!provider
-          || provider.manifest.kind !== "provider"
-          || provider.status !== "verified"
-          || provider.manifest.version !== dependency.version
-          || provider.packageSha256 !== dependency.sha256) throw new Error("dependency");
-      dependenciesForTarget.push(provider);
-    }
-    edges.set(item.manifest.id, dependenciesForTarget);
-  }
-  const active = new Set();
-  const complete = new Set();
-  function visit(item) {
-    if (active.has(item.manifest.id)) throw new Error("dependency");
-    if (complete.has(item.manifest.id)) return;
-    active.add(item.manifest.id);
-    for (const dependency of edges.get(item.manifest.id)) visit(dependency);
-    active.delete(item.manifest.id);
-    complete.add(item.manifest.id);
-  }
-  for (const item of targets) visit(item);
 }
 
 function validate(text) {
@@ -304,51 +282,31 @@ function validate(text) {
     if (byId.has(item.manifest.id)) throw new Error("target");
     byId.set(item.manifest.id, item);
   }
-  validateDependencies(payload.targets, byId);
   return payload.targets;
 }
 
 function localized(item) {
   return item.listing.localizations.find((text) => text.locale === state.locale)
-    || item.listing.localizations.find((text) => text.locale === "en");
-}
-
-function dependencyClosure(item) {
-  const entries = [item];
-  const included = new Set([item.manifest.id]);
-  for (let index = 0; index < entries.length; index += 1) {
-    for (const dependency of entries[index].manifest.dependencies) {
-      if (!included.has(dependency.id)) {
-        included.add(dependency.id);
-        entries.push(state.targets.find((candidate) => candidate.manifest.id === dependency.id));
-      }
-    }
-  }
-  return entries;
+    || item.listing.localizations.find((text) => text.locale === "en")
+    || item.listing.localizations.find((text) => text.locale === item.listing.defaultLocale)
+    || item.listing.localizations[0];
 }
 
 function details(item) {
   const languageCopy = copy[state.locale];
-  const entries = dependencyClosure(item);
-  const capabilitySet = entries.map((entry) => entry.manifest.capabilities);
-  const hosts = [...new Set(capabilitySet.flatMap((value) => value.http))];
+  const granted = item.manifest.permissions || {};
   const values = [];
-  const dependencyNames = entries.slice(1).map((dependency) => localized(dependency).name);
-  if (dependencyNames.length === 0) {
-    values.push(languageCopy.standalone);
-  } else {
-    const label = dependencyNames.length === 1
-      ? languageCopy.dependency
-      : languageCopy.dependencies;
-    values.push(`${label}: ${dependencyNames.join(", ")}`);
-  }
+  const hosts = [...new Set((granted.network || []).map((grant) => {
+    try {
+      return new URL(grant.origin).host;
+    } catch {
+      return grant.origin;
+    }
+  }))];
   if (hosts.length) values.push(`${languageCopy.http}: ${hosts.join(", ")}`);
-  if (capabilitySet.some((value) => value.gameData.includes("overcrow.session.v1"))) {
-    values.push(languageCopy.session);
-  }
-  if (capabilitySet.some((value) => value.storage)) values.push(languageCopy.storage);
-  if (capabilitySet.some((value) => value.clipboardWrite)) values.push(languageCopy.clipboard);
-  if (capabilitySet.some((value) => value.provider)) values.push(languageCopy.provider);
+  if ((granted.gameEvents || []).length) values.push(languageCopy.events);
+  if (granted.storage) values.push(languageCopy.storage);
+  if (granted.clipboardWrite) values.push(languageCopy.clipboard);
   return values;
 }
 
@@ -356,13 +314,6 @@ function textElement(tag, value) {
   const element = document.createElement(tag);
   element.textContent = value;
   return element;
-}
-
-function gameScope(item, languageCopy) {
-  const ids = item.manifest.games.map((game) => game.id);
-  if (ids.length === 0) return `${languageCopy.gameScope} ${languageCopy.allGames}`;
-  const label = ids.length === 1 ? languageCopy.steamApp : languageCopy.steamApps;
-  return `${label} ${ids.join(", ")}`;
 }
 
 function statusLabel(status, languageCopy) {
@@ -383,14 +334,14 @@ function card(item) {
     image.setAttribute("alt", "");
     element.append(image);
   }
+  const locales = item.listing.localizations.map((entry) => entry.locale).join(", ");
   element.append(
     textElement("h2", text.name),
     textElement("p", text.description),
     textElement("p", `${languageCopy.version} ${item.manifest.version}`),
     textElement("p", `${languageCopy.author} ${item.listing.author}`),
     textElement("p", `${languageCopy.license} ${item.listing.spdxLicense}`),
-    textElement("p", `${languageCopy.languages} ${item.manifest.availableLocales.join(", ")}`),
-    textElement("p", gameScope(item, languageCopy)),
+    textElement("p", `${languageCopy.languages} ${locales}`),
   );
   const source = document.createElement("a");
   source.textContent = `${languageCopy.source} ${item.listing.sourceUrl}`;
@@ -405,9 +356,7 @@ function card(item) {
 function render() {
   catalog.textContent = "";
   trust.textContent = policy.labels[state.locale];
-  for (const item of state.targets) {
-    if (item.manifest.kind !== "provider") catalog.append(card(item));
-  }
+  for (const item of state.targets) catalog.append(card(item));
 }
 
 function unavailable() {
