@@ -1,638 +1,224 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::File,
-    io::{Read, Write as _},
-    os::unix::{ffi::OsStrExt as _, fs::MetadataExt as _, fs::PermissionsExt as _},
-    path::Path,
+    error::Error,
+    fmt, fs,
+    path::{Path, PathBuf},
 };
 
-use image::{ImageDecoder as _, ImageFormat, ImageReader, Limits};
-use rustix::{
-    fd::OwnedFd,
-    fs::{
-        AtFlags, CWD, FlockOperation, Mode, OFlags, RenameFlags, ResolveFlags, fchmod, flock,
-        fsync, mkdirat, openat, openat2, renameat, renameat_with, unlinkat,
-    },
-};
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
-use crate::metadata::{
-    TargetSpec, ValidatedMetadata, inspect_component_for_api, validate_metadata,
-};
-
-const MAX_PACKAGE_BYTES: usize = 16 * 1024 * 1024;
-const MAX_ENTRIES: usize = 64;
 const UTF8_FLAG: u16 = 1 << 11;
 const DOS_DATE_1980_01_01: u16 = 33;
 const REGULAR_MODE: u32 = 0o100644;
-const MAX_DECODED_ASSET_BYTES: usize = 32 * 1024 * 1024;
+const MAX_FILES: usize = 4096;
+const MAX_PACKAGE_BYTES: usize = 128 * 1024 * 1024;
+const NATIVE_SUFFIXES: &[&str] = &[".wasm", ".so", ".dll", ".dylib", ".exe", ".node"];
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PackageCode {
-    UnsafeSource,
-    EntrySize,
-    UnsafePath,
-    ArchiveSize,
-    EntryLimit,
-    Metadata,
-    Component,
-    Digest,
-    Asset,
-    Preview,
+#[derive(Clone, Debug)]
+pub struct WrittenPackage {
+    pub path: PathBuf,
+    pub digest: [u8; 32],
 }
 
-pub(crate) struct PackageArtifact {
-    metadata: ValidatedMetadata,
-    archive: Vec<u8>,
-    archive_sha256: String,
-    preview: Option<Vec<u8>>,
+#[derive(Clone, Debug)]
+pub struct InspectedManifest {
+    pub id: String,
+    pub version: String,
 }
 
-pub(crate) struct PublisherOutput {
-    directory: File,
+#[derive(Debug)]
+pub struct PackageError {
+    message: &'static str,
 }
 
-impl PublisherOutput {
-    pub(crate) fn open(repository: &Path) -> Result<Self, PackageCode> {
-        let repository = SourceDirectory::open(repository)?;
-        let public = ensure_directory(&repository.0, "public")?;
-        let marketplace = ensure_directory(&public, "marketplace")?;
-        let directory = ensure_directory(&marketplace, "v1")?;
-        flock(&directory, FlockOperation::NonBlockingLockExclusive)
-            .map_err(|_| PackageCode::UnsafeSource)?;
-        Ok(Self { directory })
-    }
-
-    pub(crate) fn publish_objects(&self, packages: &[PackageArtifact]) -> Result<(), PackageCode> {
-        let package_root = ensure_directory(&self.directory, "packages")?;
-        let preview_root = ensure_directory(&self.directory, "previews")?;
-        for package in packages {
-            let manifest = package.metadata().manifest();
-            let id = ensure_directory(&package_root, manifest.id())?;
-            let version = ensure_directory(&id, manifest.version())?;
-            let package_name = format!("{}.ocpkg", package.archive_sha256());
-            write_object(&version, &package_name, package.archive())?;
-            if let Some(preview) = package.preview() {
-                let id = ensure_directory(&preview_root, manifest.id())?;
-                let version = ensure_directory(&id, manifest.version())?;
-                let preview_name = format!("{}.png", crate::lower_hex(&crate::sha256(preview)));
-                write_object(&version, &preview_name, preview)?;
-            }
-        }
-        Ok(())
-    }
-
-    pub(crate) fn publish_catalog(&self, bytes: &[u8]) -> Result<(), PackageCode> {
-        if bytes.is_empty() || bytes.len() > 1024 * 1024 {
-            return Err(PackageCode::ArchiveSize);
-        }
-        write_atomic(&self.directory, "catalog.json", bytes)
+impl fmt::Display for PackageError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.message)
     }
 }
 
-impl PackageArtifact {
-    pub(crate) fn metadata(&self) -> &ValidatedMetadata {
-        &self.metadata
-    }
+impl Error for PackageError {}
 
-    pub(crate) fn archive(&self) -> &[u8] {
-        &self.archive
-    }
-
-    pub(crate) fn archive_sha256(&self) -> &str {
-        &self.archive_sha256
-    }
-
-    pub(crate) fn preview(&self) -> Option<&[u8]> {
-        self.preview.as_deref()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn fixture(
-        metadata: ValidatedMetadata,
-        archive: Vec<u8>,
-        preview: Option<Vec<u8>>,
-    ) -> Self {
-        let archive_sha256 = crate::lower_hex(&crate::sha256(&archive));
-        Self {
-            metadata,
-            archive,
-            archive_sha256,
-            preview,
-        }
-    }
+const fn error(message: &'static str) -> PackageError {
+    PackageError { message }
 }
 
-struct SourceDirectory(OwnedFd);
-
-impl SourceDirectory {
-    fn open(path: &Path) -> Result<Self, PackageCode> {
-        if !normalized_absolute(path) {
-            return Err(PackageCode::UnsafeSource);
-        }
-        let descriptor = openat2(
-            CWD,
-            path,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
-            Mode::empty(),
-            ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS,
-        )
-        .map_err(|_| PackageCode::UnsafeSource)?;
-        Self::from_descriptor(descriptor)
-    }
-
-    fn beneath(repository: &Path, relative: &str) -> Result<Self, PackageCode> {
-        let repository = Self::open(repository)?;
-        let descriptor = openat2(
-            &repository.0,
-            relative,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
-            Mode::empty(),
-            ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS,
-        )
-        .map_err(|_| PackageCode::UnsafeSource)?;
-        Self::from_descriptor(descriptor)
-    }
-
-    fn from_descriptor(descriptor: OwnedFd) -> Result<Self, PackageCode> {
-        let directory = File::from(descriptor);
-        if !crate::owned_directory_is_safe(&directory, false) {
-            return Err(PackageCode::UnsafeSource);
-        }
-        Ok(Self(directory.into()))
-    }
-
-    fn read(&self, relative: &str, maximum: usize) -> Result<Vec<u8>, PackageCode> {
-        self.read_with_mode(relative, maximum, None)
-    }
-
-    fn read_with_mode(
-        &self,
-        relative: &str,
-        maximum: usize,
-        expected_mode: Option<u32>,
-    ) -> Result<Vec<u8>, PackageCode> {
-        if !valid_entry_path(relative) {
-            return Err(PackageCode::UnsafeSource);
-        }
-        let descriptor = openat2(
-            &self.0,
-            relative,
-            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
-            Mode::empty(),
-            ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS,
-        )
-        .map_err(|_| PackageCode::UnsafeSource)?;
-        read_descriptor(descriptor, maximum, expected_mode)
-    }
+#[derive(Deserialize)]
+struct WireManifest {
+    #[serde(rename = "schemaVersion")]
+    schema_version: u32,
+    id: String,
+    version: String,
+    #[serde(rename = "apiVersion")]
+    api_version: String,
+    entrypoints: WireEntrypoints,
+    files: BTreeMap<String, WireFile>,
 }
 
-pub(crate) fn read_source_file(
+#[derive(Deserialize)]
+struct WireEntrypoints {
+    view: String,
+}
+
+#[derive(Deserialize)]
+struct WireFile {
+    sha256: String,
+    bytes: u64,
+}
+
+pub fn write_package(source: &Path, destination: &Path) -> Result<WrittenPackage, PackageError> {
+    let entries = collect_entries(source)?;
+    let archive = build_stored_archive(&entries)?;
+    fs::write(destination, &archive).map_err(|_| error("unable to write package"))?;
+    inspect_bytes(&archive)?;
+    Ok(WrittenPackage {
+        path: destination.to_path_buf(),
+        digest: sha256(&archive),
+    })
+}
+
+pub fn inspect(path: &Path) -> Result<InspectedManifest, PackageError> {
+    let bytes = fs::read(path).map_err(|_| error("unable to read package"))?;
+    inspect_bytes(&bytes)
+}
+
+pub fn inspect_bytes(archive: &[u8]) -> Result<InspectedManifest, PackageError> {
+    if archive.len() > MAX_PACKAGE_BYTES {
+        return Err(error("package too large"));
+    }
+    let files = parse_stored_zip(archive)?;
+    let manifest_bytes = files
+        .get("manifest.json")
+        .ok_or_else(|| error("missing manifest.json"))?;
+    let manifest: WireManifest =
+        serde_json::from_slice(manifest_bytes).map_err(|_| error("invalid manifest"))?;
+    validate_manifest(&manifest, &files)?;
+    Ok(InspectedManifest {
+        id: manifest.id,
+        version: manifest.version,
+    })
+}
+
+fn collect_entries(source: &Path) -> Result<BTreeMap<String, Vec<u8>>, PackageError> {
+    let manifest_bytes =
+        fs::read(source.join("manifest.json")).map_err(|_| error("missing manifest.json"))?;
+    let manifest: WireManifest =
+        serde_json::from_slice(&manifest_bytes).map_err(|_| error("invalid manifest"))?;
+    let mut actual = BTreeSet::new();
+    collect_paths(source, "", &mut actual)?;
+    let mut expected = BTreeSet::from(["manifest.json".to_owned()]);
+    expected.extend(manifest.files.keys().cloned());
+    if actual != expected {
+        return Err(error("file inventory mismatch"));
+    }
+    let mut entries = BTreeMap::new();
+    for (path, declared) in &manifest.files {
+        let bytes = fs::read(source.join(path)).map_err(|_| error("missing declared file"))?;
+        if u64::try_from(bytes.len()).ok() != Some(declared.bytes)
+            || sha256_hex(&sha256(&bytes)) != declared.sha256
+        {
+            return Err(error("file inventory mismatch"));
+        }
+        if native_file(path, &bytes) {
+            return Err(error("native files are unsupported"));
+        }
+        entries.insert(path.clone(), bytes);
+    }
+    entries.insert("manifest.json".to_owned(), manifest_bytes);
+    validate_manifest(&manifest, &entries)?;
+    Ok(entries)
+}
+
+fn collect_paths(
     root: &Path,
-    relative: &str,
-    maximum: usize,
-) -> Result<Vec<u8>, PackageCode> {
-    SourceDirectory::open(root)?.read(relative, maximum)
-}
-
-pub(crate) fn validate_source_directory(
-    repository: &Path,
-    relative: &str,
-) -> Result<(), PackageCode> {
-    SourceDirectory::beneath(repository, relative).map(|_| ())
-}
-
-pub(crate) fn read_private_file(path: &Path, maximum: usize) -> Result<Vec<u8>, PackageCode> {
-    if !normalized_absolute(path) {
-        return Err(PackageCode::UnsafeSource);
-    }
-    let parent = path.parent().ok_or(PackageCode::UnsafeSource)?;
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or(PackageCode::UnsafeSource)?;
-    SourceDirectory::open(parent)?.read_with_mode(name, maximum, Some(0o600))
-}
-
-pub(crate) fn replace_source_file(
-    repository: &Path,
-    source_directory: &str,
-    name: &str,
-    bytes: &[u8],
-) -> Result<(), PackageCode> {
-    if bytes.is_empty() || bytes.len() > 64 * 1024 {
-        return Err(PackageCode::EntrySize);
-    }
-    let source = SourceDirectory::beneath(repository, source_directory)?;
-    source.read(name, 64 * 1024)?;
-    let directory = File::from(source.0);
-    write_atomic(&directory, name, bytes)
-}
-
-fn read_descriptor(
-    descriptor: OwnedFd,
-    maximum: usize,
-    expected_mode: Option<u32>,
-) -> Result<Vec<u8>, PackageCode> {
-    let file = File::from(descriptor);
-    let metadata = file.metadata().map_err(|_| PackageCode::UnsafeSource)?;
-    let mode = metadata.permissions().mode() & 0o7777;
-    if !metadata.is_file()
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.nlink() != 1
-        || metadata.permissions().mode() & 0o022 != 0
-        || expected_mode.is_some_and(|expected| mode != expected)
-    {
-        return Err(PackageCode::UnsafeSource);
-    }
-    let length = usize::try_from(metadata.len())
-        .ok()
-        .filter(|length| *length <= maximum)
-        .ok_or(PackageCode::EntrySize)?;
-    let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(length)
-        .map_err(|_| PackageCode::EntrySize)?;
-    file.take(maximum.saturating_add(1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|_| PackageCode::UnsafeSource)?;
-    if bytes.len() > maximum || bytes.len() != length {
-        return Err(PackageCode::EntrySize);
-    }
-    Ok(bytes)
-}
-
-fn ensure_directory(parent: &impl std::os::fd::AsFd, name: &str) -> Result<File, PackageCode> {
-    if !valid_segment(name) {
-        return Err(PackageCode::UnsafePath);
-    }
-    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW;
-    let descriptor = match openat(parent, name, flags, Mode::empty()) {
-        Ok(descriptor) => descriptor,
-        Err(error) if error == rustix::io::Errno::NOENT => {
-            mkdirat(
-                parent,
-                name,
-                Mode::RUSR
-                    | Mode::WUSR
-                    | Mode::XUSR
-                    | Mode::RGRP
-                    | Mode::XGRP
-                    | Mode::ROTH
-                    | Mode::XOTH,
-            )
-            .map_err(|_| PackageCode::UnsafeSource)?;
-            fsync(parent).map_err(|_| PackageCode::UnsafeSource)?;
-            openat(parent, name, flags, Mode::empty()).map_err(|_| PackageCode::UnsafeSource)?
-        }
-        Err(_) => return Err(PackageCode::UnsafeSource),
+    prefix: &str,
+    output: &mut BTreeSet<String>,
+) -> Result<(), PackageError> {
+    let current = if prefix.is_empty() {
+        root.to_path_buf()
+    } else {
+        root.join(prefix)
     };
-    let directory = File::from(descriptor);
-    if !crate::owned_directory_is_safe(&directory, false) {
-        return Err(PackageCode::UnsafeSource);
-    }
-    Ok(directory)
-}
-
-fn write_object(directory: &File, name: &str, bytes: &[u8]) -> Result<(), PackageCode> {
-    if !valid_segment(name) {
-        return Err(PackageCode::UnsafePath);
-    }
-    let temporary_name = format!(".{name}.tmp");
-    stage_object(directory, &temporary_name, bytes)?;
-    let result = match renameat_with(
-        directory,
-        &temporary_name,
-        directory,
-        name,
-        RenameFlags::NOREPLACE,
-    ) {
-        Ok(()) => Ok(()),
-        Err(error) if error == rustix::io::Errno::EXIST => compare_existing(directory, name, bytes),
-        Err(_) => Err(PackageCode::UnsafeSource),
-    }
-    .and_then(|()| fsync(directory).map_err(|_| PackageCode::UnsafeSource));
-    let _ = unlinkat(directory, &temporary_name, AtFlags::empty());
-    result
-}
-
-fn stage_object(directory: &File, temporary_name: &str, bytes: &[u8]) -> Result<(), PackageCode> {
-    match openat(
-        directory,
-        temporary_name,
-        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
-        Mode::empty(),
-    ) {
-        Ok(descriptor) => {
-            validate_staging_file(&File::from(descriptor))?;
-            unlinkat(directory, temporary_name, AtFlags::empty())
-                .map_err(|_| PackageCode::UnsafeSource)?;
+    let mut names = fs::read_dir(&current)
+        .map_err(|_| error("unsafe source"))?
+        .map(|entry| entry.map_err(|_| error("unsafe source")))
+        .collect::<Result<Vec<_>, _>>()?;
+    names.sort_by_key(|entry| entry.file_name());
+    for entry in names {
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| error("unsafe source"))?;
+        if name == "." || name == ".." || name == "listing.json" {
+            continue;
         }
-        Err(error) if error == rustix::io::Errno::NOENT => {}
-        Err(_) => return Err(PackageCode::UnsafeSource),
-    }
-
-    let descriptor = openat(
-        directory,
-        temporary_name,
-        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-        Mode::RUSR | Mode::WUSR,
-    )
-    .map_err(|_| PackageCode::UnsafeSource)?;
-    let mut file = File::from(descriptor);
-    let result = (|| {
-        validate_file_mode(&file, 0o600)?;
-        file.write_all(bytes)
-            .and_then(|()| file.sync_all())
-            .map_err(|_| PackageCode::UnsafeSource)?;
-        fchmod(&file, Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::ROTH)
-            .map_err(|_| PackageCode::UnsafeSource)?;
-        file.sync_all().map_err(|_| PackageCode::UnsafeSource)?;
-        validate_public_file(&file)
-    })();
-    if result.is_err() {
-        let _ = unlinkat(directory, temporary_name, AtFlags::empty());
-        return Err(PackageCode::UnsafeSource);
+        let relative = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}/{name}")
+        };
+        if !valid_entry_path(&relative) {
+            return Err(error("unsafe source"));
+        }
+        let file_type = entry.file_type().map_err(|_| error("unsafe source"))?;
+        if file_type.is_symlink() {
+            return Err(error("unsafe source"));
+        }
+        if file_type.is_dir() {
+            collect_paths(root, &relative, output)?;
+        } else if file_type.is_file() {
+            if output.len() >= MAX_FILES || !output.insert(relative) {
+                return Err(error("file inventory mismatch"));
+            }
+        } else {
+            return Err(error("unsafe source"));
+        }
     }
     Ok(())
 }
 
-fn compare_existing(directory: &File, name: &str, expected: &[u8]) -> Result<(), PackageCode> {
-    let descriptor = openat(
-        directory,
-        name,
-        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
-        Mode::empty(),
-    )
-    .map_err(|_| PackageCode::UnsafeSource)?;
-    let file = File::from(descriptor);
-    validate_public_file(&file)?;
-    let metadata = file.metadata().map_err(|_| PackageCode::UnsafeSource)?;
-    if metadata.len() != expected.len() as u64 {
-        return Err(PackageCode::UnsafeSource);
+fn validate_manifest(
+    manifest: &WireManifest,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<(), PackageError> {
+    if manifest.schema_version != 1 || manifest.api_version != "1" || manifest.id.is_empty() {
+        return Err(error("invalid manifest"));
     }
-    let mut actual = Vec::new();
-    actual
-        .try_reserve_exact(expected.len())
-        .map_err(|_| PackageCode::EntrySize)?;
-    file.take(expected.len().saturating_add(1) as u64)
-        .read_to_end(&mut actual)
-        .map_err(|_| PackageCode::UnsafeSource)?;
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(PackageCode::UnsafeSource)
-    }
-}
-
-fn write_atomic(directory: &File, final_name: &str, bytes: &[u8]) -> Result<(), PackageCode> {
-    let temporary_name = format!(".catalog.{}.tmp", std::process::id());
-    let descriptor = openat(
-        directory,
-        &temporary_name,
-        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-        Mode::RUSR | Mode::WUSR,
-    )
-    .map_err(|_| PackageCode::UnsafeSource)?;
-    let mut temporary = File::from(descriptor);
-    let result = (|| {
-        validate_file_mode(&temporary, 0o600)?;
-        temporary
-            .write_all(bytes)
-            .and_then(|()| temporary.sync_all())
-            .map_err(|_| PackageCode::UnsafeSource)?;
-        fchmod(
-            &temporary,
-            Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::ROTH,
-        )
-        .map_err(|_| PackageCode::UnsafeSource)?;
-        temporary
-            .sync_all()
-            .map_err(|_| PackageCode::UnsafeSource)?;
-        validate_public_file(&temporary)?;
-        renameat(directory, &temporary_name, directory, final_name)
-            .map_err(|_| PackageCode::UnsafeSource)?;
-        fsync(directory).map_err(|_| PackageCode::UnsafeSource)
-    })();
-    if result.is_err() {
-        let _ = unlinkat(directory, &temporary_name, AtFlags::empty());
-    }
-    result
-}
-
-fn validate_public_file(file: &File) -> Result<(), PackageCode> {
-    validate_file_mode(file, 0o644)
-}
-
-fn validate_staging_file(file: &File) -> Result<(), PackageCode> {
-    let metadata = file.metadata().map_err(|_| PackageCode::UnsafeSource)?;
-    let mode = metadata.permissions().mode() & 0o7777;
-    if metadata.is_file()
-        && metadata.uid() == rustix::process::geteuid().as_raw()
-        && metadata.nlink() == 1
-        && matches!(mode, 0o600 | 0o644)
+    if !manifest.entrypoints.view.ends_with(".html")
+        || !manifest.files.contains_key(&manifest.entrypoints.view)
     {
-        Ok(())
-    } else {
-        Err(PackageCode::UnsafeSource)
+        return Err(error("invalid manifest"));
     }
-}
-
-fn validate_file_mode(file: &File, mode: u32) -> Result<(), PackageCode> {
-    let metadata = file.metadata().map_err(|_| PackageCode::UnsafeSource)?;
-    if metadata.is_file()
-        && metadata.uid() == rustix::process::geteuid().as_raw()
-        && metadata.nlink() == 1
-        && metadata.permissions().mode() & 0o7777 == mode
-    {
-        Ok(())
-    } else {
-        Err(PackageCode::UnsafeSource)
+    let mut declared = BTreeSet::from(["manifest.json".to_owned()]);
+    declared.extend(manifest.files.keys().cloned());
+    if declared.len() != files.len() || files.keys().any(|path| !declared.contains(path)) {
+        return Err(error("file inventory mismatch"));
     }
-}
-
-fn valid_segment(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 192
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-        && !matches!(name, "." | "..")
-}
-
-pub(crate) fn build_package(
-    repository: &Path,
-    target: &TargetSpec,
-) -> Result<PackageArtifact, PackageCode> {
-    let source = SourceDirectory::beneath(repository, target.source_directory())?;
-    let manifest_bytes = source.read("manifest.json", 64 * 1024)?;
-    let listing_bytes = source.read("listing.json", 64 * 1024)?;
-    let metadata =
-        validate_metadata(&manifest_bytes, &listing_bytes).map_err(|_| PackageCode::Metadata)?;
-
-    let mut files = BTreeMap::from([("manifest.json".to_owned(), manifest_bytes)]);
-    let component = read_declared(
-        &source,
-        metadata.manifest().files().component(),
-        4 * 1024 * 1024,
-    )?;
-    inspect_component_for_api(&component, metadata.manifest().api_version())
-        .map_err(|_| PackageCode::Component)?;
-    files.insert("component.wasm".to_owned(), component);
-
-    for file in metadata.manifest().files().locales().values() {
-        let bytes = read_declared(&source, file, 64 * 1024)?;
-        files.insert(file.path().to_owned(), bytes);
-    }
-    let mut asset_total = 0usize;
-    let mut decoded_asset_total = 0usize;
-    for file in metadata.manifest().files().assets().values() {
-        let bytes = read_declared(&source, file, 2 * 1024 * 1024)?;
-        asset_total = asset_total
-            .checked_add(bytes.len())
-            .filter(|total| *total <= 8 * 1024 * 1024)
-            .ok_or(PackageCode::EntrySize)?;
-        let decoded = validate_png(&bytes, 2_048).map_err(|_| PackageCode::Asset)?;
-        decoded_asset_total = decoded_asset_total
-            .checked_add(decoded)
-            .filter(|total| *total <= MAX_DECODED_ASSET_BYTES)
-            .ok_or(PackageCode::Asset)?;
-        files.insert(file.path().to_owned(), bytes);
-    }
-    let preview = metadata
-        .preview_file()
-        .map(|path| {
-            if let Some(bytes) = files.get(path) {
-                return Ok(bytes.clone());
-            }
-            source.read(path, 256 * 1024)
-        })
-        .transpose()?;
-    if let Some(bytes) = preview.as_deref() {
-        if bytes.is_empty() || bytes.len() > 256 * 1024 {
-            return Err(PackageCode::Preview);
-        }
-        validate_png(bytes, 1_024).map_err(|_| PackageCode::Preview)?;
-    }
-    let archive = build_stored_archive(&files)?;
-    let archive_sha256 = crate::lower_hex(&crate::sha256(&archive));
-    Ok(PackageArtifact {
-        metadata,
-        archive,
-        archive_sha256,
-        preview,
-    })
-}
-
-fn read_declared(
-    source: &SourceDirectory,
-    declared: &crate::metadata::DeclaredFile,
-    maximum: usize,
-) -> Result<Vec<u8>, PackageCode> {
-    let bytes = source.read(declared.path(), maximum)?;
-    if crate::lower_hex(&crate::sha256(&bytes)) != declared.sha256() {
-        return Err(PackageCode::Digest);
-    }
-    Ok(bytes)
-}
-
-pub(crate) fn build_stored_archive(
-    entries: &BTreeMap<String, Vec<u8>>,
-) -> Result<Vec<u8>, PackageCode> {
-    if entries.is_empty() || entries.len() > MAX_ENTRIES {
-        return Err(PackageCode::EntryLimit);
-    }
-    let mut folded = BTreeSet::new();
-    for path in entries.keys() {
-        if !valid_entry_path(path) {
-            return Err(PackageCode::UnsafePath);
-        }
-        let lower = path.to_ascii_lowercase();
-        if folded.iter().any(|existing: &String| {
-            lower == *existing
-                || lower
-                    .strip_prefix(existing)
-                    .is_some_and(|suffix| suffix.starts_with('/'))
-                || existing
-                    .strip_prefix(&lower)
-                    .is_some_and(|suffix| suffix.starts_with('/'))
-        }) {
-            return Err(PackageCode::UnsafePath);
-        }
-        folded.insert(lower);
-    }
-
-    let mut archive = Vec::new();
-    let mut records = Vec::with_capacity(entries.len());
-    for (path, bytes) in entries {
-        let local_offset = u32::try_from(archive.len()).map_err(|_| PackageCode::ArchiveSize)?;
-        let size = u32::try_from(bytes.len()).map_err(|_| PackageCode::EntrySize)?;
-        let name_length = u16::try_from(path.len()).map_err(|_| PackageCode::UnsafePath)?;
-        let checksum = crc32fast::hash(bytes);
-        push_u32(&mut archive, 0x0403_4b50);
-        push_u16(&mut archive, 20);
-        push_u16(&mut archive, UTF8_FLAG);
-        push_u16(&mut archive, 0);
-        push_u16(&mut archive, 0);
-        push_u16(&mut archive, DOS_DATE_1980_01_01);
-        push_u32(&mut archive, checksum);
-        push_u32(&mut archive, size);
-        push_u32(&mut archive, size);
-        push_u16(&mut archive, name_length);
-        push_u16(&mut archive, 0);
-        archive.extend_from_slice(path.as_bytes());
-        archive.extend_from_slice(bytes);
-        records.push((path, size, checksum, local_offset));
-        if archive.len() > MAX_PACKAGE_BYTES {
-            return Err(PackageCode::ArchiveSize);
+    for (path, declared) in &manifest.files {
+        let bytes = files
+            .get(path)
+            .ok_or_else(|| error("file inventory mismatch"))?;
+        if u64::try_from(bytes.len()).ok() != Some(declared.bytes)
+            || sha256_hex(&sha256(bytes)) != declared.sha256
+            || native_file(path, bytes)
+        {
+            return Err(error("file inventory mismatch"));
         }
     }
+    Ok(())
+}
 
-    let central_offset = u32::try_from(archive.len()).map_err(|_| PackageCode::ArchiveSize)?;
-    for (path, size, checksum, local_offset) in records {
-        push_u32(&mut archive, 0x0201_4b50);
-        push_u16(&mut archive, (3 << 8) | 20);
-        push_u16(&mut archive, 20);
-        push_u16(&mut archive, UTF8_FLAG);
-        push_u16(&mut archive, 0);
-        push_u16(&mut archive, 0);
-        push_u16(&mut archive, DOS_DATE_1980_01_01);
-        push_u32(&mut archive, checksum);
-        push_u32(&mut archive, size);
-        push_u32(&mut archive, size);
-        push_u16(
-            &mut archive,
-            u16::try_from(path.len()).map_err(|_| PackageCode::UnsafePath)?,
-        );
-        push_u16(&mut archive, 0);
-        push_u16(&mut archive, 0);
-        push_u16(&mut archive, 0);
-        push_u16(&mut archive, 0);
-        push_u32(&mut archive, REGULAR_MODE << 16);
-        push_u32(&mut archive, local_offset);
-        archive.extend_from_slice(path.as_bytes());
-    }
-    let central_size = u32::try_from(archive.len())
-        .ok()
-        .and_then(|end| end.checked_sub(central_offset))
-        .ok_or(PackageCode::ArchiveSize)?;
-    let count = u16::try_from(entries.len()).map_err(|_| PackageCode::EntryLimit)?;
-    push_u32(&mut archive, 0x0605_4b50);
-    push_u16(&mut archive, 0);
-    push_u16(&mut archive, 0);
-    push_u16(&mut archive, count);
-    push_u16(&mut archive, count);
-    push_u32(&mut archive, central_size);
-    push_u32(&mut archive, central_offset);
-    push_u16(&mut archive, 0);
-    if archive.len() > MAX_PACKAGE_BYTES {
-        return Err(PackageCode::ArchiveSize);
-    }
-    Ok(archive)
+fn native_file(path: &str, contents: &[u8]) -> bool {
+    let lower = path.to_ascii_lowercase();
+    NATIVE_SUFFIXES.iter().any(|suffix| lower.ends_with(suffix))
+        || contents.starts_with(b"\0asm")
+        || contents.starts_with(b"\x7fELF")
+        || contents.starts_with(b"MZ")
 }
 
 fn valid_entry_path(path: &str) -> bool {
     !path.is_empty()
-        && path.len() <= 192
         && path.is_ascii()
         && !path.starts_with('/')
         && !path.contains('\\')
@@ -645,105 +231,155 @@ fn valid_entry_path(path: &str) -> bool {
         })
 }
 
-fn normalized_absolute(path: &Path) -> bool {
-    let bytes = path.as_os_str().as_bytes();
-    bytes.starts_with(b"/")
-        && bytes.len() > 1
-        && !bytes[1..]
-            .split(|byte| *byte == b'/')
-            .any(|segment| segment.is_empty() || matches!(segment, b"." | b".."))
+fn build_stored_archive(entries: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, PackageError> {
+    if entries.is_empty() || entries.len() > MAX_FILES {
+        return Err(error("package too large"));
+    }
+    let mut archive = Vec::new();
+    let mut records = Vec::with_capacity(entries.len());
+    for (path, bytes) in entries {
+        let offset = u32::try_from(archive.len()).map_err(|_| error("package too large"))?;
+        let size = u32::try_from(bytes.len()).map_err(|_| error("package too large"))?;
+        let checksum = crc32fast::hash(bytes);
+        push_u32(&mut archive, 0x0403_4b50);
+        push_u16(&mut archive, 20);
+        push_u16(&mut archive, UTF8_FLAG);
+        push_u16(&mut archive, 0);
+        push_u16(&mut archive, 0);
+        push_u16(&mut archive, DOS_DATE_1980_01_01);
+        push_u32(&mut archive, checksum);
+        push_u32(&mut archive, size);
+        push_u32(&mut archive, size);
+        push_u16(
+            &mut archive,
+            u16::try_from(path.len()).map_err(|_| error("invalid manifest"))?,
+        );
+        push_u16(&mut archive, 0);
+        archive.extend_from_slice(path.as_bytes());
+        archive.extend_from_slice(bytes);
+        records.push((path, size, checksum, offset));
+        if archive.len() > MAX_PACKAGE_BYTES {
+            return Err(error("package too large"));
+        }
+    }
+    let central_offset = u32::try_from(archive.len()).map_err(|_| error("package too large"))?;
+    for (path, size, checksum, offset) in records {
+        push_u32(&mut archive, 0x0201_4b50);
+        push_u16(&mut archive, (3 << 8) | 20);
+        push_u16(&mut archive, 20);
+        push_u16(&mut archive, UTF8_FLAG);
+        push_u16(&mut archive, 0);
+        push_u16(&mut archive, 0);
+        push_u16(&mut archive, DOS_DATE_1980_01_01);
+        push_u32(&mut archive, checksum);
+        push_u32(&mut archive, size);
+        push_u32(&mut archive, size);
+        push_u16(
+            &mut archive,
+            u16::try_from(path.len()).map_err(|_| error("invalid manifest"))?,
+        );
+        for _ in 0..4 {
+            push_u16(&mut archive, 0);
+        }
+        push_u32(&mut archive, REGULAR_MODE << 16);
+        push_u32(&mut archive, offset);
+        archive.extend_from_slice(path.as_bytes());
+    }
+    let central_size = u32::try_from(archive.len())
+        .ok()
+        .and_then(|end| end.checked_sub(central_offset))
+        .ok_or_else(|| error("package too large"))?;
+    let count = u16::try_from(entries.len()).map_err(|_| error("package too large"))?;
+    push_u32(&mut archive, 0x0605_4b50);
+    push_u16(&mut archive, 0);
+    push_u16(&mut archive, 0);
+    push_u16(&mut archive, count);
+    push_u16(&mut archive, count);
+    push_u32(&mut archive, central_size);
+    push_u32(&mut archive, central_offset);
+    push_u16(&mut archive, 0);
+    if archive.len() > MAX_PACKAGE_BYTES {
+        return Err(error("package too large"));
+    }
+    Ok(archive)
 }
 
-fn validate_png(encoded: &[u8], maximum_dimension: u32) -> Result<usize, ()> {
-    if !encoded.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return Err(());
-    }
-    let mut offset = 8usize;
-    let mut dimensions = None;
-    let mut saw_pixels = false;
-    let mut saw_palette = false;
-    let mut saw_transparency = false;
-    let mut saw_end = false;
-    while offset < encoded.len() {
-        let length = usize::try_from(read_be_u32(encoded, offset)?).map_err(|_| ())?;
-        let kind_offset = offset.checked_add(4).ok_or(())?;
-        let data_offset = kind_offset.checked_add(4).ok_or(())?;
-        let checksum_offset = data_offset.checked_add(length).ok_or(())?;
-        let end = checksum_offset
-            .checked_add(4)
-            .filter(|end| *end <= encoded.len())
-            .ok_or(())?;
-        let kind = encoded.get(kind_offset..data_offset).ok_or(())?;
-        let data = encoded.get(data_offset..checksum_offset).ok_or(())?;
-        if crc32fast::hash(encoded.get(kind_offset..checksum_offset).ok_or(())?)
-            != read_be_u32(encoded, checksum_offset)?
-        {
-            return Err(());
-        }
-        match kind {
-            b"IHDR" if offset == 8 && length == 13 && dimensions.is_none() => {
-                let width = read_be_u32(data, 0)?;
-                let height = read_be_u32(data, 4)?;
-                let rgba = u64::from(width)
-                    .checked_mul(u64::from(height))
-                    .and_then(|pixels| pixels.checked_mul(4))
-                    .filter(|bytes| *bytes <= 16 * 1024 * 1024)
-                    .ok_or(())?;
-                if width == 0
-                    || height == 0
-                    || width > maximum_dimension
-                    || height > maximum_dimension
-                {
-                    return Err(());
-                }
-                dimensions = Some((width, height, rgba));
-            }
-            b"PLTE"
-                if dimensions.is_some()
-                    && !saw_pixels
-                    && !saw_palette
-                    && !data.is_empty()
-                    && data.len() % 3 == 0 =>
-            {
-                saw_palette = true;
-            }
-            b"tRNS" if dimensions.is_some() && !saw_pixels && !saw_transparency => {
-                saw_transparency = true;
-            }
-            b"IDAT" if dimensions.is_some() => saw_pixels = true,
-            b"IEND" if length == 0 && saw_pixels && end == encoded.len() => {
-                saw_end = true;
-                break;
-            }
-            _ => return Err(()),
-        }
-        offset = end;
-    }
-    let (width, height, rgba) = dimensions.filter(|_| saw_end).ok_or(())?;
-    let mut limits = Limits::default();
-    limits.max_image_width = Some(maximum_dimension);
-    limits.max_image_height = Some(maximum_dimension);
-    limits.max_alloc = Some(rgba);
-    let mut reader = ImageReader::with_format(std::io::Cursor::new(encoded), ImageFormat::Png);
-    reader.limits(limits.clone());
-    let mut decoder = reader.into_decoder().map_err(|_| ())?;
-    decoder.set_limits(limits).map_err(|_| ())?;
-    if decoder.dimensions() != (width, height) || decoder.total_bytes() > rgba {
-        return Err(());
-    }
-    let decoded_size = usize::try_from(decoder.total_bytes()).map_err(|_| ())?;
-    let mut decoded = Vec::new();
-    decoded.try_reserve_exact(decoded_size).map_err(|_| ())?;
-    decoded.resize(decoded_size, 0);
-    decoder.read_image(&mut decoded).map_err(|_| ())?;
-    usize::try_from(rgba).map_err(|_| ())
+fn parse_stored_zip(archive: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, PackageError> {
+    inspect_bytes_via_writer_roundtrip(archive)
 }
 
-fn read_be_u32(bytes: &[u8], offset: usize) -> Result<u32, ()> {
-    let value = bytes
-        .get(offset..offset.checked_add(4).ok_or(())?)
-        .ok_or(())?;
-    Ok(u32::from_be_bytes([value[0], value[1], value[2], value[3]]))
+fn inspect_bytes_via_writer_roundtrip(
+    archive: &[u8],
+) -> Result<BTreeMap<String, Vec<u8>>, PackageError> {
+    if archive.len() < 22 {
+        return Err(error("invalid package"));
+    }
+    let end = archive.len() - 22;
+    if read_u32(archive, end)? != 0x0605_4b50 {
+        return Err(error("invalid package"));
+    }
+    let count = usize::from(read_u16(archive, end + 10)?);
+    let central_size = read_u32(archive, end + 12)? as usize;
+    let central_offset = read_u32(archive, end + 16)? as usize;
+    if central_offset.checked_add(central_size) != Some(end) || count > MAX_FILES {
+        return Err(error("invalid package"));
+    }
+    let mut files = BTreeMap::new();
+    let mut position = central_offset;
+    for _ in 0..count {
+        if read_u32(archive, position)? != 0x0201_4b50 {
+            return Err(error("invalid package"));
+        }
+        let method = read_u16(archive, position + 10)?;
+        if method != 0 {
+            return Err(error("compressed packages are unsupported"));
+        }
+        let name_length = usize::from(read_u16(archive, position + 28)?);
+        let size = read_u32(archive, position + 24)? as usize;
+        let local_offset = read_u32(archive, position + 42)? as usize;
+        let name = std::str::from_utf8(
+            archive
+                .get(position + 46..position + 46 + name_length)
+                .ok_or_else(|| error("invalid package"))?,
+        )
+        .map_err(|_| error("invalid package"))?
+        .to_owned();
+        if !valid_entry_path(&name) {
+            return Err(error("invalid package"));
+        }
+        let data_start = local_offset
+            .checked_add(30)
+            .and_then(|offset| offset.checked_add(name_length))
+            .ok_or_else(|| error("invalid package"))?;
+        let data = archive
+            .get(data_start..data_start + size)
+            .ok_or_else(|| error("invalid package"))?
+            .to_vec();
+        if native_file(&name, &data) && name != "manifest.json" {
+            return Err(error("native files are unsupported"));
+        }
+        if files.insert(name, data).is_some() {
+            return Err(error("duplicate package path"));
+        }
+        position = position
+            .checked_add(46 + name_length)
+            .ok_or_else(|| error("invalid package"))?;
+    }
+    Ok(files)
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, PackageError> {
+    let slice = bytes
+        .get(offset..offset + 2)
+        .ok_or_else(|| error("invalid package"))?;
+    Ok(u16::from_le_bytes([slice[0], slice[1]]))
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, PackageError> {
+    let slice = bytes
+        .get(offset..offset + 4)
+        .ok_or_else(|| error("invalid package"))?;
+    Ok(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
 }
 
 fn push_u16(output: &mut Vec<u8>, value: u16) {
@@ -754,186 +390,90 @@ fn push_u32(output: &mut Vec<u8>, value: u32) {
     output.extend_from_slice(&value.to_le_bytes());
 }
 
+fn sha256(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}
+
+pub fn sha256_hex(digest: &[u8; 32]) -> String {
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
+fn file_sha256_hex(bytes: &[u8]) -> String {
+    sha256_hex(&sha256(bytes))
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::BTreeMap,
-        fs::{File, Permissions},
-        os::unix::fs::{PermissionsExt as _, symlink},
-    };
+    use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
 
-    use super::{
-        PackageArtifact, PackageCode, PublisherOutput, build_stored_archive, read_source_file,
-        write_object,
-    };
-    use crate::metadata::validate_metadata;
-
-    const MANIFEST: &[u8] = include_bytes!("../../../examples/hello-widget/manifest.json");
-    const LISTING: &[u8] = br#"{
-        "author":"PlayerVox",
-        "spdxLicense":"AGPL-3.0-only",
-        "sourceUrl":"https://github.com/PlayerVox/playervox-overcrow-marketplace",
-        "localizations":[
-            {"locale":"en","name":"Hello","description":"Safe"},
-            {"locale":"fr","name":"Bonjour","description":"Safe French"}
-        ],
-        "previewFile":"preview.png"
-    }"#;
+    const VIEW: &[u8] = b"<!doctype html><p>hello</p>";
 
     #[test]
-    fn stored_archive_is_byte_reproducible_and_canonical() {
-        let entries = BTreeMap::from([
-            ("manifest.json".to_owned(), b"manifest".to_vec()),
-            ("component.wasm".to_owned(), b"component".to_vec()),
-        ]);
-        let first = build_stored_archive(&entries).expect("archive");
-        let second = build_stored_archive(&entries).expect("archive");
-        assert_eq!(first, second);
-
-        assert_eq!(&first[..4], b"PK\x03\x04");
-        assert_eq!(u16::from_le_bytes([first[6], first[7]]), 1 << 11);
-        assert_eq!(u16::from_le_bytes([first[8], first[9]]), 0);
-        assert_eq!(u16::from_le_bytes([first[10], first[11]]), 0);
-        assert_eq!(u16::from_le_bytes([first[12], first[13]]), 33);
-        assert!(first.windows(4).any(|bytes| bytes == b"PK\x01\x02"));
-        assert!(first.ends_with(&[0; 2]), "empty ZIP comment");
+    fn package_is_deterministic_and_inspectable() {
+        let source = fixture(&[("index.html", VIEW)]);
+        let first_dir = tempfile::tempdir().unwrap();
+        let second_dir = tempfile::tempdir().unwrap();
+        let first = first_dir.path().join("a.ocpkg");
+        let second = second_dir.path().join("b.ocpkg");
+        let written = write_package(source.path(), &first).unwrap();
+        write_package(source.path(), &second).unwrap();
+        assert_eq!(fs::read(&first).unwrap(), fs::read(&second).unwrap());
+        let inspected = inspect(&first).unwrap();
+        assert_eq!(inspected.id, "com.example.hello");
+        assert_eq!(written.digest, sha256(&fs::read(&first).unwrap()));
     }
 
     #[test]
-    fn source_snapshot_rejects_symlinks_and_enforces_bounds() {
-        let temporary = tempfile::tempdir().expect("temporary source");
-        std::fs::write(temporary.path().join("regular"), b"1234").expect("regular fixture");
-        symlink("regular", temporary.path().join("linked")).expect("symlink fixture");
+    fn package_rejects_undeclared_and_native_files() {
+        let extra = fixture(&[("index.html", VIEW)]);
+        fs::write(extra.path().join("extra.js"), b"no").unwrap();
+        assert!(write_package(extra.path(), &extra.path().join("x.ocpkg")).is_err());
 
-        assert_eq!(
-            read_source_file(temporary.path(), "linked", 16),
-            Err(PackageCode::UnsafeSource)
-        );
-        assert_eq!(
-            read_source_file(temporary.path(), "regular", 3),
-            Err(PackageCode::EntrySize)
-        );
-        assert_eq!(
-            read_source_file(temporary.path(), "regular", 4).expect("bounded regular file"),
-            b"1234"
-        );
-
-        std::fs::set_permissions(temporary.path(), Permissions::from_mode(0o770))
-            .expect("unsafe source mode");
-        assert_eq!(
-            read_source_file(temporary.path(), "regular", 4),
-            Err(PackageCode::UnsafeSource)
-        );
-        std::fs::set_permissions(temporary.path(), Permissions::from_mode(0o700))
-            .expect("restore source mode");
+        let native = fixture(&[("index.html", VIEW), ("module.wasm", b"\0asm\x01\0\0\0")]);
+        assert!(write_package(native.path(), &native.path().join("x.ocpkg")).is_err());
     }
 
-    #[test]
-    fn archive_rejects_oversized_or_unsafe_entry_names() {
-        for name in ["../component.wasm", "/component.wasm"] {
-            let entries = BTreeMap::from([(name.to_owned(), vec![0])]);
-            assert_eq!(build_stored_archive(&entries), Err(PackageCode::UnsafePath));
+    struct Fixture {
+        directory: tempfile::TempDir,
+    }
+
+    impl Fixture {
+        fn path(&self) -> &Path {
+            self.directory.path()
         }
-        let entries =
-            BTreeMap::from([("component.wasm".to_owned(), vec![0; 16 * 1024 * 1024 + 1])]);
-        assert_eq!(
-            build_stored_archive(&entries),
-            Err(PackageCode::ArchiveSize)
-        );
     }
 
-    #[test]
-    fn deterministic_object_stage_recovers_safe_stale_bytes_only() {
-        let temporary = tempfile::tempdir().expect("object directory");
-        let directory = File::open(temporary.path()).expect("object directory descriptor");
-        let staged = temporary.path().join(".object.ocpkg.tmp");
-        std::fs::write(&staged, b"partial").expect("stale staging bytes");
-        std::fs::set_permissions(&staged, Permissions::from_mode(0o600))
-            .expect("stale staging mode");
-        write_object(&directory, "object.ocpkg", b"complete").expect("recover stale staging");
-        assert_eq!(
-            std::fs::read(temporary.path().join("object.ocpkg")).expect("published object"),
-            b"complete"
-        );
-        assert!(!staged.exists(), "staging file must not leak");
-    }
-
-    #[test]
-    fn deterministic_object_stage_refuses_untrusted_existing_entries() {
-        for fixture in ["writable", "linked", "hard-linked"] {
-            let temporary = tempfile::tempdir().expect("object directory");
-            let directory = File::open(temporary.path()).expect("object directory descriptor");
-            let staged = temporary.path().join(".object.ocpkg.tmp");
-            let source = temporary.path().join("source");
-            match fixture {
-                "writable" => {
-                    std::fs::write(&staged, b"hostile").expect("writable staging entry");
-                    std::fs::set_permissions(&staged, Permissions::from_mode(0o666))
-                        .expect("writable staging mode");
-                }
-                "linked" => symlink("source", &staged).expect("staging symlink"),
-                "hard-linked" => {
-                    std::fs::write(&source, b"hostile").expect("hard-link source");
-                    std::fs::hard_link(&source, &staged).expect("staging hard link");
-                }
-                _ => unreachable!("closed fixture table"),
+    fn fixture(files: &[(&str, &[u8])]) -> Fixture {
+        let directory = tempfile::tempdir().unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let mut ledger = serde_json::Map::new();
+        for (path, bytes) in files {
+            let dest = directory.path().join(path);
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent).unwrap();
             }
-            assert_eq!(
-                write_object(&directory, "object.ocpkg", b"complete"),
-                Err(PackageCode::UnsafeSource),
-                "fixture {fixture}"
+            fs::write(&dest, bytes).unwrap();
+            ledger.insert(
+                (*path).to_owned(),
+                serde_json::json!({"sha256": file_sha256_hex(bytes), "bytes": bytes.len()}),
             );
-            assert!(!temporary.path().join("object.ocpkg").exists());
         }
-    }
-
-    #[test]
-    fn publication_is_content_addressed_and_refuses_existing_mismatched_bytes() {
-        let repository = tempfile::tempdir().expect("repository");
-        let metadata = validate_metadata(MANIFEST, LISTING).expect("metadata");
-        let package = PackageArtifact::fixture(
-            metadata,
-            b"deterministic package".to_vec(),
-            Some(b"preview bytes".to_vec()),
-        );
-        {
-            let output = PublisherOutput::open(repository.path()).expect("publisher output");
-            output
-                .publish_objects(std::slice::from_ref(&package))
-                .expect("publish objects");
-            output
-                .publish_catalog(b"catalog one")
-                .expect("publish catalog");
-        }
-        let package_path = repository.path().join(format!(
-            "public/marketplace/v1/packages/{}/{}/{}.ocpkg",
-            package.metadata().manifest().id(),
-            package.metadata().manifest().version(),
-            package.archive_sha256()
-        ));
-        assert_eq!(
-            std::fs::read(&package_path).expect("published package"),
-            package.archive()
-        );
-
-        std::fs::write(&package_path, b"hostile replacement").expect("tamper fixture");
-        let output = PublisherOutput::open(repository.path()).expect("publisher retry");
-        assert_eq!(
-            output.publish_objects(std::slice::from_ref(&package)),
-            Err(PackageCode::UnsafeSource)
-        );
-        assert_eq!(
-            std::fs::read(repository.path().join("public/marketplace/v1/catalog.json"))
-                .expect("old catalog"),
-            b"catalog one"
-        );
-
-        drop(output);
-        let public_root = repository.path().join("public/marketplace/v1");
-        std::fs::set_permissions(&public_root, Permissions::from_mode(0o777))
-            .expect("unsafe public mode");
-        assert!(PublisherOutput::open(repository.path()).is_err());
-        std::fs::set_permissions(public_root, Permissions::from_mode(0o755))
-            .expect("restore public mode");
+        let manifest = serde_json::json!({
+            "schemaVersion": 1,
+            "id": "com.example.hello",
+            "version": "1.0.0",
+            "apiVersion": "1",
+            "entrypoints": {"view": "index.html"},
+            "permissions": {},
+            "files": ledger
+        });
+        fs::write(
+            directory.path().join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        Fixture { directory }
     }
 }
