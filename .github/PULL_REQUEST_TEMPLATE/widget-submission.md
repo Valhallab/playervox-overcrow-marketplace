@@ -1,19 +1,17 @@
-## Widget submission
+## Extension submission
 
-Publisher and widget ID: `community/<publisher>/<widget-id>/`
+Directory: `widgets/<extension-id>/` (or another reviewed web directory)
 
-Describe the widget, its intended game or use, and the exact revision tested.
+Describe the extension, its intended game or use, and the exact revision tested.
 
 ## Review declarations
 
-- [ ] Every requested capability is listed with its user-facing reason.
-- [ ] Every HTTPS host is exact and contains no credentials, wildcard, path, or redirect dependency.
-- [ ] Game scope and all provider dependencies are listed.
+- [ ] The package is a Web API v1 web app (`manifest.json` + `listing.json` + declared files).
+- [ ] There is no WIT, Wasmtime, native module, provider graph, or `component.wasm`.
+- [ ] Every HTTPS grant is exact (`origin`, `method`, `pathPrefix`) and contains no credentials or wildcards.
 - [ ] Source, assets, fonts, preview, and third-party licenses have documented provenance.
-- [ ] The creator crate has no `build.rs`, proc-macro target, Git dependency, custom registry, or dependency outside the reviewed policy.
-- [ ] English metadata is present; every additional locale is listed and tested.
-- [ ] The exact submission root is listed in the Cargo workspace and `marketplace/targets.json`.
-- [ ] The local `.ocpkg` installs disabled and uninstalls with its unreferenced dependencies and private data removed.
+- [ ] English listing metadata is present; every additional locale is listed.
+- [ ] `marketplace-tool package` and `inspect` succeed on this directory.
 - [ ] This PR targets `candidate` and does not modify `published/`.
 
 ## Evidence
