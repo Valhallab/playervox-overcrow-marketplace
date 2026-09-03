@@ -111,7 +111,6 @@ jobs:
       - name: Install pinned admission toolchain
         run: |
           rustup toolchain install 1.98.0 --profile minimal
-          rustup target add --toolchain 1.98.0 wasm32-wasip2
           rustup default 1.98.0
       - name: Restore trusted dependency cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830

@@ -1,0 +1,66 @@
+:root {
+  color: #f4f1ea;
+  background: transparent;
+  font: 14px/1.4 ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.75rem;
+}
+
+.eyebrow {
+  margin: 0;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  opacity: 0.7;
+}
+
+label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+input,
+button {
+  color: inherit;
+  background: rgb(12 14 18 / 0.72);
+  border: 1px solid rgb(244 241 234 / 0.18);
+  border-radius: 0.35rem;
+  padding: 0.4rem 0.55rem;
+}
+
+ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+button {
+  width: 100%;
+  text-align: left;
+}
+
+h1,
+h2,
+#status {
+  margin: 0;
+}
+
+h1 {
+  font-size: 1.05rem;
+}
+
+h2 {
+  font-size: 0.8rem;
+  opacity: 0.75;
+  margin-top: 0.5rem;
+}

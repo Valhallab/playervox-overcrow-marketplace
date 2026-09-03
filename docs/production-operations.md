@@ -210,8 +210,9 @@ bootstrap snapshot.
 Record the exact trusted candidate-base SHA and proposed review SHA before
 human review. From a clean checkout at the trusted base, run the repository's
 review wrapper. It prepares pinned dependencies from the trusted snapshot,
-reuses unchanged components from the previously accepted bundle, and compiles
-and tests only affected targets in the bounded networkless sandbox:
+reuses unchanged admitted `.ocpkg` artifacts from the previously accepted
+bundle, and packages only affected Web API v1 targets in the bounded
+networkless sandbox:
 
 ```sh
 set -eu
@@ -292,7 +293,7 @@ test -z "$(git -C "$marketplace_root" status --porcelain=v1 --untracked-files=no
 ```
 
 `review_bundle` is now the accepted bundle for `candidate_revision`. Retain it
-as the base evidence for the next submission and as the only component input to
+as the base evidence for the next submission and as the only package input to
 the offline publisher.
 
 On the offline authority host, verify the key privately, sign the exact clean
@@ -323,7 +324,7 @@ sh "$marketplace_root/scripts/verify-published.sh" "$marketplace_root/published"
 ```
 
 The publisher verifies the accepted bundle before copying, compares the private
-copy against the bundle ledger, never invokes the component staging compiler,
+copy against the bundle ledger, never rebuilds or retests admitted packages,
 atomically replaces `published/`, advances the private sequence, and does not
 deploy or push. Review the resulting release diff and use a PR to `master`; do
 not copy an artifact into Coolify or sign from CI.
