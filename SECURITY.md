@@ -8,7 +8,7 @@ unresolved vulnerability. Use
 to contact Valhallab SASU privately and identify this marketplace as the
 affected project. Include the affected revision, impact, environment, and the
 smallest safe reproduction. Never include user data, credentials, production
-keys, or provider payloads.
+keys, or extension private storage.
 
 Coordinated disclosure is appreciated. The project does not currently offer a
 bug bounty or guarantee a response deadline.
@@ -31,20 +31,12 @@ not from the proposed revision. It fetches the exact pull-request head through
 the fixed public repository URL as a Git object, verifies its expected digest,
 and prepares its validator and drivers from the exact target-base commit. The
 proposed tree is treated only as data and is never selected as the Actions
-checkout or a shell-script source. Admission performs bounded Cargo/target
-metadata, path, repository-policy, and private-material checks, then exits
-before staging, package-manifest validation, compilation, tests, or any other
-candidate execution. A proposed root Cargo configuration fails admission; it
-is never used to prepare the validator. Package manifests and listings are
-validated later by the complete maintainer gate before merge.
+checkout or a shell-script source.
 
-The maintainer gate uses the same trusted-base boundary. Formatting, native
-tests, and one component build run for affected targets; web tests run for the
-assembled site. Accepted unchanged component bytes come from the verified base
-bundle and are not recompiled or retested. Candidate execution has no network,
-secrets, host process view, writable source checkout, or writable later
-evidence. Unsupported sandbox primitives fail closed; they are never replaced
-by an unsandboxed build.
+Admission packages Web API v1 directories with `marketplace-tool package` and
+inspects the stored-zip `.ocpkg`. WIT, Wasmtime, native modules, and provider
+graphs are rejected. Publication copies admitted bytes; it does not rebuild or
+retest them.
 
 The marketplace website cannot install software. The Control Center validates
 packages and user consent; local unverified packages install disabled and stay

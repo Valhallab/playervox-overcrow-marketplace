@@ -67,7 +67,7 @@ cargo_index="$user_root/.cargo/registry/index"
 cargo_cache="$user_root/.cargo/registry/cache"
 cargo_sources="$user_root/.cargo/registry/src"
 for directory in \
-        "$toolchain_root" "$toolchain_root/lib/rustlib/wasm32-wasip2"; do
+        "$toolchain_root"; do
     if test ! -d "$directory" || test -L "$directory" \
             || test "$(/usr/bin/readlink -f -- "$directory")" != "$directory" \
             || test "$(/usr/bin/stat -c '%u' "$directory")" != "$invoking_uid" \
