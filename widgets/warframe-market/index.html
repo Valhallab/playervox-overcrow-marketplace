@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Warframe Market</title>
+    <link rel="stylesheet" href="styles.css">
+    <script type="module" src="view.js"></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">Warframe Market</p>
+        <label>
+          Search
+          <input id="query" type="search" maxlength="64" placeholder="Soma Prime…" autocomplete="off">
+        </label>
+      </header>
+      <p id="status">Loading catalog…</p>
+      <ul id="results"></ul>
+      <section id="detail" hidden>
+        <h1 id="detail-name"></h1>
+        <div id="orders"></div>
+      </section>
+    </main>
+  </body>
+</html>

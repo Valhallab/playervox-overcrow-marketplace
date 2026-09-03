@@ -1,116 +1,12 @@
 # Publishing
 
-Community intake is open through pull requests to `candidate`, but merge
-acceptance is not publication and makes no security certification.
-Minimal-permission hosted CI provides static admission evidence without
-executing submitted code.
-Human maintainers run the complete sandboxed gate on the exact revision, and a
-later repository-local `release/*` pull request to `master` may carry output
-from the offline publisher. Creators receive no signing or deployment
-credentials.
+Publishing copies an already admitted `.ocpkg` and signed catalog
+metadata. It does not compile, retest, or mutate widget bytes.
 
-This repository supplies the minimal-permission check and CODEOWNERS
-declarations, but GitHub protections remain separate operational configuration.
-Until the controls in the [production operations runbook](production-operations.md)
-are configured, CI output is evidence rather than stand-alone enforcement of
-merge policy. The workflow publishes `pending` and final base-specific
-admission statuses on the exact reviewed pull-request head. Reporting jobs have
-only `statuses: write`; the verification job has only `contents: read`.
-Neither permission can merge, publish, deploy, or sign a package.
-Branch protection should use strict required status checks: `candidate` requires
-`overcrow/marketplace-admission/candidate`, while `master` requires
-`overcrow/marketplace-admission/master`.
+Keep signed catalogs, monotonic sequence, expiry, exact archive digests,
+provenance, licenses, human approval, and offline signing.
 
-The `pull_request_target` job definition comes from the default branch. It does
-not check out the proposed revision: it obtains the exact head through the
-fixed public repository URL, verifies the expected commit, and treats that Git
-object only as input data. The job materializes bounded private base and
-candidate snapshots, compiles the exact target-base marketplace validator
-offline, and admits candidate Cargo/target metadata and repository policy
-through reviewed parsers. Candidate PRs and ordinary non-publication changes
-exit before production staging, package-manifest validation, compilation,
-tests, or any other candidate execution. When an authorized same-repository
-`release/*` PR to `master` changes `published/`, the reviewed base driver and
-base-built verifier additionally authenticate the complete proposed static
-tree with the reviewed base public key. They reject an invalid signature,
-changed key, stale or future catalog, lifetime other than exactly 90 days,
-unlisted or changed objects, and a sequence that is not strictly above the
-verified base snapshot. If `master` has no snapshot, the first published
-sequence need only be positive. An aborted or otherwise unpublished offline
-publisher run can consume an authority sequence, so gaps before or between
-published snapshots are valid. Head scripts, tools, and binaries are never
-executed.
-
-Changes under `.github/`, `scripts`, `tests`, or `tools` are rejected by this
-path until a maintainer lands those trusted bytes separately. Initial
-production rollout is therefore two-phase: first land the reviewed public key,
-driver, and verifier on `master` while `published/` remains absent; then
-configure and validate the full protected flow before opening the first signed
-snapshot PR on its matching `release/<sequence>` branch. Never combine
-bootstrap trust bytes with that snapshot, relax an active protection to admit
-it, or fall back to a copy from the pull-request head.
-
-Before accepting a submission, a maintainer runs the sandboxed review from a
-clean checkout on a compatible Linux host. The first review builds all
-components. Later reviews verify the prior accepted bundle, then run native
-tests and component compilation only for targets affected by the submission;
-unchanged accepted component bytes are reused. GitHub-hosted Ubuntu currently blocks
-the user-namespace mapping required by this confinement, so hosted CI must not
-silently replace it with an unsandboxed build. The commands in
-[testing.md](testing.md), including `scripts/review-revision.sh`, are the
-operational gate until a disposable compatible runner is available.
-
-One validated source record generates both the human site and machine catalog.
-Packages bind exact IDs, versions, digests, and sizes; the catalog is canonical,
-monotonic, expiring, and signed only after automated checks plus human approval.
-
-The development fixture key is visibly non-production and may be selected only
-by the fixed debug trust path. Production signing must require an explicit
-absolute key path. Tooling must never generate, copy, cache, print, or commit a
-production private key or passphrase.
-
-The local generation flow is:
-
-```sh
-scripts/build-local.sh
-cargo run -p marketplace-tool --locked -- verify public/marketplace/v1/catalog.json
-```
-
-The script stages the provider first, refreshes its exact digest in the four
-dependent manifests, builds the full signed development catalog, and copies
-the static site into ignored `/public`. It uses a fixed development timestamp
-and sequence state, so a rerun with unchanged inputs reproduces the same
-objects. A changed payload requires a strictly higher development sequence;
-never reset or reuse one. Source package directories never retain
-`component.wasm` after publication.
-
-The reviewed offline publisher is `scripts/build-production.sh`. It accepts
-only an exact clean `release/*` commit, the external accepted review bundle,
-and external private authority files. It verifies and copies the bundle,
-assembles and signs the static catalog, advances the sequence, and atomically
-replaces `published/`. It never compiles or retests widgets and does not deploy
-or push. The authoritative key,
-release, recovery, cache, and deployment procedure is the
-[production operations runbook](production-operations.md).
-
-Production verification also requires Bubblewrap, a user systemd manager for
-transient resource-limited services, and a canonical regular Node executable
-selected from the fixed reviewed system locations. The executable and every
-directory in its resolved path must be root-owned and not group- or
-world-writable; the executable must have mode `0755` and be single-link. A
-user-managed version-manager shim is intentionally rejected. The Node checks
-run without
-network and with a `/proc` view limited to their isolated PID namespace, under
-fixed CPU, task, virtual-address, resident memory, swap, file, and wall-time
-limits. Release and full-gate hosts must provide that system Node installation
-or production verification fails closed.
-Bubblewrap exposes the host network only to the fixed trusted setup command;
-that command creates an empty network namespace, drops every capability, and
-sets `no_new_privs` before starting any reviewed package or site code.
-
-The deployment contract and its public endpoint checks are defined in the
-[production operations runbook](production-operations.md). The website cannot
-install packages; installation remains a Control Center operation. Do not add a
-private key, passphrase, private authority path, deployment credential, or
-publishing endpoint to local configuration, generated output, CI logs, or a
-commit. Deployment remains a separate, explicitly authorized operation.
+`published/` is the last production snapshot. This reset does not
+rewrite it. Follow [production operations](production-operations.md) for
+any later authorized publication. This document does not authorize a
+push or deployment.
