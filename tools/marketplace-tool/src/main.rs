@@ -8,9 +8,12 @@ fn main() -> ExitCode {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
         Some("package") => {
-            let source = args.next().expect("source directory");
-            let destination = args.next().expect("destination .ocpkg");
-            match package::write_package(Path::new(&source), Path::new(&destination)) {
+            let arguments = args.collect::<Vec<_>>();
+            let [source, destination] = arguments.as_slice() else {
+                eprintln!("error: invalid package arguments");
+                return ExitCode::FAILURE;
+            };
+            match package::write_package(Path::new(source), Path::new(destination)) {
                 Ok(written) => {
                     println!(
                         "{} {}",
@@ -26,8 +29,12 @@ fn main() -> ExitCode {
             }
         }
         Some("inspect") => {
-            let archive = args.next().expect("package path");
-            match package::inspect(Path::new(&archive)) {
+            let arguments = args.collect::<Vec<_>>();
+            let [archive] = arguments.as_slice() else {
+                eprintln!("error: invalid inspection arguments");
+                return ExitCode::FAILURE;
+            };
+            match package::inspect(Path::new(archive)) {
                 Ok(manifest) => {
                     println!("{} {}", manifest.id, manifest.version);
                     ExitCode::SUCCESS
