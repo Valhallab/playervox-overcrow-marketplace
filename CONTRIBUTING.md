@@ -15,14 +15,11 @@ cargo run -p marketplace-tool --locked -- package widgets/warframe-market /tmp/w
 cargo run -p marketplace-tool --locked -- inspect /tmp/warframe-market.ocpkg
 ```
 
-Hosted pull-request CI fetches the exact proposed Git object, materializes it
-against the base-reviewed tree plan, and packages every widget once with the
-base-reviewed tool. Proposed JavaScript remains data in `pull_request_target`;
-it is not executed with that workflow's authority. The resulting receipt binds
-each package digest and size to the proposed revision and tree. Push CI runs
-the trusted revision's Rust and JavaScript tests once. Maintainer ingestion may
-later run a declared `build.command` and widget tests once in a sandbox, then
-reuse that exact artifact.
+Hosted pull-request CI packages the exact proposed Git tree with the
+base-reviewed tool without executing proposed code. Push CI tests the exact
+trusted revision. See `SECURITY.md` for the trust boundary and
+`docs/testing.md` for the covered scenarios. Maintainer ingestion may later
+build and test once in a sandbox, then reuse that exact artifact.
 
 Do not commit production keys, `.ocpkg` outputs outside fixtures, or
 changes under `published/` unless a later authorized publication task

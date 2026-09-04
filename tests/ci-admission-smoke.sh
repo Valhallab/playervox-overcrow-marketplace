@@ -47,14 +47,15 @@ private_parent="$scratch/private"
 /usr/bin/install -d -m 0700 -- "$private_parent"
 stdout="$scratch/stdout"
 stderr="$scratch/stderr"
-if (
-    CDPATH='' cd -- "$repo_root"
+run_pull_request_admission() {
     sh "$repo_root/scripts/ci-verify.sh" \
-        "$repository" "$trust_sha" "$review_sha" pull_request \
+        "$repository" "$trust_sha" "$1" pull_request \
         Valhallab/playervox-overcrow-marketplace candidate \
         contributor/playervox-overcrow-marketplace feature/widget \
         "$private_parent" admission
-) >"$stdout" 2>"$stderr"; then
+}
+
+if run_pull_request_admission "$review_sha" >"$stdout" 2>"$stderr"; then
     printf '%s\n' \
         'error: CI admitted the trusted base instead of the exact candidate revision' >&2
     exit 1
@@ -83,14 +84,7 @@ printf '%s\n' 'console.log("hidden from git archive");' \
 /usr/bin/git -C "$repository" commit --quiet \
     -m 'archive attribute attack fixture'
 archive_sha=$(/usr/bin/git -C "$repository" rev-parse --verify 'HEAD^{commit}')
-if (
-    CDPATH='' cd -- "$repo_root"
-    sh "$repo_root/scripts/ci-verify.sh" \
-        "$repository" "$trust_sha" "$archive_sha" pull_request \
-        Valhallab/playervox-overcrow-marketplace candidate \
-        contributor/playervox-overcrow-marketplace feature/widget \
-        "$private_parent" admission
-) >"$stdout" 2>"$stderr"; then
+if run_pull_request_admission "$archive_sha" >"$stdout" 2>"$stderr"; then
     printf '%s\n' 'error: CI accepted Git archive bytes that differ from the candidate tree' >&2
     exit 1
 fi
@@ -109,14 +103,7 @@ printf '\n' >>"$repository/docs/creator-guide.md"
 /usr/bin/git -C "$repository" commit --quiet -m 'valid candidate fixture'
 valid_sha=$(/usr/bin/git -C "$repository" rev-parse --verify 'HEAD^{commit}')
 valid_tree=$(/usr/bin/git -C "$repository" rev-parse --verify 'HEAD^{tree}')
-if ! (
-    CDPATH='' cd -- "$repo_root"
-    sh "$repo_root/scripts/ci-verify.sh" \
-        "$repository" "$trust_sha" "$valid_sha" pull_request \
-        Valhallab/playervox-overcrow-marketplace candidate \
-        contributor/playervox-overcrow-marketplace feature/widget \
-        "$private_parent" admission
-) >"$stdout" 2>"$stderr"; then
+if ! run_pull_request_admission "$valid_sha" >"$stdout" 2>"$stderr"; then
     printf '%s\n' 'error: exact valid candidate revision was rejected' >&2
     /usr/bin/cat "$stdout" >&2
     /usr/bin/cat "$stderr" >&2

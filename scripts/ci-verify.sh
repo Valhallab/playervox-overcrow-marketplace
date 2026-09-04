@@ -7,6 +7,11 @@ usage() {
         'usage: ci-verify.sh [REPOSITORY TRUST-SHA REVIEW-SHA EVENT REPOSITORY-NAME BASE-REF HEAD-REPOSITORY HEAD-REF PRIVATE-PARENT admission]' >&2
 }
 
+fail() {
+    printf 'error: %s\n' "$1" >&2
+    exit 1
+}
+
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
 trusted_root=$(/usr/bin/dirname -- "$script_dir")
 
@@ -71,22 +76,18 @@ safe_owned_directory() {
 }
 
 case "$event_name" in pull_request | push) ;; *)
-    printf '%s\n' 'error: CI trust metadata is invalid' >&2
-    exit 1
+    fail 'CI trust metadata is invalid'
     ;;
 esac
 case "$base_ref" in master | candidate) ;; *)
-    printf '%s\n' 'error: CI trust metadata is invalid' >&2
-    exit 1
+    fail 'CI trust metadata is invalid'
     ;;
 esac
 if ! valid_revision "$trust_sha" || ! valid_revision "$review_sha"; then
-    printf '%s\n' 'error: CI trust metadata is invalid' >&2
-    exit 1
+    fail 'CI trust metadata is invalid'
 fi
 case "$repository:$private_parent" in /*:/*) ;; *)
-    printf '%s\n' 'error: CI trust metadata is invalid' >&2
-    exit 1
+    fail 'CI trust metadata is invalid'
     ;;
 esac
 if test "$repository" = / || test "$trusted_root" = / \
@@ -94,14 +95,12 @@ if test "$repository" = / || test "$trusted_root" = / \
         || ! safe_owned_directory "$repository" \
         || ! safe_owned_directory "$trusted_root" \
         || ! safe_owned_directory "$private_parent" 700; then
-    printf '%s\n' 'error: CI trust roots are unsafe' >&2
-    exit 1
+    fail 'CI trust roots are unsafe'
 fi
 if test "$event_name" = push \
         && { test "$trust_sha" != "$review_sha" \
             || test "$repository_name" != "$head_repository"; }; then
-    printf '%s\n' 'error: CI trust metadata is invalid' >&2
-    exit 1
+    fail 'CI trust metadata is invalid'
 fi
 for required in Cargo.lock Cargo.toml rust-toolchain.toml \
         scripts/ci-verify.sh scripts/materialize-git-snapshot.sh \
@@ -114,8 +113,7 @@ for required in Cargo.lock Cargo.toml rust-toolchain.toml \
         tools/marketplace-tool/src/snapshot.rs; do
     if test ! -f "$trusted_root/$required" \
             || test -L "$trusted_root/$required"; then
-        printf '%s\n' 'error: trusted CI driver is incomplete' >&2
-        exit 1
+        fail 'trusted CI driver is incomplete'
     fi
 done
 
@@ -141,8 +139,7 @@ review_tree=$(ci_git rev-parse --verify "$review_sha^{tree}" 2>/dev/null) \
 if test "$resolved_trust" != "$trust_sha" \
         || test "$resolved_review" != "$review_sha" \
         || ! valid_revision "$review_tree"; then
-    printf '%s\n' 'error: CI trust metadata is invalid' >&2
-    exit 1
+    fail 'CI trust metadata is invalid'
 fi
 
 work=$(/usr/bin/mktemp -d "$private_parent/verification.XXXXXXXXXX") \
@@ -164,8 +161,7 @@ if test "$event_name" = pull_request; then
                 != "$(/usr/bin/id -u):600:1" \
             || test "$(/usr/bin/stat -c '%s' "$changed_paths")" \
                 -gt 262144; then
-        printf '%s\n' 'error: pull-request path metadata is unsafe' >&2
-        exit 1
+        fail 'pull-request path metadata is unsafe'
     fi
     sh "$trusted_root/tests/reject-published-change.sh" \
         pull_request "$repository_name" "$base_ref" \
@@ -180,8 +176,7 @@ fi
 
 resolved_rust=$(sh "$trusted_root/scripts/resolve-pinned-rust.sh" \
     "$trusted_root") || {
-    printf '%s\n' 'error: trusted marketplace tool is unavailable' >&2
-    exit 1
+    fail 'trusted marketplace tool is unavailable'
 }
 tab=$(printf '\t')
 IFS="$tab" read -r toolchain_root cargo_path rustc_path \
@@ -189,8 +184,7 @@ IFS="$tab" read -r toolchain_root cargo_path rustc_path \
 $resolved_rust
 EOF
 if test -z "$cargo_sources"; then
-    printf '%s\n' 'error: trusted marketplace tool is unavailable' >&2
-    exit 1
+    fail 'trusted marketplace tool is unavailable'
 fi
 tool_home="$work/home"
 tool_cargo_home="$work/cargo-home"
@@ -205,8 +199,7 @@ if ! /usr/bin/install -d -m 0700 \
             "$tool_cargo_home/registry/cache" \
         || ! /usr/bin/ln -s -- "$cargo_sources" \
             "$tool_cargo_home/registry/src"; then
-    printf '%s\n' 'error: trusted marketplace tool is unavailable' >&2
-    exit 1
+    fail 'trusted marketplace tool is unavailable'
 fi
 trusted_cargo() {
     (CDPATH='' cd / && \
@@ -223,8 +216,7 @@ trusted_cargo() {
 }
 if test "$event_name" = push; then
     node_path=$(sh "$trusted_root/scripts/resolve-system-node.sh") || {
-        printf '%s\n' 'error: trusted source checks failed' >&2
-        exit 1
+        fail 'trusted source checks failed'
     }
     if ! trusted_cargo test --manifest-path \
             "$trusted_root/tools/marketplace-tool/Cargo.toml" \
@@ -236,15 +228,13 @@ if test "$event_name" = push; then
             || ! /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C.UTF-8 LANG=C.UTF-8 \
                 /usr/bin/timeout --signal=TERM --kill-after=5 60 \
                 "$node_path" --test "$trusted_root/tests/site-runtime.test.js"; then
-        printf '%s\n' 'error: trusted source checks failed' >&2
-        exit 1
+        fail 'trusted source checks failed'
     fi
 fi
 if ! trusted_cargo build --manifest-path \
         "$trusted_root/tools/marketplace-tool/Cargo.toml" \
         --package marketplace-tool --locked --offline --quiet; then
-    printf '%s\n' 'error: trusted marketplace tool is unavailable' >&2
-    exit 1
+    fail 'trusted marketplace tool is unavailable'
 fi
 built_tool="$tool_target/debug/marketplace-tool"
 trusted_tool="$work/marketplace-tool"
@@ -252,15 +242,13 @@ if test ! -f "$built_tool" || test -L "$built_tool" \
         || ! /usr/bin/install -m 0700 -- "$built_tool" "$trusted_tool" \
         || test "$(/usr/bin/stat -c '%u:%a:%h' "$trusted_tool")" \
             != "$(/usr/bin/id -u):700:1"; then
-    printf '%s\n' 'error: trusted marketplace tool is unavailable' >&2
-    exit 1
+    fail 'trusted marketplace tool is unavailable'
 fi
 
 candidate_root="$work/candidate"
 if ! sh "$trusted_root/scripts/materialize-git-snapshot.sh" --validated \
         "$repository" "$review_sha" "$candidate_root" "$trusted_tool"; then
-    printf '%s\n' 'error: candidate snapshot admission failed' >&2
-    exit 1
+    fail 'candidate snapshot admission failed'
 fi
 widgets_root="$candidate_root/widgets"
 widget_list="$work/widgets"
@@ -270,14 +258,12 @@ if test ! -d "$widgets_root" || test -L "$widgets_root" \
         || ! /usr/bin/find "$widgets_root" -mindepth 1 -maxdepth 1 \
             -type d -printf '%f\n' | LC_ALL=C /usr/bin/sort >"$widget_list";
 then
-    printf '%s\n' 'error: candidate artifact admission failed' >&2
-    exit 1
+    fail 'candidate artifact admission failed'
 fi
 widget_count=$(/usr/bin/wc -l <"$widget_list")
 if test "$widget_count" -eq 0 || test "$widget_count" -gt 512 \
         || test "$(/usr/bin/stat -c '%s' "$widget_list")" -gt 131072; then
-    printf '%s\n' 'error: candidate artifact admission failed' >&2
-    exit 1
+    fail 'candidate artifact admission failed'
 fi
 
 artifact_root="$work/artifacts"
@@ -292,8 +278,7 @@ artifact_index=0
 while IFS= read -r directory; do
     case "$directory" in
         '' | -* | *[!A-Za-z0-9._-]*)
-            printf '%s\n' 'error: candidate artifact admission failed' >&2
-            exit 1
+            fail 'candidate artifact admission failed'
             ;;
     esac
     artifact_index=$((artifact_index + 1))
@@ -305,8 +290,7 @@ while IFS= read -r directory; do
             >"$package_output" 2>/dev/null \
             || ! "$trusted_tool" inspect "$artifact" \
                 >"$inspect_output" 2>/dev/null; then
-        printf '%s\n' 'error: candidate artifact admission failed' >&2
-        exit 1
+        fail 'candidate artifact admission failed'
     fi
     package_digest=$(/usr/bin/awk 'NR == 1 { print $1 }' "$package_output")
     package_path=$(/usr/bin/cut -d ' ' -f 2- "$package_output")
@@ -319,8 +303,7 @@ EOF
             || test -z "${extension_version:-}" \
             || test "$package_digest" != "$digest" \
             || test "$package_path" != "$artifact"; then
-        printf '%s\n' 'error: candidate artifact admission failed' >&2
-        exit 1
+        fail 'candidate artifact admission failed'
     fi
     printf '%s\n' "$extension_id" >>"$identities"
     printf 'artifact\twidgets/%s\t%s\t%s\t%s\t%s\n' \
@@ -330,8 +313,7 @@ done <"$widget_list"
 if test "$artifact_index" -ne "$widget_count" \
         || test -n "$(LC_ALL=C /usr/bin/sort "$identities" \
             | /usr/bin/uniq -d)"; then
-    printf '%s\n' 'error: candidate artifact admission failed' >&2
-    exit 1
+    fail 'candidate artifact admission failed'
 fi
 
 /usr/bin/cat "$receipt"
