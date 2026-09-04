@@ -793,15 +793,21 @@ mod tests {
     }
 
     #[test]
-    fn package_accepts_browser_wasm_and_rejects_undeclared_or_native_files() {
+    fn package_accepts_browser_and_opaque_assets_but_rejects_undeclared_or_native_files() {
         let extra = fixture(&[("index.html", VIEW)]);
         fs::write(extra.path().join("extra.js"), b"no").unwrap();
         assert!(write_package(extra.path(), &extra.path().join("x.ocpkg")).is_err());
 
-        let wasm = fixture(&[("index.html", VIEW), ("module.wasm", b"\0asm\x01\0\0\0")]);
-        let wasm_directory = tempfile::tempdir().unwrap();
-        let wasm_output = wasm_directory.path().join("x.ocpkg");
-        write_package(wasm.path(), &wasm_output).expect("browser WebAssembly package");
+        let web = fixture(&[
+            ("index.html", VIEW),
+            ("module.wasm", b"\0asm\x01\0\0\0"),
+            ("catalog.bin", b"opaque browser data"),
+            ("font.woff", b"browser font fixture"),
+            ("photo.jpg", b"browser image fixture"),
+        ]);
+        let web_directory = tempfile::tempdir().unwrap();
+        let web_output = web_directory.path().join("x.ocpkg");
+        write_package(web.path(), &web_output).expect("web asset package");
 
         let native = fixture(&[("index.html", VIEW), ("module.so", b"\x7fELF")]);
         assert!(write_package(native.path(), &native.path().join("x.ocpkg")).is_err());

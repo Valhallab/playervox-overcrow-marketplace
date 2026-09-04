@@ -42,11 +42,15 @@ receipt binds the trust revision, proposed revision, proposed tree, source
 directory, extension identity, version, package SHA-256, and byte length. No
 proposed JavaScript, build command, test, Cargo manifest, or shell script is
 executed by `pull_request_target`. Browser WebAssembly is allowed only as
-verified page code. WIT, Wasmtime, native executable modules, and provider
-graphs are rejected. Push CI executes the exact now-trusted revision's Rust and
-JavaScript tests once. Later maintainer ingestion may execute untrusted build
-or test code only in its dedicated sandbox; publication copies its admitted
-bytes and does not rebuild or retest them.
+verified page code. Declared regular assets are not constrained by an arbitrary
+suffix allowlist: OverCrow assigns known Web MIME types and serves other data
+as `application/octet-stream` with content sniffing disabled. Same-bundle reads
+remain on the verified private scheme; external browser HTTP(S) is denied. WIT,
+Wasmtime, native executable modules, native suffixes or signatures, and
+provider graphs are rejected. Push CI executes the exact now-trusted revision's
+Rust and JavaScript tests once. Later maintainer ingestion may execute untrusted
+build or test code only in its dedicated sandbox; publication copies its
+admitted bytes and does not rebuild or retest them.
 
 The marketplace website cannot install software. The Control Center validates
 packages and user consent; local unverified packages install disabled and stay

@@ -18,3 +18,8 @@ memory, arbitrary files, Node, Tauri, or native modules. Network access
 goes through `overcrow.fetch` to declared HTTPS endpoints only.
 Optional browser WebAssembly may be declared in the file ledger for local
 computation; it stays inside the same WebKit sandbox and has no host ABI.
+Known Web assets receive their standard MIME type. Other declared regular data
+is served as `application/octet-stream` with content sniffing disabled, so a
+framework may ship opaque data without creating a new executable file class.
+Page code may read those verified same-bundle files with browser APIs; external
+HTTP(S) remains available only through `overcrow.fetch` and exact grants.
