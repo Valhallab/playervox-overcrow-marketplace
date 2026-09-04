@@ -18,11 +18,14 @@ cleanup does not rewrite those bytes and does not rotate keys.
 ## 2. Preconditions and role separation
 
 Use separate clean worktrees and roles: contributors submit candidate PRs;
-hosted CI performs static admission; a maintainer reviews the exact revision;
-acceptance merges only to `candidate`; an offline publisher would create a
-new signed catalog; and a separate deployment operator configures Coolify to
-serve tracked output. Coolify, GitHub, CI, and project temporary files never
-receive production authority material.
+hosted CI materializes the exact proposed tree and produces ephemeral package
+digests without executing its code; a maintainer reviews and ingests the exact
+revision in a dedicated sandbox; acceptance merges only to `candidate`; an
+offline publisher would create a new signed catalog; and a separate deployment
+operator configures Coolify to serve tracked output. The hosted receipt is
+evidence for review, not a durable accepted artifact and not publication
+authority. Coolify, GitHub, CI, and project temporary files never receive
+production authority material.
 
 The fixed production origin is
 `https://overcrow.playervox.com/marketplace/v1/`. A production catalog is valid
@@ -41,6 +44,7 @@ Keep the existing technical and human-review rulesets on `candidate` and
 ## 4. Local admission (no publication)
 
 ```sh
+tests/ci-admission-smoke.sh
 cargo test -p marketplace-tool --locked
 node --test tests/warframe-market/market.test.mjs
 node --test tests/site-runtime.test.js
@@ -48,8 +52,11 @@ cargo run -p marketplace-tool --locked -- package widgets/warframe-market /tmp/w
 cargo run -p marketplace-tool --locked -- inspect /tmp/warframe-market.ocpkg
 ```
 
-Those commands prove packaging and listing. They do not sign a catalog,
-touch `published/`, or deploy Coolify.
+Those commands prove that candidate bytes cannot be replaced by base bytes,
+that trusted push tests execute, and that packaging and listing validation
+pass. If hosted admission cannot produce an exact-tree receipt, stop accepting
+candidate changes; do not fall back to the base checkout. These commands do not
+sign a catalog, touch `published/`, or deploy Coolify.
 
 ## 5. Keys and authority material
 

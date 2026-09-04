@@ -233,6 +233,10 @@ jobs:
             "$REPOSITORY" "$BASE_REF" "$HEAD_REPOSITORY" "$HEAD_REF" \
             "$private_root" admission
 
+      - name: Exercise exact-revision admission boundary
+        if: ${{ github.event_name == 'push' }}
+        run: tests/ci-admission-smoke.sh
+
   report:
     needs: [pending, verify]
     if: ${{ always() && github.event_name == 'pull_request_target' }}

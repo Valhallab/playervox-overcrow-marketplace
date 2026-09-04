@@ -1,4 +1,5 @@
 mod package;
+mod snapshot;
 
 use std::{env, path::Path, process::ExitCode};
 
@@ -36,9 +37,29 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some("snapshot-plan") => {
+            let arguments = args.collect::<Vec<_>>();
+            if arguments.len() != 4
+                || arguments[0] != "--repository"
+                || arguments[2] != "--revision"
+            {
+                eprintln!(
+                    "usage: marketplace-tool snapshot-plan --repository <path> --revision <sha>"
+                );
+                return ExitCode::FAILURE;
+            }
+            match snapshot::write_plan(Path::new(&arguments[1]), &arguments[3]) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         _ => {
             eprintln!("usage: marketplace-tool package <source-dir> <destination.ocpkg>");
             eprintln!("       marketplace-tool inspect <package.ocpkg>");
+            eprintln!("       marketplace-tool snapshot-plan --repository <path> --revision <sha>");
             ExitCode::FAILURE
         }
     }
