@@ -6,8 +6,6 @@ const MAX_TARGETS = 500;
 const MAX_PACKAGE_BYTES = 128 * 1024 * 1024;
 const MAX_PREVIEW_BYTES = 256 * 1024;
 const MAX_LISTING_LOCALES = 16;
-const MAX_NETWORK_GRANTS = 16;
-const MAX_GAME_EVENTS = 16;
 const MAX_FILES = 4096;
 const policy = globalThis.overcrowMarketplacePolicy;
 const fixedPolicies = {
@@ -54,12 +52,13 @@ function validPolicy(value) {
 
 if (!validPolicy(policy)) throw new Error("marketplace policy");
 
-const state = { locale: "en", targets: [] };
+const state = { locale: "en", targets: [], unavailable: false };
 const catalog = document.getElementById("catalog");
 const language = document.getElementById("language");
 const trust = document.getElementById("trust-label");
 const copy = {
   en: {
+    unavailable: "Catalog unavailable.",
     version: "Version",
     author: "Author",
     source: "Source",
@@ -74,6 +73,7 @@ const copy = {
     revoked: "Revoked catalog entry",
   },
   fr: {
+    unavailable: "Catalogue indisponible.",
     version: "Version",
     author: "Auteur",
     source: "Source",
@@ -170,10 +170,11 @@ function permissions(value) {
   }
   const network = value.network ?? [];
   const events = value.gameEvents ?? [];
-  if (!Array.isArray(network) || network.length > MAX_NETWORK_GRANTS) return false;
+  // The admitted manifest bounds these collections by bytes, not by grant count.
+  if (!Array.isArray(network)) return false;
   if (new Set(network.map((grant) => JSON.stringify(grant))).size !== network.length) return false;
   if (!network.every(networkGrant)) return false;
-  if (!Array.isArray(events) || events.length > MAX_GAME_EVENTS) return false;
+  if (!Array.isArray(events)) return false;
   if (new Set(events).size !== events.length
       || !events.every((event) => string(event, 64))) return false;
   return (value.storage === undefined || typeof value.storage === "boolean")
@@ -356,14 +357,11 @@ function card(item) {
 function render() {
   catalog.textContent = "";
   trust.textContent = policy.labels[state.locale];
+  if (state.unavailable) {
+    catalog.append(textElement("p", copy[state.locale].unavailable));
+    return;
+  }
   for (const item of state.targets) catalog.append(card(item));
-}
-
-function unavailable() {
-  const message = document.createElement("p");
-  message.textContent = "Catalog unavailable.";
-  catalog.textContent = "";
-  catalog.append(message);
 }
 
 async function readBounded(response) {
@@ -408,4 +406,7 @@ fetch(policy.catalogUrl)
     state.targets = validate(text);
     render();
   })
-  .catch(unavailable);
+  .catch(() => {
+    state.unavailable = true;
+    render();
+  });

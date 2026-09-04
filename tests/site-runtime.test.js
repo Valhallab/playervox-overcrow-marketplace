@@ -316,6 +316,37 @@ test("accepts sixteen exact localized listing entries", async () => {
   assert.ok(card(page, /Warframe Market/u));
 });
 
+test("renders admitted permissions beyond sixteen entries", async () => {
+  const body = withTargets((targets) => {
+    targets[0].manifest.permissions.network = Array.from({ length: 17 }, (_, index) => ({
+      origin: `https://api${index}.example.test`,
+      method: "GET",
+      pathPrefix: "/v2/",
+    }));
+    targets[0].manifest.permissions.gameEvents = Array.from(
+      { length: 17 }, (_, index) => `overcrow.game.event${index}.v1`,
+    );
+    return targets;
+  });
+  const page = await run(body);
+  const market = card(page, /Warframe Market/u);
+  assert.ok(market);
+  assert.match(cardText(market), /api16\.example\.test/u);
+  assert.match(cardText(market), /Receives OverCrow game events/u);
+});
+
+test("keeps catalog failures visible when the language changes", async () => {
+  const page = await run(generated(), { ok: false });
+  unavailable(page);
+  page.language.value = "fr";
+  page.language.dispatch("change");
+  assert.equal(page.catalog.children.length, 1);
+  assert.equal(page.catalog.children[0].textContent, "Catalogue indisponible.");
+  page.language.value = "en";
+  page.language.dispatch("change");
+  unavailable(page);
+});
+
 test("sets preview src only for its exact immutable object URL", async () => {
   const sha256 = "c".repeat(64);
   const preview = withTargets((targets) => {
