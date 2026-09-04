@@ -66,17 +66,14 @@ cargo_home="$user_root/.cargo"
 cargo_index="$user_root/.cargo/registry/index"
 cargo_cache="$user_root/.cargo/registry/cache"
 cargo_sources="$user_root/.cargo/registry/src"
-for directory in \
-        "$toolchain_root"; do
-    if test ! -d "$directory" || test -L "$directory" \
-            || test "$(/usr/bin/readlink -f -- "$directory")" != "$directory" \
-            || test "$(/usr/bin/stat -c '%u' "$directory")" != "$invoking_uid" \
-            || /usr/bin/find "$directory" -maxdepth 0 -perm /0022 -print -quit \
-                | /usr/bin/grep . >/dev/null; then
-        printf '%s\n' 'error: required read-only build input is unavailable' >&2
-        exit 1
-    fi
-done
+if test ! -d "$toolchain_root" || test -L "$toolchain_root" \
+        || test "$(/usr/bin/readlink -f -- "$toolchain_root")" != "$toolchain_root" \
+        || test "$(/usr/bin/stat -c '%u' "$toolchain_root")" != "$invoking_uid" \
+        || /usr/bin/find "$toolchain_root" -maxdepth 0 -perm /0022 -print -quit \
+            | /usr/bin/grep . >/dev/null; then
+    printf '%s\n' 'error: required read-only build input is unavailable' >&2
+    exit 1
+fi
 if test ! -d "$cargo_home" || test -L "$cargo_home" \
         || test "$(/usr/bin/readlink -f -- "$cargo_home")" != "$cargo_home" \
         || test "$(/usr/bin/stat -c '%u' "$cargo_home")" != "$invoking_uid" \
