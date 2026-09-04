@@ -290,7 +290,7 @@ identities="$work/identities"
 /usr/bin/install -d -m 0700 -- "$artifact_root"
 /usr/bin/install -m 0600 /dev/null "$receipt"
 /usr/bin/install -m 0600 /dev/null "$identities"
-printf 'admission\t1\t%s\t%s\t%s\n' \
+printf 'admission\t2\t%s\t%s\t%s\n' \
     "$trust_sha" "$review_sha" "$review_tree" >"$receipt"
 artifact_index=0
 while IFS= read -r directory; do
@@ -302,18 +302,23 @@ while IFS= read -r directory; do
     artifact_index=$((artifact_index + 1))
     source="$widgets_root/$directory"
     artifact="$artifact_root/$artifact_index.ocpkg"
+    listing="$artifact_root/$artifact_index.listing.json"
     package_output="$work/package-$artifact_index.out"
     inspect_output="$work/inspect-$artifact_index.out"
     if ! "$trusted_tool" package "$source" "$artifact" \
             >"$package_output" 2>/dev/null \
             || ! "$trusted_tool" inspect "$artifact" \
-                >"$inspect_output" 2>/dev/null; then
+                >"$inspect_output" 2>/dev/null \
+            || ! /usr/bin/install -m 0600 -- "$source/listing.json" \
+                "$listing"; then
         fail 'candidate artifact admission failed'
     fi
     package_digest=$(/usr/bin/awk 'NR == 1 { print $1 }' "$package_output")
     package_path=$(/usr/bin/cut -d ' ' -f 2- "$package_output")
     digest=$(/usr/bin/sha256sum "$artifact" | /usr/bin/cut -d ' ' -f 1)
     bytes=$(/usr/bin/stat -c '%s' "$artifact")
+    listing_digest=$(/usr/bin/sha256sum "$listing" | /usr/bin/cut -d ' ' -f 1)
+    listing_bytes=$(/usr/bin/stat -c '%s' "$listing")
     IFS=' ' read -r extension_id extension_version extra <<EOF
 $(/usr/bin/cat "$inspect_output")
 EOF
@@ -324,9 +329,9 @@ EOF
         fail 'candidate artifact admission failed'
     fi
     printf '%s\n' "$extension_id" >>"$identities"
-    printf 'artifact\twidgets/%s\t%s\t%s\t%s\t%s\n' \
+    printf 'artifact\twidgets/%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$directory" "$extension_id" "$extension_version" \
-        "$digest" "$bytes" >>"$receipt"
+        "$digest" "$bytes" "$listing_digest" "$listing_bytes" >>"$receipt"
 done <"$widget_list"
 if test "$artifact_index" -ne "$widget_count" \
         || test -n "$(LC_ALL=C /usr/bin/sort "$identities" \

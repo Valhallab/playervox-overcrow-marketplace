@@ -38,9 +38,10 @@ data and is never selected as the Actions checkout or a shell-script source.
 Admission validates listing metadata, the strict Web API v1 manifest, and its
 complete file ledger with the base-built `marketplace-tool`, packages every
 widget directory once, then inspects the stored-zip `.ocpkg`. A machine-readable
-receipt binds the trust revision, proposed revision, proposed tree, source
-directory, extension identity, version, package SHA-256, and byte length. No
-proposed JavaScript, build command, test, Cargo manifest, or shell script is
+receipt v2 binds the trust revision, proposed revision, proposed tree, source
+directory, extension identity, version, and the SHA-256 and byte length of both
+the package and validated listing. No proposed JavaScript, build command, test,
+Cargo manifest, or shell script is
 executed by `pull_request_target`. Browser WebAssembly is allowed only as
 verified page code. Declared regular assets are not constrained by an arbitrary
 suffix allowlist: OverCrow assigns known Web MIME types and serves other data
@@ -50,11 +51,11 @@ Wasmtime, native executable modules, native suffixes or signatures, and
 provider graphs are rejected. Push CI executes the exact now-trusted revision's
 Rust and JavaScript tests once. Only that trusted-push mode may receive an
 explicit private accepted-store path. It re-inspects and commits the already
-produced package bytes under their identity, version, and SHA-256, then writes
-the exact-revision receipt last. Incomplete artifacts have no receipt and are
-not accepted. The generic sandbox for extension-defined build or test commands
-is not implemented; publication must copy admitted bytes without rebuilding or
-retesting them.
+produced package and listing bytes under their identity, version, and SHA-256,
+then writes the exact-revision receipt last. Incomplete artifacts have no
+receipt and are not accepted. The generic sandbox for extension-defined build
+or test commands is not implemented; publication must copy admitted bytes
+without rebuilding or retesting them.
 
 The marketplace website cannot install software. The Control Center validates
 packages and user consent; local unverified packages install disabled and stay

@@ -115,7 +115,7 @@ if ! run_pull_request_admission "$valid_sha" >"$stdout" 2>"$stderr"; then
     exit 1
 fi
 expected_header="$scratch/expected-header"
-printf 'admission\t1\t%s\t%s\t%s\n' \
+printf 'admission\t2\t%s\t%s\t%s\n' \
     "$trust_sha" "$valid_sha" "$valid_tree" >"$expected_header"
 if ! /usr/bin/grep -F -x -f "$expected_header" "$stdout" >/dev/null \
         || ! /usr/bin/awk -F '\t' '
@@ -124,7 +124,9 @@ if ! /usr/bin/grep -F -x -f "$expected_header" "$stdout" >/dev/null \
                 && $3 == "com.playervox.overcrow.warframe.market" \
                 && $4 == "2.0.0" \
                 && length($5) == 64 && $5 !~ /[^0-9a-f]/ \
-                && $6 ~ /^[0-9]+$/ && $6 > 0 { found = 1 }
+                && $6 ~ /^[0-9]+$/ && $6 > 0 \
+                && length($7) == 64 && $7 !~ /[^0-9a-f]/ \
+                && $8 ~ /^[0-9]+$/ && $8 > 0 { found = 1 }
             END { exit found ? 0 : 1 }
         ' "$stdout" \
         || test "$(/usr/bin/tail -n 1 "$stdout")" \
@@ -182,7 +184,13 @@ if ! (
 fi
 verified=$(cargo run -p marketplace-tool --locked --quiet -- \
     verify-admission --store "$accepted_store" --review-tree "$accepted_tree")
+stored_listing=$(/usr/bin/find \
+    "$accepted_store/listings/com.playervox.overcrow.warframe.market/2.0.0" \
+    -mindepth 1 -maxdepth 1 -type f -name '*.json' -print)
 if test "$verified" != "$accepted_tree 1" \
+        || test "$(printf '%s\n' "$stored_listing" | /usr/bin/wc -l)" -ne 1 \
+        || ! /usr/bin/cmp -s -- \
+            "$repository/widgets/warframe-market/listing.json" "$stored_listing" \
         || /usr/bin/find "$private_parent" -mindepth 1 -maxdepth 1 \
             -name 'verification.*' -print -quit | /usr/bin/grep . >/dev/null; then
     printf '%s\n' 'error: persisted admission is not independently verifiable' >&2

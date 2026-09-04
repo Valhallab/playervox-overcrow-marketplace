@@ -15,8 +15,9 @@ v1:
 
 - `tools/marketplace-tool` validates the strict Web manifest, listing metadata,
   complete file ledger, and built bytes, then writes a deterministic stored-zip
-  `.ocpkg`. Its admission commands can persist and later re-verify those exact
-  package bytes in a private content-addressed store.
+  `.ocpkg`. Its admission commands bind each package to the validated
+  `listing.json`, then persist and later re-verify both exact byte sequences in
+  a private content-addressed store.
 - `fixtures/hello-web` is the structural Web API v1 fixture.
 - `widgets/warframe-market` is the reference extension: persistent
   controller, IndexedDB catalog and last query (~3840 structured items),
@@ -35,11 +36,11 @@ cargo run -p marketplace-tool --locked -- inspect /tmp/warframe-market.ocpkg
 
 Pull-request admission is static and ephemeral. Trusted-push admission runs the
 repository tests once, packages each widget once, and can ingest those exact
-bytes into an explicitly supplied private store. Ingestion re-inspects but does
-not execute, rebuild, or retest a package. Future catalog generation must reuse
-the stored bytes. Runtime OverCrow verifies signature, digest, and capabilities;
-it does not rebuild or retest widgets. The generic maintainer sandbox for
-extension-defined build commands is not implemented yet.
+package and listing bytes into an explicitly supplied private store. Ingestion
+re-inspects but does not execute, rebuild, or retest a package. Future catalog
+generation must reuse the stored bytes. Runtime OverCrow verifies signature,
+digest, and capabilities; it does not rebuild or retest widgets. The generic
+maintainer sandbox for extension-defined build commands is not implemented yet.
 
 Declared browser `.wasm` assets are allowed for sandboxed page-side
 computation. WIT/Wasmtime components and native executable modules remain

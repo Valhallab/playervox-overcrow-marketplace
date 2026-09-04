@@ -91,21 +91,24 @@ repackages, or retests it. The store contains only:
 ```text
 accepted-store/
 ├── admissions/<review-tree>.tsv
+├── listings/<extension-id>/<version>/<sha256>.json
 └── packages/<extension-id>/<version>/<sha256>.ocpkg
 ```
 
-Package files and receipts are committed with synchronized temporary files and
-atomic no-replace hard links. A receipt is written only after every referenced
-package is durable, so an interrupted attempt may leave harmless
-content-addressed package bytes but never a completed admission. Exact replay
-is idempotent. A completed same-version package with different bytes and any
-downgrade are rejected. Recovery uses the last verified completed receipt or a
-fresh private store; do not edit a receipt or package in place.
+Package, listing, and receipt files are committed with synchronized temporary
+files and atomic no-replace hard links. A receipt is written only after every
+referenced package and listing is durable, so an interrupted attempt may leave
+harmless content-addressed bytes but never a completed admission. Exact replay
+is idempotent. A completed same-version package or listing with different bytes,
+and any downgrade, are rejected. Recovery uses the last verified completed
+receipt or a fresh private store; do not edit a receipt, listing, or package in
+place.
 
-Receipts expose Git object IDs, extension IDs, versions, sizes, and digests.
-Packages expose the reviewed public extension bytes. The store contains no
-private key, token, user data, extension storage, catalog sequence, or deploy
-credential, but its path and contents still remain private operator data.
+Receipts expose Git object IDs, extension IDs, versions, package/listing sizes,
+and digests. Packages and listings expose the reviewed public extension bytes.
+The store contains no private key, token, user data, extension storage, catalog
+sequence, or deploy credential, but its path and contents still remain private
+operator data.
 
 These commands prove that candidate bytes cannot be replaced by base bytes,
 that trusted push tests execute, and that admitted bytes survive temporary-work

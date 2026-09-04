@@ -6,7 +6,7 @@ use std::{
 };
 
 use semver::Version;
-use serde::{Deserialize, Deserializer, de};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use sha2::{Digest, Sha256};
 
 const UTF8_FLAG: u16 = 1 << 11;
@@ -15,7 +15,7 @@ const REGULAR_MODE: u32 = 0o100644;
 const MAX_FILES: usize = 4096;
 pub(crate) const MAX_PACKAGE_BYTES: usize = 128 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
-const MAX_LISTING_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_LISTING_BYTES: usize = 64 * 1024;
 const MAX_FILE_PATH_BYTES: usize = 192;
 const NATIVE_SUFFIXES: &[&str] = &[".so", ".dll", ".dylib", ".exe", ".node"];
 
@@ -110,22 +110,22 @@ struct WireFile {
     bytes: u64,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct WireListing {
-    author: String,
-    spdx_license: String,
-    source_url: String,
-    default_locale: String,
-    localizations: Vec<WireLocalization>,
+pub(crate) struct Listing {
+    pub(crate) author: String,
+    pub(crate) spdx_license: String,
+    pub(crate) source_url: String,
+    pub(crate) default_locale: String,
+    pub(crate) localizations: Vec<ListingLocalization>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct WireLocalization {
-    locale: String,
-    name: String,
-    description: String,
+pub(crate) struct ListingLocalization {
+    pub(crate) locale: String,
+    pub(crate) name: String,
+    pub(crate) description: String,
 }
 
 pub fn write_package(source: &Path, destination: &Path) -> Result<WrittenPackage, PackageError> {
@@ -227,8 +227,14 @@ fn validate_listing_source(source: &Path) -> Result<(), PackageError> {
         MAX_LISTING_BYTES,
         "invalid listing",
     )?;
-    let listing: WireListing =
-        serde_json::from_slice(&bytes).map_err(|_| error("invalid listing"))?;
+    parse_listing_bytes(&bytes).map(|_| ())
+}
+
+pub(crate) fn parse_listing_bytes(bytes: &[u8]) -> Result<Listing, PackageError> {
+    if bytes.is_empty() || bytes.len() > MAX_LISTING_BYTES {
+        return Err(error("invalid listing"));
+    }
+    let listing: Listing = serde_json::from_slice(bytes).map_err(|_| error("invalid listing"))?;
     if !valid_plain_text(&listing.author, 128)
         || !valid_spdx_license(&listing.spdx_license)
         || !valid_source_url(&listing.source_url)
@@ -251,7 +257,7 @@ fn validate_listing_source(source: &Path) -> Result<(), PackageError> {
     if !locales.contains(listing.default_locale.as_str()) {
         return Err(error("invalid listing"));
     }
-    Ok(())
+    Ok(listing)
 }
 
 fn collect_paths(

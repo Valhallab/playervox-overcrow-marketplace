@@ -19,8 +19,9 @@ operator may explicitly ingest those exact packages into a private store.
   non-executable.
 - Until the generic maintainer sandbox exists, require built web files in the
   reviewed tree; do not execute an extension-defined `build.command`.
-- At ingestion, re-inspect every package and require its identity, version,
-  SHA-256, size, and exact-revision receipt to agree. Write the receipt last.
+- At ingestion, re-inspect every package and listing and require identity,
+  version, both SHA-256 values, both sizes, and the exact-revision receipt to
+  agree. Write the receipt last.
 - Permit exact idempotent replay, but reject same-version replacement and
   downgrade relative to completed admissions.
 - Sign catalog identity, version, digest, and size. Do not rebuild or
