@@ -16,3 +16,5 @@ An OverCrow extension is a local web app.
 The host exposes `overcrow.*`. Page code cannot reach processes, game
 memory, arbitrary files, Node, Tauri, or native modules. Network access
 goes through `overcrow.fetch` to declared HTTPS endpoints only.
+Optional browser WebAssembly may be declared in the file ledger for local
+computation; it stays inside the same WebKit sandbox and has no host ABI.

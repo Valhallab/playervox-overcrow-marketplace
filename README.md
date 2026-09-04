@@ -13,11 +13,12 @@ OverCrow owns the outer chrome. The plugin owns its internal UX.
 The component/WIT/WASM product surface has been replaced with Web API
 v1:
 
-- `tools/marketplace-tool` validates a web directory and writes a
-  deterministic stored-zip `.ocpkg`.
+- `tools/marketplace-tool` validates the strict Web manifest, listing metadata,
+  complete file ledger, and built bytes, then writes a deterministic stored-zip
+  `.ocpkg`.
 - `fixtures/hello-web` is the structural Web API v1 fixture.
 - `widgets/warframe-market` is the reference extension: persistent
-  controller, IndexedDB catalog (~3840 structured items),
+  controller, IndexedDB catalog and last query (~3840 structured items),
   `overcrow.fetch` to `api.warframe.market`, and a view that can
   hide/show without resetting search state.
 - `published/` remains the historical production snapshot and is not
@@ -36,6 +37,10 @@ build in the maintainer sandbox, test once, package once, and emit an
 immutable artifact. Catalog generation reuses those exact bytes. Runtime
 OverCrow verifies signature, digest, and capabilities; it does not
 rebuild or retest widgets.
+
+Declared browser `.wasm` assets are allowed for sandboxed page-side
+computation. WIT/Wasmtime components and native executable modules remain
+unsupported.
 
 Production catalogs remain at
 <https://overcrow.playervox.com/marketplace/v1/catalog.json> with a

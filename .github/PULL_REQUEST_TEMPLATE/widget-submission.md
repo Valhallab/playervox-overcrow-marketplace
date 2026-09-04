@@ -7,7 +7,7 @@ Describe the extension, its intended game or use, and the exact revision tested.
 ## Review declarations
 
 - [ ] The package is a Web API v1 web app (`manifest.json` + `listing.json` + declared files).
-- [ ] There is no WIT, Wasmtime, native module, provider graph, or `component.wasm`.
+- [ ] There is no WIT, Wasmtime component, native executable module, or provider graph; any declared browser `.wasm` is page-only computation.
 - [ ] Every HTTPS grant is exact (`origin`, `method`, `pathPrefix`) and contains no credentials or wildcards.
 - [ ] Source, assets, fonts, preview, and third-party licenses have documented provenance.
 - [ ] English listing metadata is present; every additional locale is listed.

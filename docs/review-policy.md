@@ -2,7 +2,9 @@
 
 Reviewers admit one Web API v1 artifact.
 
-- Reject WIT, Wasmtime, native modules, providers, and undeclared files.
+- Reject WIT, Wasmtime components, native executable modules, providers, and
+  undeclared files. A declared browser `.wasm` asset is ordinary sandboxed page
+  code and receives no native authority.
 - Confirm the manifest file ledger matches the packaged bytes.
 - Confirm listing locales, license, and source URL are exact and
   non-executable.

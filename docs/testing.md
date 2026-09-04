@@ -9,10 +9,10 @@ cargo run -p marketplace-tool --locked -- package widgets/warframe-market /tmp/w
 cargo run -p marketplace-tool --locked -- inspect /tmp/warframe-market.ocpkg
 ```
 
-These prove inventory, native-file rejection, deterministic ZIP bytes,
-catalog search over 3840 structured items, and controller state that
-survives view reconnect. They do not prove live compositor or game
-behavior.
+These prove strict manifest/listing validation, inventory, native executable
+rejection, optional browser-WASM admission, deterministic ZIP bytes, catalog
+search over 3840 structured items, and controller/query state across view and
+controller restart. They do not prove live compositor or game behavior.
 
 Also run the Web API v1 catalog-site contract:
 

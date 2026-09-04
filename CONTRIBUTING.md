@@ -3,6 +3,8 @@
 Submit Web API v1 extensions only. A submission is a directory of web
 files plus `manifest.json` and `listing.json`. Do not send WIT worlds,
 Wasmtime components, native modules, or provider graphs.
+Declared browser `.wasm` assets are permitted only as page-side computation
+inside the normal Web sandbox; they do not receive native or system authority.
 
 ## Local checks
 

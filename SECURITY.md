@@ -33,8 +33,10 @@ and prepares its validator and drivers from the exact target-base commit. The
 proposed tree is treated only as data and is never selected as the Actions
 checkout or a shell-script source.
 
-Admission packages Web API v1 directories with `marketplace-tool package` and
-inspects the stored-zip `.ocpkg`. WIT, Wasmtime, native modules, and provider
+Admission validates listing metadata, the strict Web API v1 manifest, and its
+complete file ledger with `marketplace-tool package`, then inspects the
+stored-zip `.ocpkg`. Browser WebAssembly is allowed only as verified page code
+inside the same sandbox. WIT, Wasmtime, native executable modules, and provider
 graphs are rejected. Publication copies admitted bytes; it does not rebuild or
 retest them.
 
