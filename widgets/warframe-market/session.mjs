@@ -4,6 +4,7 @@ import { parseOrders } from './orders.mjs';
 const ITEMS_URL = 'https://api.warframe.market/v2/items';
 const VERSIONS_URL = 'https://api.warframe.market/v2/versions';
 const CATALOG_KEY = 'catalog';
+const STATE_KEY = 'state';
 
 export function createMarketSession({ store, fetchJson }) {
   let items = [];
@@ -13,6 +14,8 @@ export function createMarketSession({ store, fetchJson }) {
   let version = '';
 
   async function start() {
+    const savedState = await store.get(STATE_KEY);
+    query = normalizeQuery(savedState?.query);
     const cached = await store.get(CATALOG_KEY);
     if (cached?.items?.length) {
       items = cached.items;
@@ -25,6 +28,7 @@ export function createMarketSession({ store, fetchJson }) {
       version = remoteVersion || version;
       await store.set(CATALOG_KEY, { version, items });
     }
+    results = query ? searchItems(items, query) : [];
   }
 
   async function handleView(message) {
@@ -35,6 +39,7 @@ export function createMarketSession({ store, fetchJson }) {
         query = normalizeQuery(message.value);
         results = query ? searchItems(items, query) : [];
         detail = null;
+        await store.set(STATE_KEY, { query });
         return snapshot();
       }
       case 'select': {

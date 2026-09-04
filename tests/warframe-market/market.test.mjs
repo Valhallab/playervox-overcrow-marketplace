@@ -109,6 +109,30 @@ test('session keeps query and catalog across view hide/show reconnects', async (
   assert.equal(fetchCalls.filter((url) => url.endsWith('/v2/items')).length, 1);
 });
 
+test('session restores the last query and structured catalog after controller restart', async () => {
+  const itemsJson = await fixture('items.json');
+  const store = memoryStore();
+  const fetchJson = async (url) => {
+    if (url.endsWith('/v2/versions')) {
+      return { data: { collections: { items: 'v-test' } } };
+    }
+    if (url.endsWith('/v2/items')) {
+      return itemsJson;
+    }
+    throw new Error(`unexpected ${url}`);
+  };
+
+  const first = createMarketSession({ store, fetchJson });
+  await first.start();
+  await first.handleView({ type: 'query', value: 'flow' });
+
+  const restarted = createMarketSession({ store, fetchJson });
+  await restarted.start();
+  const state = await restarted.handleView({ type: 'hello' });
+  assert.equal(state.query, 'flow');
+  assert.deepEqual(state.results.map((item) => item.slug), ['primed_flow']);
+});
+
 test('session loads orders through overcrow.fetch and never calls global fetch', async () => {
   const itemsJson = await fixture('items.json');
   const ordersJson = await fixture('orders.json');
