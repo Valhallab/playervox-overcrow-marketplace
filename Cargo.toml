@@ -11,6 +11,7 @@ rust-version = "1.98"
 base64 = "=0.22.1"
 chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
 crc32fast = "=1.5.0"
+libc = "=0.2.186"
 ring = "=0.17.14"
 serde = { version = "=1.0.229", default-features = false, features = ["alloc", "derive"] }
 serde_json = { version = "=1.0.151", default-features = false, features = ["alloc"] }

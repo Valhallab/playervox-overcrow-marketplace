@@ -100,7 +100,10 @@ Package, listing, and receipt files are committed with synchronized temporary
 files and atomic no-replace hard links. A receipt is written only after every
 referenced package and listing is durable, so an interrupted attempt may leave
 harmless content-addressed bytes but never a completed admission. Exact replay
-is idempotent. A completed same-version package or listing with different bytes,
+is idempotent. Ingestion holds an exclusive lock on the private store directory
+through policy validation and receipt verification. A concurrent ingestion
+fails immediately; retry after the current ingestion finishes. No lock file
+needs removal after an interrupted process. A completed same-version package or listing with different bytes,
 and any downgrade, are rejected. Recovery uses the last verified completed
 receipt or a fresh private store; do not edit a receipt, listing, or package in
 place.

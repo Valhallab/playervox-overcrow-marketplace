@@ -9,6 +9,8 @@ use semver::Version;
 use serde::{Deserialize, Deserializer, Serialize, de};
 use sha2::{Digest, Sha256};
 
+use crate::private_fs::{open_regular_file, read_bounded_file};
+
 const UTF8_FLAG: u16 = 1 << 11;
 const DOS_DATE_1980_01_01: u16 = 33;
 const REGULAR_MODE: u32 = 0o100644;
@@ -132,8 +134,8 @@ pub(crate) struct ListingLocalization {
 pub fn write_package(source: &Path, destination: &Path) -> Result<WrittenPackage, PackageError> {
     let entries = collect_entries(source)?;
     let archive = build_stored_archive(&entries)?;
-    fs::write(destination, &archive).map_err(|_| error("unable to write package"))?;
     inspect_bytes(&archive)?;
+    fs::write(destination, &archive).map_err(|_| error("unable to write package"))?;
     Ok(WrittenPackage {
         path: destination.to_path_buf(),
         digest: sha256(&archive),
@@ -141,7 +143,7 @@ pub fn write_package(source: &Path, destination: &Path) -> Result<WrittenPackage
 }
 
 pub fn inspect(path: &Path) -> Result<InspectedManifest, PackageError> {
-    let bytes = fs::read(path).map_err(|_| error("unable to read package"))?;
+    let bytes = read_bounded_source(path, MAX_PACKAGE_BYTES, "unable to read package")?;
     inspect_bytes(&bytes)
 }
 
@@ -175,6 +177,7 @@ fn collect_entries(source: &Path) -> Result<BTreeMap<String, Vec<u8>>, PackageEr
     )?;
     let manifest: WireManifest =
         serde_json::from_slice(&manifest_bytes).map_err(|_| error("invalid manifest"))?;
+    validate_declared_size(&manifest)?;
     validate_listing_source(source)?;
     let mut actual = BTreeSet::new();
     collect_paths(source, "", &mut actual)?;
@@ -210,18 +213,8 @@ fn read_bounded_source(
     maximum: usize,
     message: &'static str,
 ) -> Result<Vec<u8>, PackageError> {
-    let metadata = fs::symlink_metadata(path).map_err(|_| error(message))?;
-    if !metadata.is_file()
-        || metadata.file_type().is_symlink()
-        || usize::try_from(metadata.len()).map_or(true, |size| size > maximum)
-    {
-        return Err(error(message));
-    }
-    let bytes = fs::read(path).map_err(|_| error(message))?;
-    if bytes.len() > maximum {
-        return Err(error(message));
-    }
-    Ok(bytes)
+    let file = open_regular_file(path).map_err(|_| error(message))?;
+    read_bounded_file(file, maximum as u64).map_err(|_| error(message))
 }
 
 fn validate_listing_source(source: &Path) -> Result<(), PackageError> {
@@ -283,9 +276,6 @@ fn collect_paths(
             .file_name()
             .into_string()
             .map_err(|_| error("unsafe source"))?;
-        if name == "." || name == ".." || name == "listing.json" {
-            continue;
-        }
         let relative = if prefix.is_empty() {
             name.clone()
         } else {
@@ -297,6 +287,9 @@ fn collect_paths(
         let file_type = entry.file_type().map_err(|_| error("unsafe source"))?;
         if file_type.is_symlink() {
             return Err(error("unsafe source"));
+        }
+        if relative == "listing.json" && file_type.is_file() {
+            continue;
         }
         if file_type.is_dir() {
             collect_paths(root, &relative, output)?;
@@ -335,21 +328,17 @@ fn validate_manifest(
         return Err(error("invalid manifest"));
     }
     validate_permissions(&manifest.permissions)?;
+    validate_declared_size(manifest)?;
     let mut declared = BTreeSet::from(["manifest.json".to_owned()]);
     declared.extend(manifest.files.keys().cloned());
     if declared.len() != files.len() || files.keys().any(|path| !declared.contains(path)) {
         return Err(error("file inventory mismatch"));
     }
     let mut portable_paths = BTreeSet::from(["manifest.json".to_owned()]);
-    let mut declared_bytes = 0_u64;
     for (path, declared) in &manifest.files {
         let bytes = files
             .get(path)
             .ok_or_else(|| error("file inventory mismatch"))?;
-        declared_bytes = declared_bytes
-            .checked_add(declared.bytes)
-            .filter(|total| *total <= MAX_PACKAGE_BYTES as u64)
-            .ok_or_else(|| error("package too large"))?;
         if !valid_entry_path(path)
             || !portable_paths.insert(path.to_ascii_lowercase())
             || !valid_sha256(&declared.sha256)
@@ -360,6 +349,16 @@ fn validate_manifest(
             return Err(error("file inventory mismatch"));
         }
     }
+    Ok(())
+}
+
+fn validate_declared_size(manifest: &WireManifest) -> Result<(), PackageError> {
+    manifest.files.values().try_fold(0_u64, |total, file| {
+        total
+            .checked_add(file.bytes)
+            .filter(|total| *total <= MAX_PACKAGE_BYTES as u64)
+            .ok_or_else(|| error("package too large"))
+    })?;
     Ok(())
 }
 
@@ -785,6 +784,65 @@ mod tests {
     use std::os::unix::fs::PermissionsExt as _;
 
     const VIEW: &[u8] = b"<!doctype html><p>hello</p>";
+
+    #[test]
+    fn package_rejects_oversized_ledger_before_reading_assets() {
+        let source = fixture(&[("index.html", VIEW), ("extra.bin", b"asset")]);
+        mutate_manifest(source.path(), |manifest| {
+            manifest["files"]["index.html"]["bytes"] = serde_json::json!(MAX_PACKAGE_BYTES);
+            manifest["files"]["extra.bin"]["bytes"] = serde_json::json!(1);
+        });
+        // The impossible aggregate is rejected from the ledger, before touching
+        // payloads that would otherwise fail their declared length/digest checks.
+        let output = tempfile::tempdir().unwrap();
+        let package = output.path().join("x.ocpkg");
+        let rejection = write_package(source.path(), &package).unwrap_err();
+        assert_eq!(rejection.message, "package too large");
+        assert!(!package.exists());
+    }
+
+    #[test]
+    fn inspect_rejects_symlink_packages() {
+        let source = fixture(&[("index.html", VIEW)]);
+        let output = tempfile::tempdir().unwrap();
+        let package = output.path().join("real.ocpkg");
+        write_package(source.path(), &package).unwrap();
+        let link = output.path().join("link.ocpkg");
+        std::os::unix::fs::symlink(package, &link).unwrap();
+        assert!(inspect(&link).is_err());
+    }
+
+    #[test]
+    fn package_rejects_undeclared_nested_listing_entries() {
+        for kind in ["file", "directory", "symlink"] {
+            let source = fixture(&[("index.html", VIEW)]);
+            fs::create_dir(source.path().join("nested")).unwrap();
+            let hidden = source.path().join("nested/listing.json");
+            match kind {
+                "directory" => {
+                    fs::create_dir(&hidden).unwrap();
+                    fs::write(hidden.join("hidden.bin"), b"undeclared").unwrap();
+                }
+                "symlink" => {
+                    std::os::unix::fs::symlink(source.path().join("index.html"), hidden).unwrap();
+                }
+                _ => fs::write(hidden, b"undeclared").unwrap(),
+            }
+            let output = tempfile::tempdir().unwrap();
+            assert!(write_package(source.path(), &output.path().join("x.ocpkg")).is_err());
+        }
+    }
+
+    #[test]
+    fn package_includes_declared_nested_listing_files() {
+        let source = fixture(&[("index.html", VIEW), ("nested/listing.json", b"declared")]);
+        let output = tempfile::tempdir().unwrap();
+        let package = output.path().join("x.ocpkg");
+        write_package(source.path(), &package).expect("declared nested listing is an asset");
+        let bytes = fs::read(package).unwrap();
+        let entries = parse_stored_zip(&bytes).unwrap();
+        assert_eq!(entries.get("nested/listing.json").unwrap(), b"declared");
+    }
 
     #[test]
     fn package_is_deterministic_and_inspectable() {

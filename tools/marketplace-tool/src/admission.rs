@@ -6,8 +6,8 @@ use sha2::{Digest as _, Sha256};
 use crate::{
     package,
     private_fs::{
-        PrivateFsError, commit_file, ensure_private_directory, read_regular_file,
-        validate_private_directory,
+        PrivateFsError, commit_file, ensure_private_directory, lock_private_directory,
+        read_regular_file, validate_private_directory,
     },
 };
 
@@ -186,7 +186,7 @@ pub fn ingest(
     expected: &ExpectedAdmission<'_>,
 ) -> Result<StoredAdmission, AdmissionError> {
     validate_private_directory(artifacts_root)?;
-    validate_private_directory(store)?;
+    let _store_lock = lock_private_directory(store)?;
     let receipt_bytes = read_regular_file(receipt_path, MAX_RECEIPT_BYTES as u64)?;
     let receipt = parse_receipt(&receipt_bytes, expected)?;
     validate_artifact_inventory(artifacts_root, receipt.artifacts.len())?;
@@ -412,6 +412,84 @@ mod tests {
     const SECOND_TREE: &str = "4444444444444444444444444444444444444444";
 
     #[test]
+    fn concurrent_ingestion_cannot_accept_same_version_replacement() {
+        let scratch = private_tempdir();
+        let store = private_subdirectory(scratch.path(), "accepted");
+        let first = admission_inputs(
+            scratch.path(),
+            "first",
+            REVIEW_TREE,
+            "1.0.0",
+            &vec![b'a'; 4 * 1024 * 1024],
+        );
+        let second = admission_inputs(
+            scratch.path(),
+            "second",
+            SECOND_TREE,
+            "1.0.0",
+            &vec![b'b'; 4 * 1024 * 1024],
+        );
+        // Pre-existing directories isolate the receipt policy race from directory creation.
+        for directory in ["packages", "listings"] {
+            let root = private_subdirectory(&store, directory);
+            let identity = private_subdirectory(&root, "com.playervox.overcrow.hello");
+            private_subdirectory(&identity, "1.0.0");
+        }
+        private_subdirectory(&store, "admissions");
+        let barrier = std::sync::Barrier::new(2);
+        let results = std::thread::scope(|scope| {
+            let run = |input: &AdmissionInput, tree| {
+                barrier.wait();
+                ingest(
+                    &input.receipt,
+                    &input.artifacts,
+                    &store,
+                    &expected_for(tree),
+                )
+                .is_ok()
+            };
+            let first = scope.spawn(move || run(&first, REVIEW_TREE));
+            let second = scope.spawn(move || run(&second, SECOND_TREE));
+            [first.join().unwrap(), second.join().unwrap()]
+        });
+        assert_eq!(results.into_iter().filter(|accepted| *accepted).count(), 1);
+        assert_eq!(fs::read_dir(store.join("admissions")).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn ingestion_rejects_a_busy_store_and_recovers_after_unlock() {
+        let scratch = private_tempdir();
+        let store = private_subdirectory(scratch.path(), "accepted");
+        let input = admission_inputs(
+            scratch.path(),
+            "input",
+            REVIEW_TREE,
+            "1.0.0",
+            b"<!doctype html><p>original</p>",
+        );
+        let lock = fs::File::open(&store).unwrap();
+        lock.try_lock().expect("isolated store lock");
+        assert!(
+            ingest(
+                &input.receipt,
+                &input.artifacts,
+                &store,
+                &expected_for(REVIEW_TREE)
+            )
+            .is_err()
+        );
+        assert!(!store.join("admissions").exists());
+        drop(lock);
+        ingest(
+            &input.receipt,
+            &input.artifacts,
+            &store,
+            &expected_for(REVIEW_TREE),
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn receipt_binds_exact_revisions_and_artifacts() {
         let receipt = format!(
             "admission\t2\t{TRUST_SHA}\t{REVIEW_SHA}\t{REVIEW_TREE}\n\
@@ -469,6 +547,14 @@ mod tests {
 
         assert_eq!(admitted.artifact_count, 1);
         assert_eq!(admitted.review_tree, REVIEW_TREE);
+        let replay = ingest(
+            &input.receipt,
+            &input.artifacts,
+            &store,
+            &expected_for(REVIEW_TREE),
+        )
+        .expect("exact replay releases and reacquires the transaction lock");
+        assert_eq!(replay.artifact_count, 1);
         fs::write(&input.package, b"destroyed source copy").unwrap();
         let reopened = verify(&store, REVIEW_TREE).unwrap();
         let stored_package = store
