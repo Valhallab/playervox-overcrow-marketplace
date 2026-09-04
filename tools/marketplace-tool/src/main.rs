@@ -1,3 +1,4 @@
+mod admission;
 mod package;
 mod snapshot;
 
@@ -37,6 +38,58 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some("ingest") => {
+            let arguments = args.collect::<Vec<_>>();
+            if arguments.len() != 12
+                || arguments[0] != "--receipt"
+                || arguments[2] != "--artifacts"
+                || arguments[4] != "--store"
+                || arguments[6] != "--trust-sha"
+                || arguments[8] != "--review-sha"
+                || arguments[10] != "--review-tree"
+            {
+                eprintln!("error: invalid admission ingestion arguments");
+                return ExitCode::FAILURE;
+            }
+            let expected = admission::ExpectedAdmission {
+                trust_sha: &arguments[7],
+                review_sha: &arguments[9],
+                review_tree: &arguments[11],
+            };
+            match admission::ingest(
+                Path::new(&arguments[1]),
+                Path::new(&arguments[3]),
+                Path::new(&arguments[5]),
+                &expected,
+            ) {
+                Ok(stored) => {
+                    println!("{} {}", stored.review_tree, stored.artifact_count);
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Some("verify-admission") => {
+            let arguments = args.collect::<Vec<_>>();
+            if arguments.len() != 4 || arguments[0] != "--store" || arguments[2] != "--review-tree"
+            {
+                eprintln!("error: invalid admission verification arguments");
+                return ExitCode::FAILURE;
+            }
+            match admission::verify(Path::new(&arguments[1]), &arguments[3]) {
+                Ok(stored) => {
+                    println!("{} {}", stored.review_tree, stored.artifact_count);
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Some("snapshot-plan") => {
             let arguments = args.collect::<Vec<_>>();
             if arguments.len() != 4
@@ -59,6 +112,12 @@ fn main() -> ExitCode {
         _ => {
             eprintln!("usage: marketplace-tool package <source-dir> <destination.ocpkg>");
             eprintln!("       marketplace-tool inspect <package.ocpkg>");
+            eprintln!(
+                "       marketplace-tool ingest --receipt <path> --artifacts <directory> --store <directory> --trust-sha <sha> --review-sha <sha> --review-tree <tree>"
+            );
+            eprintln!(
+                "       marketplace-tool verify-admission --store <directory> --review-tree <tree>"
+            );
             eprintln!("       marketplace-tool snapshot-plan --repository <path> --revision <sha>");
             ExitCode::FAILURE
         }

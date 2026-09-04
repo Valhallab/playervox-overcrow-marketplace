@@ -20,12 +20,16 @@ cleanup does not rewrite those bytes and does not rotate keys.
 Use separate clean worktrees and roles: contributors submit candidate PRs;
 hosted CI materializes the exact proposed tree and produces ephemeral package
 digests without executing its code; a maintainer reviews and ingests the exact
-revision in a dedicated sandbox; acceptance merges only to `candidate`; an
+trusted revision into a private store; acceptance merges only to `candidate`; an
 offline publisher would create a new signed catalog; and a separate deployment
 operator configures Coolify to serve tracked output. The hosted receipt is
 evidence for review, not a durable accepted artifact and not publication
 authority. Coolify, GitHub, CI, and project temporary files never receive
 production authority material.
+
+The current ingestion path accepts only an exact trusted push and its committed
+built web files. It does not execute extension-defined build commands. A future
+generic maintainer sandbox is a separate milestone.
 
 The fixed production origin is
 `https://overcrow.playervox.com/marketplace/v1/`. A production catalog is valid
@@ -43,7 +47,10 @@ Keep the existing technical and human-review rulesets on `candidate` and
 
 ## 4. Local admission (no publication)
 
+Run the fast repository checks during development:
+
 ```sh
+tests/admission-store-smoke.sh
 tests/ci-admission-smoke.sh
 cargo test -p marketplace-tool --locked
 node --test tests/warframe-market/market.test.mjs
@@ -52,20 +59,68 @@ cargo run -p marketplace-tool --locked -- package widgets/warframe-market /tmp/w
 cargo run -p marketplace-tool --locked -- inspect /tmp/warframe-market.ocpkg
 ```
 
-Those commands prove that candidate bytes cannot be replaced by base bytes,
-that trusted push tests execute, and that packaging and listing validation
-pass. If hosted admission cannot produce an exact-tree receipt, stop accepting
-candidate changes; do not fall back to the base checkout. These commands do not
-sign a catalog, touch `published/`, or deploy Coolify.
+For a reviewed, clean, already trusted revision, persist the packages produced
+by the same test/package pass into a private store outside all repositories:
+
+```sh
+repository=/absolute/path/to/a/clean/marketplace-checkout
+private_parent=/absolute/private/path/to/admission-work
+accepted_store=/absolute/private/path/to/accepted-store
+/usr/bin/install -d -m 0700 -- "$private_parent" "$accepted_store"
+revision=$(/usr/bin/git -C "$repository" rev-parse --verify 'HEAD^{commit}')
+test -z "$(/usr/bin/git -C "$repository" status --porcelain=v1 --untracked-files=all)"
+(
+  CDPATH='' cd -- "$repository"
+  sh scripts/ci-verify.sh \
+    "$repository" "$revision" "$revision" push \
+    Valhallab/playervox-overcrow-marketplace candidate \
+    Valhallab/playervox-overcrow-marketplace candidate \
+    "$private_parent" admission "$accepted_store"
+)
+review_tree=$(/usr/bin/git -C "$repository" rev-parse --verify "$revision^{tree}")
+cargo run --manifest-path "$repository/tools/marketplace-tool/Cargo.toml" \
+  -p marketplace-tool --locked -- verify-admission \
+  --store "$accepted_store" --review-tree "$review_tree"
+```
+
+The driver runs the trusted revision's Rust and JavaScript tests once, packages
+each widget once, and passes those admission outputs directly to
+`marketplace-tool ingest`. Ingestion re-inspects the `.ocpkg`; it never executes,
+repackages, or retests it. The store contains only:
+
+```text
+accepted-store/
+├── admissions/<review-tree>.tsv
+└── packages/<extension-id>/<version>/<sha256>.ocpkg
+```
+
+Package files and receipts are committed with synchronized temporary files and
+atomic no-replace hard links. A receipt is written only after every referenced
+package is durable, so an interrupted attempt may leave harmless
+content-addressed package bytes but never a completed admission. Exact replay
+is idempotent. A completed same-version package with different bytes and any
+downgrade are rejected. Recovery uses the last verified completed receipt or a
+fresh private store; do not edit a receipt or package in place.
+
+Receipts expose Git object IDs, extension IDs, versions, sizes, and digests.
+Packages expose the reviewed public extension bytes. The store contains no
+private key, token, user data, extension storage, catalog sequence, or deploy
+credential, but its path and contents still remain private operator data.
+
+These commands prove that candidate bytes cannot be replaced by base bytes,
+that trusted push tests execute, and that admitted bytes survive temporary-work
+cleanup. If hosted admission cannot produce an exact-tree receipt, stop
+accepting candidate changes; do not fall back to the base checkout. Nothing in
+this section signs a catalog, touches `published/`, or deploys Coolify.
 
 ## 5. Keys and authority material
 
 The reviewed public key remains `keys/overcrow-production-2026-01.pub`.
 Production private keys, sequence counters, and recovery backups stay
-outside this repository. The WASM-era publisher
-(`prepare-marketplace-tool.sh`, `marketplace-tool build|bind-build|verify*`)
-is deleted. Do not reconstruct it. A later authorized task must introduce a
-Web API v1 signer before any new production catalog is published.
+outside this repository. The WASM-era publisher and generic source-bundle
+publisher scripts are deleted. Do not reconstruct them. A later authorized
+task must introduce a small Web API v1 catalog builder and signer that consumes
+only a verified accepted store before any new production catalog is published.
 
 ## 6. Live snapshot
 

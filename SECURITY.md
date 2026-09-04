@@ -48,9 +48,13 @@ as `application/octet-stream` with content sniffing disabled. Same-bundle reads
 remain on the verified private scheme; external browser HTTP(S) is denied. WIT,
 Wasmtime, native executable modules, native suffixes or signatures, and
 provider graphs are rejected. Push CI executes the exact now-trusted revision's
-Rust and JavaScript tests once. Later maintainer ingestion may execute untrusted
-build or test code only in its dedicated sandbox; publication copies its
-admitted bytes and does not rebuild or retest them.
+Rust and JavaScript tests once. Only that trusted-push mode may receive an
+explicit private accepted-store path. It re-inspects and commits the already
+produced package bytes under their identity, version, and SHA-256, then writes
+the exact-revision receipt last. Incomplete artifacts have no receipt and are
+not accepted. The generic sandbox for extension-defined build or test commands
+is not implemented; publication must copy admitted bytes without rebuilding or
+retesting them.
 
 The marketplace website cannot install software. The Control Center validates
 packages and user consent; local unverified packages install disabled and stay

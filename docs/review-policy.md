@@ -4,8 +4,9 @@ Reviewers admit one Web API v1 artifact.
 Hosted pull-request admission first treats the exact proposed tree as data,
 packages every widget with the base-reviewed tool, and emits an ephemeral
 digest receipt. It does not execute proposed code. A maintainer sandbox is the
-later boundary that may build and test proposed code once before producing the
-durable reviewed artifact.
+future boundary that may build and test proposed code once. Today, a trusted
+push runs the repository checks and packages each committed widget once; an
+operator may explicitly ingest those exact packages into a private store.
 
 - Reject WIT, Wasmtime components, native executable modules, providers, and
   undeclared files. A declared browser `.wasm` asset is ordinary sandboxed page
@@ -16,8 +17,12 @@ durable reviewed artifact.
 - Confirm the manifest file ledger matches the packaged bytes.
 - Confirm listing locales, license, and source URL are exact and
   non-executable.
-- If a `build.command` is declared, run it once in the maintainer
-  sandbox, then package the output directory once.
+- Until the generic maintainer sandbox exists, require built web files in the
+  reviewed tree; do not execute an extension-defined `build.command`.
+- At ingestion, re-inspect every package and require its identity, version,
+  SHA-256, size, and exact-revision receipt to agree. Write the receipt last.
+- Permit exact idempotent replay, but reject same-version replacement and
+  downgrade relative to completed admissions.
 - Sign catalog identity, version, digest, and size. Do not rebuild or
   retest after ingestion.
 

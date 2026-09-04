@@ -21,16 +21,21 @@ repository="$scratch/repository"
     'marketplace-ci-test@invalid.example'
 # During a red/green run these files may not be committed yet. Make the
 # fixture's trusted revision contain the exact driver under test.
-for relative in scripts/ci-verify.sh tools/marketplace-tool/src/main.rs \
+for relative in scripts/ci-verify.sh tools/marketplace-tool/src/admission.rs \
+        tools/marketplace-tool/src/main.rs tools/marketplace-tool/src/package.rs \
         tools/marketplace-tool/src/snapshot.rs; do
     /usr/bin/install -D -m 0755 -- "$repo_root/$relative" \
         "$repository/$relative"
 done
 /usr/bin/chmod 0644 \
+    "$repository/tools/marketplace-tool/src/admission.rs" \
     "$repository/tools/marketplace-tool/src/main.rs" \
+    "$repository/tools/marketplace-tool/src/package.rs" \
     "$repository/tools/marketplace-tool/src/snapshot.rs"
 /usr/bin/git -C "$repository" add -- scripts/ci-verify.sh \
-    tools/marketplace-tool/src/main.rs tools/marketplace-tool/src/snapshot.rs
+    tools/marketplace-tool/src/admission.rs \
+    tools/marketplace-tool/src/main.rs tools/marketplace-tool/src/package.rs \
+    tools/marketplace-tool/src/snapshot.rs
 /usr/bin/git -C "$repository" commit --quiet --allow-empty \
     -m 'trusted driver fixture'
 trust_sha=$(/usr/bin/git -C "$repository" rev-parse --verify 'HEAD^{commit}')
@@ -155,6 +160,32 @@ if ! /usr/bin/grep -F -x \
     printf '%s\n' 'error: trusted push failure was not explicit' >&2
     /usr/bin/cat "$stdout" >&2
     /usr/bin/cat "$stderr" >&2
+    exit 1
+fi
+
+/usr/bin/git -C "$repository" checkout --quiet -B accepted-push "$trust_sha"
+accepted_tree=$(/usr/bin/git -C "$repository" rev-parse --verify "$trust_sha^{tree}")
+accepted_store="$scratch/accepted"
+/usr/bin/install -d -m 0700 -- "$accepted_store"
+if ! (
+    CDPATH='' cd -- "$repository"
+    sh "$repository/scripts/ci-verify.sh" \
+        "$repository" "$trust_sha" "$trust_sha" push \
+        Valhallab/playervox-overcrow-marketplace candidate \
+        Valhallab/playervox-overcrow-marketplace candidate \
+        "$private_parent" admission "$accepted_store"
+) >"$stdout" 2>"$stderr"; then
+    printf '%s\n' 'error: exact trusted admission was not persisted' >&2
+    /usr/bin/cat "$stdout" >&2
+    /usr/bin/cat "$stderr" >&2
+    exit 1
+fi
+verified=$(cargo run -p marketplace-tool --locked --quiet -- \
+    verify-admission --store "$accepted_store" --review-tree "$accepted_tree")
+if test "$verified" != "$accepted_tree 1" \
+        || /usr/bin/find "$private_parent" -mindepth 1 -maxdepth 1 \
+            -name 'verification.*' -print -quit | /usr/bin/grep . >/dev/null; then
+    printf '%s\n' 'error: persisted admission is not independently verifiable' >&2
     exit 1
 fi
 

@@ -13,7 +13,7 @@ const UTF8_FLAG: u16 = 1 << 11;
 const DOS_DATE_1980_01_01: u16 = 33;
 const REGULAR_MODE: u32 = 0o100644;
 const MAX_FILES: usize = 4096;
-const MAX_PACKAGE_BYTES: usize = 128 * 1024 * 1024;
+pub(crate) const MAX_PACKAGE_BYTES: usize = 128 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 const MAX_LISTING_BYTES: usize = 64 * 1024;
 const MAX_FILE_PATH_BYTES: usize = 192;
@@ -380,7 +380,7 @@ fn valid_html_entrypoint(path: &str) -> bool {
     valid_entry_path(path) && path.ends_with(".html")
 }
 
-fn valid_extension_id(value: &str) -> bool {
+pub(crate) fn valid_extension_id(value: &str) -> bool {
     (3..=128).contains(&value.len())
         && value.is_ascii()
         && value.split('.').count() >= 2
@@ -395,7 +395,7 @@ fn valid_extension_id(value: &str) -> bool {
         })
 }
 
-fn canonical_semver(value: &str) -> bool {
+pub(crate) fn canonical_semver(value: &str) -> bool {
     Version::parse(value).is_ok_and(|version| version.to_string() == value)
 }
 

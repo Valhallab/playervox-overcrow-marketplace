@@ -4,7 +4,7 @@ umask 077
 
 usage() {
     printf '%s\n' \
-        'usage: ci-verify.sh [REPOSITORY TRUST-SHA REVIEW-SHA EVENT REPOSITORY-NAME BASE-REF HEAD-REPOSITORY HEAD-REF PRIVATE-PARENT admission]' >&2
+        'usage: ci-verify.sh [REPOSITORY TRUST-SHA REVIEW-SHA EVENT REPOSITORY-NAME BASE-REF HEAD-REPOSITORY HEAD-REF PRIVATE-PARENT admission [ACCEPTED-STORE]]' >&2
 }
 
 fail() {
@@ -40,7 +40,8 @@ if test "$#" -eq 0; then
     run_local_checks "$trusted_root"
     exit 0
 fi
-if test "$#" -ne 10 || test "${10}" != admission; then
+if { test "$#" -ne 10 && test "$#" -ne 11; } \
+        || test "${10}" != admission; then
     usage
     exit 2
 fi
@@ -54,6 +55,7 @@ base_ref=$6
 head_repository=$7
 head_ref=$8
 private_parent=$9
+accepted_store=${11:-}
 
 valid_revision() {
     case "$1" in '' | *[!0-9a-f]*) return 1 ;; esac
@@ -97,6 +99,21 @@ if test "$repository" = / || test "$trusted_root" = / \
         || ! safe_owned_directory "$private_parent" 700; then
     fail 'CI trust roots are unsafe'
 fi
+if test -n "$accepted_store"; then
+    case "$accepted_store" in /*) ;; *)
+        fail 'accepted artifact store is unsafe'
+        ;;
+    esac
+    case "$accepted_store" in
+        "$repository" | "$repository"/* | "$trusted_root" | "$trusted_root"/*)
+            fail 'accepted artifact store is unsafe'
+            ;;
+    esac
+    if test "$event_name" != push \
+            || ! safe_owned_directory "$accepted_store" 700; then
+        fail 'accepted artifact store is unsafe'
+    fi
+fi
 if test "$event_name" = push \
         && { test "$trust_sha" != "$review_sha" \
             || test "$repository_name" != "$head_repository"; }; then
@@ -108,6 +125,7 @@ for required in Cargo.lock Cargo.toml rust-toolchain.toml \
         scripts/resolve-system-node.sh \
         tests/reject-published-change.sh tests/reject-trusted-change.sh \
         tools/marketplace-tool/Cargo.toml \
+        tools/marketplace-tool/src/admission.rs \
         tools/marketplace-tool/src/main.rs \
         tools/marketplace-tool/src/package.rs \
         tools/marketplace-tool/src/snapshot.rs; do
@@ -314,6 +332,15 @@ if test "$artifact_index" -ne "$widget_count" \
         || test -n "$(LC_ALL=C /usr/bin/sort "$identities" \
             | /usr/bin/uniq -d)"; then
     fail 'candidate artifact admission failed'
+fi
+
+if test -n "$accepted_store" \
+        && ! "$trusted_tool" ingest \
+            --receipt "$receipt" --artifacts "$artifact_root" \
+            --store "$accepted_store" --trust-sha "$trust_sha" \
+            --review-sha "$review_sha" --review-tree "$review_tree" \
+            >/dev/null; then
+    fail 'accepted artifact ingestion failed'
 fi
 
 /usr/bin/cat "$receipt"
