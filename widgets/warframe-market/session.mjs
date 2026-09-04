@@ -12,21 +12,41 @@ export function createMarketSession({ store, fetchJson }) {
   let results = [];
   let detail = null;
   let version = '';
+  let error = null;
+  let action = null;
 
   async function start() {
-    const savedState = await store.get(STATE_KEY);
+    const savedState = await readStored(STATE_KEY);
     query = normalizeQuery(savedState?.query);
-    const cached = await store.get(CATALOG_KEY);
-    if (cached?.items?.length) {
-      items = cached.items;
-      version = cached.version ?? '';
+    const cached = await readStored(CATALOG_KEY);
+    // Stored data crosses the same validation boundary as remote catalog data.
+    if (Array.isArray(cached?.items) && cached.items.length <= 8192) {
+      try {
+        items = parseCatalog({ data: cached.items.map((item) => ({
+          slug: item?.slug,
+          i18n: { en: { name: typeof item?.name === 'string' && item.name.length <= 192 ? item.name : null } },
+        })) });
+        version = validVersion(cached.version);
+      } catch {
+        // An invalid cache cannot authorize search results or request paths.
+      }
     }
     const remoteVersion = await readVersion();
     if (!items.length || (remoteVersion && remoteVersion !== version)) {
-      const payload = await fetchJson(ITEMS_URL);
-      items = parseCatalog(payload);
-      version = remoteVersion || version;
-      await store.set(CATALOG_KEY, { version, items });
+      try {
+        const payload = await fetchJson(ITEMS_URL);
+        items = parseCatalog(payload);
+        version = remoteVersion || version;
+      } catch {
+        error = 'catalog_unavailable';
+        results = query ? searchItems(items, query) : [];
+        return;
+      }
+      try {
+        await store.set(CATALOG_KEY, { version, items });
+      } catch {
+        error = 'storage_unavailable';
+      }
     }
     results = query ? searchItems(items, query) : [];
   }
@@ -36,24 +56,38 @@ export function createMarketSession({ store, fetchJson }) {
       case 'hello':
         return snapshot();
       case 'query': {
+        const current = action = {};
+        error = null;
         query = normalizeQuery(message.value);
         results = query ? searchItems(items, query) : [];
         detail = null;
-        await store.set(STATE_KEY, { query });
+        try {
+          await store.set(STATE_KEY, { query });
+        } catch {
+          if (action === current) error = 'storage_unavailable';
+        }
         return snapshot();
       }
       case 'select': {
+        const current = action = {};
+        detail = null;
+        error = null;
         const selected = items.find((item) => item.slug === message.slug);
         if (!selected) {
-          detail = null;
           return snapshot();
         }
-        const payload = await fetchJson(`${ITEMS_URL}/${selected.slug}/orders`);
-        detail = {
-          name: selected.name,
-          slug: selected.slug,
-          orders: parseOrders(payload),
-        };
+        try {
+          const payload = await fetchJson(`${ITEMS_URL}/${selected.slug}/orders`);
+          if (action === current) {
+            detail = {
+              name: selected.name,
+              slug: selected.slug,
+              orders: parseOrders(payload),
+            };
+          }
+        } catch {
+          if (action === current) error = 'orders_unavailable';
+        }
         return snapshot();
       }
       default:
@@ -65,10 +99,23 @@ export function createMarketSession({ store, fetchJson }) {
     try {
       const payload = await fetchJson(VERSIONS_URL);
       const value = payload?.data?.collections?.items;
-      return typeof value === 'string' ? value : '';
+      return validVersion(value);
     } catch {
       return '';
     }
+  }
+
+  async function readStored(key) {
+    try {
+      return await store.get(key);
+    } catch {
+      error = 'storage_unavailable';
+      return undefined;
+    }
+  }
+
+  function validVersion(value) {
+    return typeof value === 'string' && value.length <= 128 ? value : '';
   }
 
   function snapshot() {
@@ -77,6 +124,7 @@ export function createMarketSession({ store, fetchJson }) {
       query,
       results,
       detail,
+      error,
     };
   }
 
@@ -98,22 +146,27 @@ export function createIndexedDbStore(databaseName = 'overcrow-warframe-market') 
     });
   }
 
+  async function transact(mode, operation) {
+    const db = await open();
+    try {
+      return await new Promise((resolve, reject) => {
+        const transaction = db.transaction('kv', mode);
+        const request = operation(transaction.objectStore('kv'));
+        transaction.oncomplete = () => resolve(mode === 'readonly' ? request.result : undefined);
+        transaction.onabort = () => reject(transaction.error ?? new Error('transaction aborted'));
+        transaction.onerror = () => reject(transaction.error ?? request.error ?? new Error('transaction failed'));
+      });
+    } finally {
+      db.close();
+    }
+  }
+
   return {
-    async get(key) {
-      const db = await open();
-      return new Promise((resolve, reject) => {
-        const request = db.transaction('kv', 'readonly').objectStore('kv').get(key);
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
+    get(key) {
+      return transact('readonly', (store) => store.get(key));
     },
-    async set(key, value) {
-      const db = await open();
-      return new Promise((resolve, reject) => {
-        const request = db.transaction('kv', 'readwrite').objectStore('kv').put(value, key);
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
-      });
+    set(key, value) {
+      return transact('readwrite', (store) => store.put(value, key));
     },
   };
 }

@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 
 import { parseCatalog, searchItems } from '../../widgets/warframe-market/catalog.mjs';
 import { parseOrders, whisperLine } from '../../widgets/warframe-market/orders.mjs';
-import { createMarketSession } from '../../widgets/warframe-market/session.mjs';
+import { createIndexedDbStore, createMarketSession } from '../../widgets/warframe-market/session.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 
@@ -169,5 +169,245 @@ test('session loads orders through overcrow.fetch and never calls global fetch',
     assert.equal(ambient, 0);
   } finally {
     globalThis.fetch = previous;
+  }
+});
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+async function pendingOrdersSession() {
+  const items = await fixture('items.json');
+  const pending = new Map();
+  const session = createMarketSession({
+    store: memoryStore(),
+    fetchJson: async (url) => {
+      if (url.endsWith('/versions')) return { data: { collections: { items: 'v1' } } };
+      if (url.endsWith('/items')) return items;
+      const request = deferred();
+      pending.set(url.split('/').at(-2), request);
+      return request.promise;
+    },
+  });
+  await session.start();
+  return { session, pending };
+}
+
+test('latest selection wins when order responses arrive in reverse order', async () => {
+  const { session, pending } = await pendingOrdersSession();
+  const first = session.handleView({ type: 'select', slug: 'arcane_energize' });
+  const second = session.handleView({ type: 'select', slug: 'arcane_grace' });
+  pending.get('arcane_grace').resolve(await fixture('orders.json'));
+  assert.equal((await second).detail.slug, 'arcane_grace');
+  pending.get('arcane_energize').resolve(await fixture('orders.json'));
+  assert.equal((await first).detail.slug, 'arcane_grace');
+  assert.equal(session.snapshot().detail.slug, 'arcane_grace');
+});
+
+test('a new query invalidates pending order results and failures', async () => {
+  for (const fails of [false, true]) {
+    const { session, pending } = await pendingOrdersSession();
+    const selection = session.handleView({ type: 'select', slug: 'arcane_energize' });
+    await session.handleView({ type: 'query', value: 'flow' });
+    if (fails) pending.get('arcane_energize').reject(new Error('private remote error'));
+    else pending.get('arcane_energize').resolve(await fixture('orders.json'));
+    const state = await selection;
+    assert.equal(state.query, 'flow');
+    assert.equal(state.detail, null);
+    assert.equal(state.error ?? null, null);
+  }
+});
+
+test('failed catalog refresh preserves the validated cache and last query', async () => {
+  const store = memoryStore();
+  const items = parseCatalog(await fixture('items.json'));
+  await store.set('catalog', { version: 'v1', items });
+  await store.set('state', { query: 'flow' });
+  const session = createMarketSession({
+    store,
+    fetchJson: async (url) => {
+      if (url.endsWith('/versions')) return { data: { collections: { items: 'v2' } } };
+      throw new Error('private network failure');
+    },
+  });
+  await session.start();
+  const state = await session.handleView({ type: 'hello' });
+  assert.equal(state.items, 4);
+  assert.equal(state.results[0].slug, 'primed_flow');
+  assert.equal(state.error, 'catalog_unavailable');
+  assert.deepEqual(await store.get('catalog'), { version: 'v1', items });
+});
+
+test('unavailable storage and network yield controlled usable session state', async () => {
+  const session = createMarketSession({
+    store: { async get() { throw new Error('private storage error'); }, async set() { throw new Error('private storage error'); } },
+    fetchJson: async () => { throw new Error('private network error'); },
+  });
+  await session.start();
+  const state = await session.handleView({ type: 'query', value: 'flow' });
+  assert.equal(state.query, 'flow');
+  assert.equal(state.items, 0);
+  assert.equal(state.error, 'storage_unavailable');
+});
+
+test('orders failure clears the old detail and returns a controlled error', async () => {
+  const { session, pending } = await pendingOrdersSession();
+  const first = session.handleView({ type: 'select', slug: 'arcane_energize' });
+  pending.get('arcane_energize').resolve(await fixture('orders.json'));
+  await first;
+  const second = session.handleView({ type: 'select', slug: 'arcane_grace' });
+  pending.get('arcane_grace').reject(new Error('private order error'));
+  const state = await second;
+  assert.equal(state.detail, null);
+  assert.equal(state.error, 'orders_unavailable');
+});
+
+test('cached records are bounded and revalidated before search or order requests', async () => {
+  const invalidCaches = [
+    { items: [{ slug: '../versions?secret', name: 'unsafe' }] },
+    { items: [{ slug: 'safe', name: 42 }] },
+    { items: [{ slug: 'safe', name: 'x'.repeat(4096) }] },
+    { items: Array.from({ length: 8193 }, () => ({ slug: 'safe', name: 'Safe' })) },
+    { items: { length: 1 } },
+  ];
+  for (const cached of invalidCaches) {
+    const store = memoryStore();
+    await store.set('catalog', cached);
+    const calls = [];
+    const session = createMarketSession({ store, fetchJson: async (url) => { calls.push(url); throw new Error('offline'); } });
+    await session.start();
+    const state = await session.handleView({ type: 'query', value: 'safe' });
+    assert.equal(state.items, 0);
+    assert.deepEqual(state.results, []);
+    await session.handleView({ type: 'select', slug: '../versions?secret' });
+    assert.equal(calls.some((url) => url.includes('secret')), false);
+  }
+});
+
+// A controllable browser boundary: request success and transaction completion
+// are distinct events, including when the transaction aborts after a put.
+function indexedDbHarness({ automatic = false, records = new Map() } = {}) {
+  const transactions = [];
+  let closed = 0;
+  const indexedDB = {
+    open() {
+      const opening = {};
+      const db = {
+        close() { closed += 1; },
+        transaction() {
+          const ready = deferred();
+          const transaction = {
+            ready: ready.promise,
+            objectStore() {
+              function requestFor(result, commit = () => {}) {
+                const request = { result };
+                queueMicrotask(() => {
+                  request.onsuccess?.();
+                  ready.resolve();
+                  if (automatic) queueMicrotask(() => { commit(); transaction.oncomplete?.(); });
+                });
+                return request;
+              }
+              return {
+                get(key) { return requestFor(records.get(key)); },
+                put(value, key) { return requestFor(key, () => records.set(key, structuredClone(value))); },
+              };
+            },
+          };
+          transactions.push(transaction);
+          return transaction;
+        },
+      };
+      queueMicrotask(() => { opening.result = db; opening.onsuccess(); });
+      return opening;
+    },
+  };
+  return { indexedDB, transactions, closed: () => closed };
+}
+
+async function withIndexedDb(harness, run) {
+  const previous = globalThis.indexedDB;
+  globalThis.indexedDB = harness.indexedDB;
+  try { await run(); } finally {
+    if (previous === undefined) delete globalThis.indexedDB;
+    else globalThis.indexedDB = previous;
+  }
+}
+
+test('IndexedDB reads and writes settle only at commit and close their connections', async () => {
+  for (const method of ['get', 'set']) {
+    const harness = indexedDbHarness({ records: new Map([['state', { query: 'flow' }]]) });
+    await withIndexedDb(harness, async () => {
+      let settled = false;
+      const result = createIndexedDbStore()[method]('state', { query: 'arcane' }).then((value) => { settled = true; return value; });
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(settled, false, `${method} must wait for transaction completion`);
+      const transaction = harness.transactions[0];
+      transaction.oncomplete();
+      const value = await result;
+      assert.deepEqual(value, method === 'get' ? { query: 'flow' } : undefined);
+      assert.equal(harness.closed(), 1);
+    });
+  }
+});
+
+test('IndexedDB rejects an abort after request success and closes the connection', async () => {
+  const harness = indexedDbHarness();
+  await withIndexedDb(harness, async () => {
+    const result = createIndexedDbStore().set('state', { query: 'flow' });
+    const rejected = assert.rejects(result, /transaction aborted/);
+    void rejected.catch(() => {});
+    await new Promise((resolve) => setImmediate(resolve));
+    const transaction = harness.transactions[0];
+    transaction.error = new Error('transaction aborted');
+    transaction.onabort?.();
+    await rejected;
+    assert.equal(harness.closed(), 1);
+  });
+});
+
+test('controller publishes initial state and handles messages received during startup', async () => {
+  const harness = indexedDbHarness({ automatic: true, records: new Map([
+    ['state', { query: 'flow' }],
+    ['catalog', { version: 'v1', items: parseCatalog(await fixture('items.json')) }],
+  ]) });
+  const fetching = deferred();
+  const releaseVersion = deferred();
+  const states = [];
+  let receive;
+  const previous = globalThis.__overcrowNative;
+  globalThis.__overcrowNative = {
+    role: 'controller',
+    subscribe(listener) { receive = listener; },
+    async request(metadata) {
+      if (metadata.type === 'fetch') {
+        assert.equal(metadata.url, 'https://api.warframe.market/v2/versions');
+        fetching.resolve();
+        await releaseVersion.promise;
+        return { metadata: { ok: true, status: 200 }, body: new TextEncoder().encode(JSON.stringify({ data: { collections: { items: 'v1' } } })).buffer };
+      }
+      if (metadata.type === 'relay') states.push(metadata.payload);
+      return { metadata: { ok: true }, body: new ArrayBuffer(0) };
+    },
+  };
+  try {
+    await withIndexedDb(harness, async () => {
+      const loading = import('../../widgets/warframe-market/controller.js');
+      await fetching.promise;
+      receive({ type: 'relay', source: 'view', payload: { type: 'hello' } });
+      receive({ type: 'relay', source: 'view', payload: { type: 'query', value: 'arcane' } });
+      releaseVersion.resolve();
+      await loading;
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.ok(states.length >= 3, 'startup and both pending messages must publish state');
+      assert.equal(states.at(-1).query, 'arcane');
+      assert.deepEqual(states.at(-1).results.map((item) => item.slug), ['arcane_energize', 'arcane_grace']);
+    });
+  } finally {
+    if (previous === undefined) delete globalThis.__overcrowNative;
+    else globalThis.__overcrowNative = previous;
   }
 });

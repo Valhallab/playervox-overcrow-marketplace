@@ -58,9 +58,14 @@ function render() {
   if (document.activeElement !== query) {
     query.value = state.query ?? '';
   }
-  status.textContent = state.items
+  const errors = {
+    catalog_unavailable: state.items ? 'Catalog refresh unavailable · using cached items' : 'Catalog unavailable',
+    storage_unavailable: 'Storage unavailable · changes may not survive restart',
+    orders_unavailable: 'Orders unavailable · select an item to retry',
+  };
+  status.textContent = errors[state.error] ?? (state.items
     ? `${state.items} items cached`
-    : 'Catalog unavailable';
+    : 'Catalog unavailable');
   results.replaceChildren(
     ...(state.results ?? []).map((item) => {
       const button = document.createElement('button');

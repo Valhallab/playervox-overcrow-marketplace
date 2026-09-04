@@ -28,8 +28,8 @@
       "bytes": 205
     },
     "controller.js": {
-      "sha256": "5c2b3fc3e5a7b589c459e6c1159d98528301a6c77d6d1568bf937c91d0b58f65",
-      "bytes": 598
+      "sha256": "2e642157df60ae665eaac347febf34784438c731877a528c476de887ddfdede6",
+      "bytes": 791
     },
     "index.html": {
       "sha256": "39101e702f3d03b4f3f63ca6d665fd1c24b5b6e84d35e48f255fa7a41efa80dc",
@@ -44,16 +44,16 @@
       "bytes": 9109
     },
     "session.mjs": {
-      "sha256": "56f2ac8b71eb64dd8cf3e8ac4c21f0417af30629340c1e18e1b4de0b34447be3",
-      "bytes": 3512
+      "sha256": "f0d8673d96989f4da5c3caa42e22ced10d2fd028db520a02a5fbe4e83222b88f",
+      "bytes": 5074
     },
     "styles.css": {
       "sha256": "1963cc40037da2b7584285bdae763e46531ab009fb41bb6c213d6f651e0d2e2e",
       "bytes": 797
     },
     "view.js": {
-      "sha256": "e4244a0d2219a000f959f88dd70cf051b2180695a237b4f04ca0ab49c6948580",
-      "bytes": 3026
+      "sha256": "75e718f91ffa8a966378860e8ae666e63ddcf0861b264ca97b80f8874b452a16",
+      "bytes": 3347
     }
   }
 }

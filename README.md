@@ -23,7 +23,9 @@ v1:
 - `widgets/warframe-market` is the reference extension: persistent
   controller, IndexedDB catalog and last query (~3840 structured items),
   `overcrow.fetch` to `api.warframe.market`, and a view that can
-  hide/show without resetting search state.
+  hide/show without resetting search state. Cached catalog data is validated
+  before reuse and remains searchable when refresh fails; successive selections
+  cannot be replaced by older order responses.
 - `published/` remains the historical production snapshot and is not
   rewritten by this reset.
 

@@ -14,10 +14,22 @@ const session = createMarketSession({
   fetchJson,
 });
 
-await session.start();
+const ready = session.start();
+
+async function publish() {
+  try {
+    await overcrow.runtime.send(session.snapshot());
+    await overcrow.surface.invalidate();
+  } catch {
+    // A hidden or disconnected view can reconnect with hello.
+  }
+}
 
 overcrow.runtime.onMessage(async (message) => {
-  const state = await session.handleView(message);
-  await overcrow.runtime.send(state);
-  await overcrow.surface.invalidate();
+  await ready;
+  await session.handleView(message);
+  await publish();
 });
+
+await ready;
+await publish();

@@ -14,8 +14,11 @@ cargo run -p marketplace-tool --locked -- inspect /tmp/warframe-market.ocpkg
 
 These prove strict manifest/listing validation, inventory, native executable
 rejection, optional browser-WASM admission, deterministic ZIP bytes, durable
-receipt-last ingestion, catalog search over 3840 structured items, and
-controller/query state across view and controller restart. They do not prove
+receipt-last ingestion with exclusive admission, bounded reads that reject
+special files, catalog search over 3840 structured items, and controller/query
+state across view and controller restart. Warframe tests also cover reversed
+response order, failed refresh with a valid cache, messages during startup,
+and IndexedDB transaction aborts after a successful request. They do not prove
 live compositor or game behavior.
 
 The catalog-stage smoke removes the temporary build outputs after admission,
