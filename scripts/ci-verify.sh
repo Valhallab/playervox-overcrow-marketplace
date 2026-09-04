@@ -120,14 +120,17 @@ if test "$event_name" = push \
     fail 'CI trust metadata is invalid'
 fi
 for required in Cargo.lock Cargo.toml rust-toolchain.toml \
+        fixtures/keys/development-ed25519.pub \
         scripts/ci-verify.sh scripts/materialize-git-snapshot.sh \
         scripts/resolve-pinned-rust.sh \
         scripts/resolve-system-node.sh \
         tests/reject-published-change.sh tests/reject-trusted-change.sh \
         tools/marketplace-tool/Cargo.toml \
         tools/marketplace-tool/src/admission.rs \
+        tools/marketplace-tool/src/catalog.rs \
         tools/marketplace-tool/src/main.rs \
         tools/marketplace-tool/src/package.rs \
+        tools/marketplace-tool/src/private_fs.rs \
         tools/marketplace-tool/src/snapshot.rs; do
     if test ! -f "$trusted_root/$required" \
             || test -L "$trusted_root/$required"; then

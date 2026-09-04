@@ -52,6 +52,7 @@ Run the fast repository checks during development:
 ```sh
 tests/admission-store-smoke.sh
 tests/ci-admission-smoke.sh
+tests/catalog-stage-smoke.sh
 cargo test -p marketplace-tool --locked
 node --test tests/warframe-market/market.test.mjs
 node --test tests/site-runtime.test.js
@@ -116,14 +117,43 @@ cleanup. If hosted admission cannot produce an exact-tree receipt, stop
 accepting candidate changes; do not fall back to the base checkout. Nothing in
 this section signs a catalog, touches `published/`, or deploys Coolify.
 
+To exercise the complete local contract after admission, create a fresh private
+serve tree and stage a development catalog. The command accepts only the
+repository's intentionally public development fixture key and fixed loopback
+origin; it cannot create a production catalog.
+
+```sh
+serve_root=/absolute/private/path/to/development-marketplace
+development_output="$serve_root/marketplace/v1"
+generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+expires_at=$(date -u -d '+30 days' +%Y-%m-%dT%H:%M:%SZ)
+/usr/bin/install -d -m 0700 -- "$serve_root" "$development_output"
+cargo run --manifest-path "$repository/tools/marketplace-tool/Cargo.toml" \
+  -p marketplace-tool --locked -- stage-development-catalog \
+  --store "$accepted_store" --review-tree "$review_tree" \
+  --output "$development_output" --sequence 1 \
+  --generated-at "$generated_at" --expires-at "$expires_at" \
+  --signing-key "$repository/fixtures/keys/development-ed25519.key"
+python3 -m http.server 8787 --bind 127.0.0.1 --directory "$serve_root"
+```
+
+Use current canonical UTC timestamps and a positive sequence for an actual
+manual run. The expiry must follow generation by no more than 90 days. The
+output directory must be empty, private, and owned by the caller. Staging first
+re-verifies the completed receipt, listing, manifest, package size, and digest;
+it copies package bytes without rebuilding and commits `catalog.json` last.
+Starting the loopback server is a foreground local test action, not a deploy.
+
 ## 5. Keys and authority material
 
 The reviewed public key remains `keys/overcrow-production-2026-01.pub`.
-Production private keys, sequence counters, and recovery backups stay
-outside this repository. The WASM-era publisher and generic source-bundle
-publisher scripts are deleted. Do not reconstruct them. A later authorized
-task must introduce a small Web API v1 catalog builder and signer that consumes
-only a verified accepted store before any new production catalog is published.
+Production private keys, sequence counters, and recovery backups stay outside
+this repository. The WASM-era publisher and generic source-bundle publisher
+scripts are deleted. Do not reconstruct them. The local development stager is
+hard-coded to the development key ID and loopback origin; do not convert it
+into a production signer by changing those constants. A later authorized task
+must introduce a separate production signing boundary that consumes only a
+verified accepted store before any new production catalog is published.
 
 ## 6. Live snapshot
 

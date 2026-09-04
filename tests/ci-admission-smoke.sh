@@ -21,20 +21,23 @@ repository="$scratch/repository"
     'marketplace-ci-test@invalid.example'
 # During a red/green run these files may not be committed yet. Make the
 # fixture's trusted revision contain the exact driver under test.
-for relative in scripts/ci-verify.sh tools/marketplace-tool/src/admission.rs \
+/usr/bin/install -D -m 0755 -- "$repo_root/scripts/ci-verify.sh" \
+    "$repository/scripts/ci-verify.sh"
+for relative in Cargo.lock Cargo.toml tools/marketplace-tool/Cargo.toml \
+        tools/marketplace-tool/src/admission.rs \
+        tools/marketplace-tool/src/catalog.rs \
         tools/marketplace-tool/src/main.rs tools/marketplace-tool/src/package.rs \
+        tools/marketplace-tool/src/private_fs.rs \
         tools/marketplace-tool/src/snapshot.rs; do
-    /usr/bin/install -D -m 0755 -- "$repo_root/$relative" \
+    /usr/bin/install -D -m 0644 -- "$repo_root/$relative" \
         "$repository/$relative"
 done
-/usr/bin/chmod 0644 \
-    "$repository/tools/marketplace-tool/src/admission.rs" \
-    "$repository/tools/marketplace-tool/src/main.rs" \
-    "$repository/tools/marketplace-tool/src/package.rs" \
-    "$repository/tools/marketplace-tool/src/snapshot.rs"
-/usr/bin/git -C "$repository" add -- scripts/ci-verify.sh \
+/usr/bin/git -C "$repository" add -- Cargo.lock Cargo.toml \
+    scripts/ci-verify.sh tools/marketplace-tool/Cargo.toml \
     tools/marketplace-tool/src/admission.rs \
+    tools/marketplace-tool/src/catalog.rs \
     tools/marketplace-tool/src/main.rs tools/marketplace-tool/src/package.rs \
+    tools/marketplace-tool/src/private_fs.rs \
     tools/marketplace-tool/src/snapshot.rs
 /usr/bin/git -C "$repository" commit --quiet --allow-empty \
     -m 'trusted driver fixture'

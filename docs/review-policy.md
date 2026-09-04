@@ -27,5 +27,9 @@ operator may explicitly ingest those exact packages into a private store.
 - Sign catalog identity, version, digest, and size. Do not rebuild or
   retest after ingestion.
 
+The development stager proves that last step locally from a completed
+admission, using only the public fixture key and loopback origin. Production
+signing remains a separate offline boundary.
+
 Publication remains a separate offline step. This document does not
 authorize a push or deployment.

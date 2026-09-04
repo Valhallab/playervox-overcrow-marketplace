@@ -5,6 +5,7 @@ Structural checks must finish in seconds:
 ```sh
 tests/admission-store-smoke.sh
 tests/ci-admission-smoke.sh
+tests/catalog-stage-smoke.sh
 cargo test -p marketplace-tool --locked
 node --test tests/warframe-market/market.test.mjs
 cargo run -p marketplace-tool --locked -- package widgets/warframe-market /tmp/warframe-market.ocpkg
@@ -16,6 +17,13 @@ rejection, optional browser-WASM admission, deterministic ZIP bytes, durable
 receipt-last ingestion, catalog search over 3840 structured items, and
 controller/query state across view and controller restart. They do not prove
 live compositor or game behavior.
+
+The catalog-stage smoke removes the temporary build outputs after admission,
+then proves that the CLI can produce a signed development catalog and the exact
+content-addressed `.ocpkg` from the independently verified private store. Rust
+tests verify the Ed25519 signature against the compiled development public key,
+reject another seed, and cover the envelope, listing, manifest, URL, size, and
+digest contract.
 
 Also run the Web API v1 catalog-site contract:
 
@@ -39,5 +47,6 @@ driver's temporary artifact directory has been removed. Package or same-size
 listing tampering, unreceipted files, same-version replacement, and downgrade
 are covered by the Rust admission tests.
 
-The generic maintainer sandbox is still pending. Catalog generation and
-OverCrow runtime must reuse admitted bytes and never rerun their tests.
+The generic maintainer sandbox and production signing are still pending.
+Development staging and OverCrow runtime reuse admitted bytes and never rerun
+their tests.

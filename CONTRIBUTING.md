@@ -11,6 +11,7 @@ inside the normal Web sandbox; they do not receive native or system authority.
 ```sh
 cargo test -p marketplace-tool --locked
 node --test tests/warframe-market/market.test.mjs
+tests/catalog-stage-smoke.sh
 cargo run -p marketplace-tool --locked -- package widgets/warframe-market /tmp/warframe-market.ocpkg
 cargo run -p marketplace-tool --locked -- inspect /tmp/warframe-market.ocpkg
 ```

@@ -29,6 +29,7 @@ pub struct WrittenPackage {
 pub struct InspectedManifest {
     pub id: String,
     pub version: String,
+    pub(crate) catalog_value: serde_json::Value,
 }
 
 #[derive(Debug)]
@@ -161,6 +162,8 @@ pub fn inspect_bytes(archive: &[u8]) -> Result<InspectedManifest, PackageError> 
     Ok(InspectedManifest {
         id: manifest.id,
         version: manifest.version,
+        catalog_value: serde_json::from_slice(manifest_bytes)
+            .map_err(|_| error("invalid manifest"))?,
     })
 }
 

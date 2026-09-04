@@ -1,22 +1,18 @@
-use std::{
-    collections::BTreeSet,
-    fmt, fs,
-    io::Write as _,
-    os::unix::fs::{
-        DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
-    },
-    path::Path,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::{collections::BTreeSet, fmt, fs, path::Path};
 
 use semver::Version;
 use sha2::{Digest as _, Sha256};
 
-use crate::package;
+use crate::{
+    package,
+    private_fs::{
+        PrivateFsError, commit_file, ensure_private_directory, read_regular_file,
+        validate_private_directory,
+    },
+};
 
 const MAX_RECEIPT_BYTES: usize = 256 * 1024;
 const MAX_ARTIFACTS: usize = 512;
-static TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy)]
 pub struct ExpectedAdmission<'a> {
@@ -31,6 +27,12 @@ pub struct AdmissionError;
 impl fmt::Display for AdmissionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("admission ingestion rejected")
+    }
+}
+
+impl From<PrivateFsError> for AdmissionError {
+    fn from(_: PrivateFsError) -> Self {
+        Self
     }
 }
 
@@ -54,6 +56,20 @@ struct Artifact {
 pub struct StoredAdmission {
     pub review_tree: String,
     pub artifact_count: usize,
+}
+
+pub(crate) struct VerifiedAdmission {
+    pub(crate) artifacts: Vec<AdmittedArtifact>,
+}
+
+pub(crate) struct AdmittedArtifact {
+    pub(crate) id: String,
+    pub(crate) version: String,
+    pub(crate) package_sha256: String,
+    pub(crate) package_size: u64,
+    pub(crate) package_path: std::path::PathBuf,
+    pub(crate) manifest: serde_json::Value,
+    pub(crate) listing: package::Listing,
 }
 
 fn parse_receipt(
@@ -209,6 +225,17 @@ pub fn ingest(
 }
 
 pub fn verify(store: &Path, review_tree: &str) -> Result<StoredAdmission, AdmissionError> {
+    let admission = load_verified(store, review_tree)?;
+    Ok(StoredAdmission {
+        review_tree: review_tree.to_owned(),
+        artifact_count: admission.artifacts.len(),
+    })
+}
+
+pub(crate) fn load_verified(
+    store: &Path,
+    review_tree: &str,
+) -> Result<VerifiedAdmission, AdmissionError> {
     validate_private_directory(store)?;
     if !valid_object_id(review_tree) {
         return Err(AdmissionError);
@@ -219,26 +246,33 @@ pub fn verify(store: &Path, review_tree: &str) -> Result<StoredAdmission, Admiss
     if receipt.review_tree != review_tree {
         return Err(AdmissionError);
     }
-    for artifact in &receipt.artifacts {
-        let path = store
+    let mut artifacts = Vec::with_capacity(receipt.artifacts.len());
+    for artifact in receipt.artifacts {
+        let package_path = store
             .join("packages")
             .join(&artifact.id)
             .join(&artifact.version)
             .join(format!("{}.ocpkg", artifact.digest));
-        let package_bytes = read_regular_file(&path, artifact.bytes)?;
-        validate_package_bytes(&package_bytes, artifact)?;
+        let package_bytes = read_regular_file(&package_path, artifact.bytes)?;
+        let manifest = validate_package_bytes(&package_bytes, &artifact)?;
         let listing_path = store
             .join("listings")
             .join(&artifact.id)
             .join(&artifact.version)
             .join(format!("{}.json", artifact.listing_digest));
         let listing_bytes = read_regular_file(&listing_path, artifact.listing_bytes)?;
-        validate_listing_bytes(&listing_bytes, artifact)?;
+        let listing = validate_listing_bytes(&listing_bytes, &artifact)?;
+        artifacts.push(AdmittedArtifact {
+            id: artifact.id,
+            version: artifact.version,
+            package_sha256: artifact.digest,
+            package_size: artifact.bytes,
+            package_path,
+            manifest: manifest.catalog_value,
+            listing,
+        });
     }
-    Ok(StoredAdmission {
-        review_tree: receipt.review_tree,
-        artifact_count: receipt.artifacts.len(),
-    })
+    Ok(VerifiedAdmission { artifacts })
 }
 
 fn validate_version_policy(
@@ -305,7 +339,10 @@ fn validate_artifact_inventory(root: &Path, count: usize) -> Result<(), Admissio
     Ok(())
 }
 
-fn validate_package_bytes(bytes: &[u8], artifact: &Artifact) -> Result<(), AdmissionError> {
+fn validate_package_bytes(
+    bytes: &[u8],
+    artifact: &Artifact,
+) -> Result<package::InspectedManifest, AdmissionError> {
     if u64::try_from(bytes.len()).ok() != Some(artifact.bytes)
         || hex_digest(bytes) != artifact.digest
     {
@@ -315,7 +352,7 @@ fn validate_package_bytes(bytes: &[u8], artifact: &Artifact) -> Result<(), Admis
     if manifest.id != artifact.id || manifest.version != artifact.version {
         return Err(AdmissionError);
     }
-    Ok(())
+    Ok(manifest)
 }
 
 fn validate_listing_bytes(
@@ -328,109 +365,6 @@ fn validate_listing_bytes(
         return Err(AdmissionError);
     }
     package::parse_listing_bytes(bytes).map_err(|_| AdmissionError)
-}
-
-fn validate_private_directory(path: &Path) -> Result<(), AdmissionError> {
-    if !path.is_absolute() || fs::canonicalize(path).map_err(|_| AdmissionError)? != path {
-        return Err(AdmissionError);
-    }
-    let metadata = fs::symlink_metadata(path).map_err(|_| AdmissionError)?;
-    let process_uid = process_uid()?;
-    if !metadata.is_dir()
-        || metadata.file_type().is_symlink()
-        || metadata.uid() != process_uid
-        || metadata.permissions().mode() & 0o077 != 0
-    {
-        return Err(AdmissionError);
-    }
-    Ok(())
-}
-
-fn ensure_private_directory(path: &Path) -> Result<std::path::PathBuf, AdmissionError> {
-    if !path.exists() {
-        fs::DirBuilder::new()
-            .mode(0o700)
-            .create(path)
-            .map_err(|_| AdmissionError)?;
-        sync_directory(path.parent().ok_or(AdmissionError)?)?;
-    }
-    validate_private_directory(path)?;
-    Ok(path.to_path_buf())
-}
-
-fn read_regular_file(path: &Path, maximum: u64) -> Result<Vec<u8>, AdmissionError> {
-    if !path.is_absolute() {
-        return Err(AdmissionError);
-    }
-    let metadata = fs::symlink_metadata(path).map_err(|_| AdmissionError)?;
-    let process_uid = process_uid()?;
-    if !metadata.is_file()
-        || metadata.file_type().is_symlink()
-        || metadata.uid() != process_uid
-        || metadata.permissions().mode() & 0o022 != 0
-        || metadata.len() > maximum
-    {
-        return Err(AdmissionError);
-    }
-    let bytes = fs::read(path).map_err(|_| AdmissionError)?;
-    if u64::try_from(bytes.len())
-        .ok()
-        .is_none_or(|size| size > maximum)
-    {
-        return Err(AdmissionError);
-    }
-    Ok(bytes)
-}
-
-fn commit_file(store: &Path, destination: &Path, bytes: &[u8]) -> Result<(), AdmissionError> {
-    if destination.exists() {
-        return if read_regular_file(destination, bytes.len() as u64)? == bytes {
-            Ok(())
-        } else {
-            Err(AdmissionError)
-        };
-    }
-    let sequence = TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let temporary = store.join(format!(".ingest-{}-{sequence}", std::process::id()));
-    let result = (|| {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temporary)
-            .map_err(|_| AdmissionError)?;
-        file.write_all(bytes).map_err(|_| AdmissionError)?;
-        file.sync_all().map_err(|_| AdmissionError)?;
-        drop(file);
-        // Both paths live in the private store, so this is one atomic,
-        // no-replace filesystem commit. The admission receipt is committed last.
-        match fs::hard_link(&temporary, destination) {
-            Ok(()) => sync_directory(destination.parent().ok_or(AdmissionError)?),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                if read_regular_file(destination, bytes.len() as u64)? == bytes {
-                    Ok(())
-                } else {
-                    Err(AdmissionError)
-                }
-            }
-            Err(_) => Err(AdmissionError),
-        }
-    })();
-    let _ = fs::remove_file(&temporary);
-    result
-}
-
-fn process_uid() -> Result<u32, AdmissionError> {
-    // OverCrow Marketplace is Linux-only; /proc/self avoids an unsafe geteuid call.
-    fs::metadata("/proc/self")
-        .map(|metadata| metadata.uid())
-        .map_err(|_| AdmissionError)
-}
-
-fn sync_directory(path: &Path) -> Result<(), AdmissionError> {
-    fs::File::open(path)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|_| AdmissionError)
 }
 
 fn hex_digest(bytes: &[u8]) -> String {

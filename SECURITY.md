@@ -57,6 +57,14 @@ receipt and are not accepted. The generic sandbox for extension-defined build
 or test commands is not implemented; publication must copy admitted bytes
 without rebuilding or retesting them.
 
+Development catalog staging consumes one completed receipt, re-verifies every
+referenced byte sequence, copies the content-addressed packages, signs the
+bounded catalog, and commits the envelope last. It accepts only the compiled
+development key identity and loopback origin. The deterministic development
+seed in `fixtures/keys` is intentionally public and grants no production trust;
+production builds of OverCrow reject it. No production private key, sequence
+state, deployment credential, or signing path exists in this repository.
+
 The marketplace website cannot install software. The Control Center validates
 packages and user consent; local unverified packages install disabled and stay
 disabled until explicitly enabled.
