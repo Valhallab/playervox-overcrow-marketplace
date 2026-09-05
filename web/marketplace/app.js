@@ -52,16 +52,25 @@ function validPolicy(value) {
 
 if (!validPolicy(policy)) throw new Error("marketplace policy");
 
-const state = { locale: "en", targets: [], unavailable: false };
+const state = { locale: "en", targets: [], unavailable: false, loading: true };
 const catalog = document.getElementById("catalog");
 const language = document.getElementById("language");
 const trust = document.getElementById("trust-label");
 const copy = {
   en: {
+    title: "Widget marketplace",
+    description: "Find widgets for your overlay. Only OverCrow Control Center verifies signatures and installs packages.",
+    language: "Language",
+    catalogHeading: "Available widgets",
+    skip: "Skip to widgets",
+    loading: "Loading widgets…",
+    empty: "No widgets are listed yet.",
+    permissions: "Permissions",
+    noPermissions: "No permissions requested.",
     unavailable: "Catalog unavailable.",
     version: "Version",
     author: "Author",
-    source: "Source",
+    source: "View source",
     open: "Open in OverCrow",
     openHelp: "Requires the OverCrow app. You can also open Control Center and find this widget in Marketplace. Opening its details does not install or activate it.",
     license: "License",
@@ -75,10 +84,19 @@ const copy = {
     revoked: "Revoked catalog entry",
   },
   fr: {
+    title: "Catalogue de widgets",
+    description: "Découvrez des widgets pour votre overlay. Seul le Centre de contrôle OverCrow vérifie les signatures et installe les paquets.",
+    language: "Langue",
+    catalogHeading: "Widgets disponibles",
+    skip: "Aller aux widgets",
+    loading: "Chargement des widgets…",
+    empty: "Aucun widget n’est encore proposé.",
+    permissions: "Permissions",
+    noPermissions: "Aucune permission demandée.",
     unavailable: "Catalogue indisponible.",
     version: "Version",
     author: "Auteur",
-    source: "Source",
+    source: "Voir le code source",
     open: "Ouvrir dans OverCrow",
     openHelp: "Nécessite l’application OverCrow. Vous pouvez aussi ouvrir le Centre de contrôle et retrouver ce widget dans Marketplace. Ouvrir sa fiche ne l’installe ni ne l’active.",
     license: "Licence",
@@ -331,7 +349,7 @@ function validate(text) {
       || !Number.isSafeInteger(payload.sequence) || payload.sequence < 1
       || !timestamp(payload.generatedAt) || !timestamp(payload.expiresAt)
       || Date.parse(payload.generatedAt) >= Date.parse(payload.expiresAt)
-      || !Array.isArray(payload.targets) || payload.targets.length === 0
+      || !Array.isArray(payload.targets)
       || payload.targets.length > MAX_TARGETS || !payload.targets.every(target)) {
     throw new Error("payload");
   }
@@ -376,9 +394,10 @@ function details(item) {
   return values;
 }
 
-function textElement(tag, value) {
+function textElement(tag, value, className) {
   const element = document.createElement(tag);
   element.textContent = value;
+  if (className) element.setAttribute("class", className);
   return element;
 }
 
@@ -402,34 +421,66 @@ function card(item) {
   }
   const locales = item.listing.localizations.map((entry) => entry.locale).join(", ");
   element.append(
-    textElement("h2", text.name),
-    textElement("p", text.description),
+    textElement("p", statusLabel(item.status, languageCopy), `badge status-${item.status}`),
+    textElement("h3", text.name),
+    textElement("p", text.description, "description"),
+  );
+  const metadata = document.createElement("div");
+  metadata.setAttribute("class", "metadata");
+  metadata.append(
     textElement("p", `${languageCopy.version} ${item.manifest.version}`),
     textElement("p", `${languageCopy.author} ${item.listing.author}`),
     textElement("p", `${languageCopy.license} ${item.listing.spdxLicense}`),
     textElement("p", `${languageCopy.languages} ${locales}`),
   );
+  element.append(metadata);
   const source = document.createElement("a");
-  source.textContent = `${languageCopy.source} ${item.listing.sourceUrl}`;
+  source.textContent = languageCopy.source;
   source.setAttribute("href", item.listing.sourceUrl);
+  source.setAttribute("title", item.listing.sourceUrl);
   source.setAttribute("rel", "noreferrer noopener");
+  source.setAttribute("class", "source-link");
   element.append(source);
+  const permissions = document.createElement("section");
+  permissions.setAttribute("class", "permissions");
+  permissions.append(textElement("h4", languageCopy.permissions));
+  const values = details(item);
+  if (values.length) {
+    const list = document.createElement("ul");
+    for (const value of values) list.append(textElement("li", value));
+    permissions.append(list);
+  } else {
+    permissions.append(textElement("p", languageCopy.noPermissions));
+  }
+  element.append(permissions);
   const open = document.createElement("a");
   open.textContent = languageCopy.open;
   open.setAttribute("href", `overcrow://widget/${item.manifest.id}`);
-  const action = document.createElement("p");
-  action.append(open);
-  element.append(action, textElement("p", languageCopy.openHelp));
-  for (const value of details(item)) element.append(textElement("p", value));
-  element.append(textElement("p", statusLabel(item.status, languageCopy)));
+  open.setAttribute("class", "button-primary");
+  const action = document.createElement("footer");
+  action.setAttribute("class", "card-actions");
+  action.append(open, textElement("p", languageCopy.openHelp, "open-help"));
+  element.append(action);
   return element;
 }
 
 function render() {
   catalog.textContent = "";
+  const languageCopy = copy[state.locale];
+  for (const [id, text] of [
+    ["page-title", languageCopy.title],
+    ["page-description", languageCopy.description],
+    ["language-label", languageCopy.language],
+    ["catalog-heading", languageCopy.catalogHeading],
+    ["skip-link", languageCopy.skip],
+  ]) document.getElementById(id).textContent = text;
+  document.title = `${languageCopy.title} · OverCrow`;
   trust.textContent = policy.labels[state.locale];
-  if (state.unavailable) {
-    catalog.append(textElement("p", copy[state.locale].unavailable));
+  catalog.setAttribute("aria-busy", String(state.loading));
+  if (state.loading || state.unavailable || state.targets.length === 0) {
+    const message = state.loading ? languageCopy.loading
+      : state.unavailable ? languageCopy.unavailable : languageCopy.empty;
+    catalog.append(textElement("p", message, "catalog-state"));
     return;
   }
   for (const item of state.targets) catalog.append(card(item));
@@ -468,6 +519,8 @@ language.addEventListener("change", () => {
   render();
 });
 
+render();
+
 fetch(policy.catalogUrl)
   .then((response) => {
     if (!response.ok) throw new Error("catalog unavailable");
@@ -475,9 +528,11 @@ fetch(policy.catalogUrl)
   })
   .then((text) => {
     state.targets = validate(text);
+    state.loading = false;
     render();
   })
   .catch(() => {
+    state.loading = false;
     state.unavailable = true;
     render();
   });

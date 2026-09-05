@@ -173,6 +173,7 @@ async function run(body, options = {}) {
     ["catalog", catalog],
     ["language", language],
     ["trust-label", trust],
+    ...["page-title", "page-description", "language-label", "catalog-heading", "skip-link"].map((id) => [id, new Element()]),
   ]);
   const document = {
     createElement: (tag) => new Element(tag),
@@ -193,6 +194,7 @@ async function run(body, options = {}) {
     atob: (value) => Buffer.from(value, "base64").toString("binary"),
     fetch: async (url) => {
       requests.push(url);
+      if (options.responseGate) await options.responseGate;
       return {
         ok: options.ok ?? true,
         headers: { get: () => options.contentLength },
@@ -219,7 +221,7 @@ async function run(body, options = {}) {
   vm.runInNewContext(fs.readFileSync("web/marketplace/app.js", "utf8"), context);
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
-  return { catalog, language, trust, document, requests, navigation, timers };
+  return { catalog, language, trust, document, requests, navigation, timers, elements };
 }
 
 function cardText(card) {
@@ -260,6 +262,61 @@ test("development mode renders a Web API v1 catalog card", async () => {
   ]) assert.match(market, expected);
   assert.doesNotMatch(market, /provider/iu);
   assert.doesNotMatch(market, /component\.wasm/u);
+});
+
+test("localizes the complete page frame and pending catalog state", async () => {
+  let resolve;
+  const responseGate = new Promise((done) => { resolve = done; });
+  const page = await run(generated(), { responseGate });
+  assert.equal(page.elements.get("page-title").textContent, "Widget marketplace");
+  assert.equal(page.elements.get("language-label").textContent, "Language");
+  assert.equal(page.catalog.getAttribute("aria-busy"), "true");
+  assert.match(cardText(page.catalog), /Loading widgets/u);
+  page.language.value = "fr";
+  page.language.dispatch("change");
+  assert.equal(page.elements.get("page-title").textContent, "Catalogue de widgets");
+  assert.equal(page.document.title, "Catalogue de widgets · OverCrow");
+  assert.equal(page.elements.get("language-label").textContent, "Langue");
+  assert.equal(page.elements.get("catalog-heading").textContent, "Widgets disponibles");
+  assert.equal(page.elements.get("skip-link").textContent, "Aller aux widgets");
+  assert.match(page.elements.get("page-description").textContent, /Centre de contrôle OverCrow/u);
+  assert.match(cardText(page.catalog), /Chargement des widgets/u);
+  assert.equal(page.trust.textContent, "Développement — non vérifié");
+  resolve();
+  await new Promise((done) => setImmediate(done));
+  assert.equal(page.catalog.getAttribute("aria-busy"), "false");
+  assert.ok(card(page, /Marché Warframe/u));
+});
+
+test("distinguishes an empty valid catalog from errors in both languages", async () => {
+  const page = await run(envelope([]));
+  assert.equal(page.catalog.getAttribute("aria-busy"), "false");
+  assert.equal(cardText(page.catalog), "No widgets are listed yet.");
+  page.language.value = "fr";
+  page.language.dispatch("change");
+  assert.equal(cardText(page.catalog), "Aucun widget n’est encore proposé.");
+});
+
+test("uses a readable source label while keeping the exact source URL accessible", async () => {
+  const page = await run(generated());
+  for (const [locale, label] of [["en", "View source"], ["fr", "Voir le code source"]]) {
+    page.language.value = locale;
+    page.language.dispatch("change");
+    const source = descendants(page.catalog).find((element) => element.textContent === label);
+    assert.ok(source);
+    assert.equal(source.getAttribute("href"), webTarget().listing.sourceUrl);
+    assert.equal(source.getAttribute("title"), webTarget().listing.sourceUrl);
+    assert.equal(source.getAttribute("rel"), "noreferrer noopener");
+  }
+});
+
+test("describes an empty permission set without inventing grants", async () => {
+  const page = await run(envelope([webTarget({ manifest: { permissions: {} } })]));
+  assert.match(cardText(page.catalog), /No permissions requested\./u);
+  assert.doesNotMatch(cardText(page.catalog), /Fetches public data|Receives OverCrow game events|Stores private widget data|Writes to clipboard/u);
+  page.language.value = "fr";
+  page.language.dispatch("change");
+  assert.match(cardText(page.catalog), /Aucune permission demandée\./u);
 });
 
 test("production mode renders complete catalog metadata without a development claim", async () => {

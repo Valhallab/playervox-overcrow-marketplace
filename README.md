@@ -68,6 +68,14 @@ the in-game overlay library. The site displays the latest version per widget
 using the same version ordering as the app, including a latest-version
 revocation instead of falling back to an older verified entry.
 
+The marketplace uses the fixed dark-and-lime PlayerVox palette and component
+styling defined in `playervox-front/src/index.css` and
+`playervox-front/src/components/ui/`. It does not synchronize account theme
+preferences. Its bundled Noto Sans fonts are served locally with their
+[SIL Open Font License](web/marketplace/assets/NotoSans-OFL.txt). Catalog status
+labels report catalog metadata; only OverCrow verifies signatures before
+installation.
+
 ## Contributing
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md), the

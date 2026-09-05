@@ -4,22 +4,37 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; img-src 'self'; object-src 'none'; script-src 'self'; style-src 'self'">
-    <title>OverCrow Widget Marketplace</title>
+    <title>Widget marketplace · OverCrow</title>
     <link rel="stylesheet" href="./styles.css">
     <script src="./catalog-policy.js" defer></script>
     <script src="./app.js" defer></script>
   </head>
   <body>
-    <header>
-      <p id="trust-label" class="eyebrow"></p>
-      <h1>OverCrow Widget Marketplace</h1>
-      <p>Only OverCrow Control Center verifies signatures and installs packages.</p>
-      <label for="language">Language</label>
-      <select id="language" name="language">
-        <option value="en" selected>English</option>
-        <option value="fr">Français</option>
-      </select>
+    <a id="skip-link" class="skip-link" href="#catalog-area">Skip to widgets</a>
+    <header class="page-header">
+      <div class="topbar">
+        <div class="brand" aria-label="PlayerVox OverCrow">
+          <span class="brand-mark"><img src="./assets/playervox-mark-dark.svg" alt="" width="32" height="32"></span>
+          <div class="brand-wordmark"><span class="brand-name">PLAYER<span>VOX</span></span><span class="brand-product">OverCrow</span></div>
+        </div>
+        <div class="language-control">
+          <label id="language-label" for="language">Language</label>
+          <select id="language" name="language">
+            <option value="en" selected>English</option>
+            <option value="fr">Français</option>
+          </select>
+        </div>
+      </div>
+      <div class="intro">
+        <p id="trust-label" class="trust-label"></p>
+        <h1 id="page-title">Widget marketplace</h1>
+        <p id="page-description">Find widgets for your overlay. Only OverCrow Control Center verifies signatures and installs packages.</p>
+      </div>
     </header>
-    <main id="catalog" aria-live="polite"></main>
+    <main id="catalog-area" tabindex="-1">
+      <h2 id="catalog-heading">Available widgets</h2>
+      <div id="catalog" aria-live="polite" aria-busy="true"><p class="catalog-state">Loading widgets…</p></div>
+      <noscript><p>Enable JavaScript to read the catalog. Activez JavaScript pour consulter le catalogue.</p></noscript>
+    </main>
   </body>
 </html>
