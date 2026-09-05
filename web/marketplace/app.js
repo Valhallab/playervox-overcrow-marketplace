@@ -52,16 +52,31 @@ function validPolicy(value) {
 
 if (!validPolicy(policy)) throw new Error("marketplace policy");
 
-const state = { locale: "en", targets: [], unavailable: false, loading: true };
+const state = { locale: "en", targets: [], unavailable: false, loading: true, query: "", availability: "all" };
 const catalog = document.getElementById("catalog");
 const language = document.getElementById("language");
 const trust = document.getElementById("trust-label");
+const search = document.getElementById("search");
+const availability = document.getElementById("availability");
+const detail = document.getElementById("detail");
 const copy = {
   en: {
-    title: "Widget marketplace",
-    description: "Find widgets for your overlay. Only OverCrow Control Center verifies signatures and installs packages.",
+    title: "Your game. Your widgets.",
+    description: "Useful companions, one overlay away. Discover widgets, install them in Control Center, and make them yours in game.",
     language: "Language",
-    catalogHeading: "Available widgets",
+    catalogHeading: "Explore widgets",
+    browse: "Browse widgets", create: "Create a widget ↗",
+    kicker: "THE OVERCROW MARKETPLACE", flowTitle: "FROM DISCOVERY TO PLAY",
+    flowBrowse: "Find your widget", flowInstall: "Install in Control Center",
+    flowActivate: "Activate in your in-game overlay",
+    search: "Search widgets", searchHint: "Name, description, author…",
+    availability: "Availability", all: "All widgets", available: "Available", restricted: "Restricted",
+    reset: "Clear filters", noResults: "No matching widgets. Try another search or clear your filters.",
+    count: (shown, total) => shown === total ? `${total} widget${total === 1 ? "" : "s"}` : `${shown} / ${total} widgets`,
+    view: "View widget", back: "← All widgets", notFound: "Widget not found in this catalog.",
+    installTitle: "Bring it into your game", about: "About this widget",
+    footer: "Built for your overlay. Always outside your game.",
+    previewFallback: "WEB WIDGET",
     skip: "Skip to widgets",
     loading: "Loading widgets…",
     empty: "No widgets are listed yet.",
@@ -84,10 +99,22 @@ const copy = {
     revoked: "Revoked catalog entry",
   },
   fr: {
-    title: "Catalogue de widgets",
-    description: "Découvrez des widgets pour votre overlay. Seul le Centre de contrôle OverCrow vérifie les signatures et installe les paquets.",
+    title: "Votre jeu. Vos widgets.",
+    description: "Vos compagnons de jeu, à portée d’overlay. Découvrez vos widgets, installez-les dans le Centre de contrôle OverCrow et activez-les en jeu.",
     language: "Langue",
-    catalogHeading: "Widgets disponibles",
+    catalogHeading: "Explorez les widgets",
+    browse: "Explorer", create: "Créer un widget ↗",
+    kicker: "LA MARKETPLACE OVERCROW", flowTitle: "DE LA DÉCOUVERTE AU JEU",
+    flowBrowse: "Trouvez votre widget", flowInstall: "Installez-le dans le Centre de contrôle",
+    flowActivate: "Activez-le dans votre overlay en jeu",
+    search: "Rechercher un widget", searchHint: "Nom, description, auteur…",
+    availability: "Disponibilité", all: "Tous les widgets", available: "Disponibles", restricted: "Restreints",
+    reset: "Effacer les filtres", noResults: "Aucun widget correspondant. Essayez une autre recherche ou effacez les filtres.",
+    count: (shown, total) => shown === total ? `${total} widget${total === 1 ? "" : "s"}` : `${shown} / ${total} widgets`,
+    view: "Voir le widget", back: "← Tous les widgets", notFound: "Widget introuvable dans ce catalogue.",
+    installTitle: "Retrouvez-le en jeu", about: "À propos du widget",
+    footer: "Pensé pour votre overlay. Toujours en dehors du jeu.",
+    previewFallback: "WIDGET WEB",
     skip: "Aller aux widgets",
     loading: "Chargement des widgets…",
     empty: "Aucun widget n’est encore proposé.",
@@ -407,84 +434,183 @@ function statusLabel(status, languageCopy) {
   return languageCopy.revoked;
 }
 
-function card(item) {
-  const text = localized(item);
-  const languageCopy = copy[state.locale];
-  const element = document.createElement("article");
-  element.setAttribute("class", "card");
+function widgetPreview(item) {
+  const media = document.createElement("div");
+  media.setAttribute("class", "widget-preview");
   if (item.preview) {
     const image = document.createElement("img");
-    image.setAttribute("class", "preview");
     image.setAttribute("src", item.preview.url);
     image.setAttribute("alt", "");
-    element.append(image);
+    image.setAttribute("loading", "lazy");
+    media.append(image);
+  } else {
+    media.setAttribute("class", "widget-preview widget-preview--fallback");
+    media.setAttribute("aria-hidden", "true");
+    media.append(textElement("span", localized(item).name.slice(0, 2).toLocaleUpperCase(state.locale), "widget-monogram"),
+      textElement("span", copy[state.locale].previewFallback, "preview-caption"));
   }
-  const locales = item.listing.localizations.map((entry) => entry.locale).join(", ");
-  element.append(
-    textElement("p", statusLabel(item.status, languageCopy), `badge status-${item.status}`),
-    textElement("h3", text.name),
-    textElement("p", text.description, "description"),
-  );
-  const metadata = document.createElement("div");
-  metadata.setAttribute("class", "metadata");
-  metadata.append(
-    textElement("p", `${languageCopy.version} ${item.manifest.version}`),
-    textElement("p", `${languageCopy.author} ${item.listing.author}`),
-    textElement("p", `${languageCopy.license} ${item.listing.spdxLicense}`),
-    textElement("p", `${languageCopy.languages} ${locales}`),
-  );
-  element.append(metadata);
-  const source = document.createElement("a");
-  source.textContent = languageCopy.source;
-  source.setAttribute("href", item.listing.sourceUrl);
-  source.setAttribute("title", item.listing.sourceUrl);
-  source.setAttribute("rel", "noreferrer noopener");
-  source.setAttribute("class", "source-link");
-  element.append(source);
+  return media;
+}
+
+function card(item) {
+  const text = localized(item);
+  const words = copy[state.locale];
+  const element = document.createElement("article");
+  element.setAttribute("class", "card");
+  const link = document.createElement("a");
+  link.setAttribute("class", "card-link");
+  link.setAttribute("href", `#widget/${item.manifest.id}`);
+  link.setAttribute("aria-label", `${words.view}: ${text.name}`);
+  link.setAttribute("aria-describedby", `description-${item.manifest.id} status-${item.manifest.id}`);
+  const body = document.createElement("div");
+  body.setAttribute("class", "card-body");
+  const description = textElement("p", text.description, "description");
+  description.setAttribute("id", `description-${item.manifest.id}`);
+  body.append(textElement("h3", text.name), textElement("p", item.listing.author, "card-author"), description);
+  const footer = document.createElement("div");
+  footer.setAttribute("class", "card-footer");
+  footer.append(textElement("span", `${words.version} ${item.manifest.version}`), textElement("span", `${words.view} →`, "card-action"));
+  const status = textElement("p", statusLabel(item.status, words), `badge status-${item.status}`);
+  status.setAttribute("id", `status-${item.manifest.id}`);
+  body.append(status, footer);
+  link.append(widgetPreview(item), body);
+  element.append(link);
+  return element;
+}
+
+function widgetDetails(item) {
+  const text = localized(item);
+  const words = copy[state.locale];
+  const layout = document.createElement("div");
+  layout.setAttribute("class", "detail-layout");
+  const main = document.createElement("article");
+  main.setAttribute("class", "detail-main");
+  main.append(textElement("p", item.listing.author, "eyebrow"), textElement("h1", text.name),
+    textElement("p", text.description, "detail-description"), widgetPreview(item));
   const permissions = document.createElement("section");
   permissions.setAttribute("class", "permissions");
-  permissions.append(textElement("h4", languageCopy.permissions));
+  permissions.append(textElement("h2", words.permissions));
   const values = details(item);
   if (values.length) {
     const list = document.createElement("ul");
     for (const value of values) list.append(textElement("li", value));
     permissions.append(list);
-  } else {
-    permissions.append(textElement("p", languageCopy.noPermissions));
-  }
-  element.append(permissions);
+  } else permissions.append(textElement("p", words.noPermissions));
+  main.append(permissions);
+  const aside = document.createElement("aside");
+  aside.setAttribute("class", "detail-sidebar");
+  const install = document.createElement("section");
+  install.setAttribute("class", "install-panel");
   const open = document.createElement("a");
-  open.textContent = languageCopy.open;
+  open.textContent = words.open;
   open.setAttribute("href", `overcrow://widget/${item.manifest.id}`);
   open.setAttribute("class", "button-primary");
-  const action = document.createElement("footer");
-  action.setAttribute("class", "card-actions");
-  action.append(open, textElement("p", languageCopy.openHelp, "open-help"));
-  element.append(action);
-  return element;
+  install.append(textElement("h2", words.installTitle),
+    textElement("p", statusLabel(item.status, words), `badge status-${item.status}`),
+    open, textElement("p", words.openHelp, "open-help"), textElement("p", words.flowActivate, "activation-note"));
+  const metadata = document.createElement("section");
+  metadata.setAttribute("class", "metadata");
+  metadata.append(textElement("h2", words.about));
+  for (const [label, value] of [[words.version, item.manifest.version], [words.author, item.listing.author],
+    [words.license, item.listing.spdxLicense], [words.languages, item.listing.localizations.map((entry) => entry.locale).join(", ")]]) {
+    metadata.append(textElement("p", `${label} ${value}`));
+  }
+  metadata.append(textElement("p", item.manifest.id, "widget-id"));
+  const source = document.createElement("a");
+  source.textContent = words.source;
+  source.setAttribute("href", item.listing.sourceUrl);
+  source.setAttribute("title", item.listing.sourceUrl);
+  source.setAttribute("rel", "noreferrer noopener");
+  source.setAttribute("class", "source-link");
+  metadata.append(source);
+  aside.append(install, metadata);
+  layout.append(main, aside);
+  return layout;
+}
+
+function renderRoute(focus = false) {
+  const isDetail = location.hash.startsWith("#widget/");
+  let focusTarget = document.getElementById("catalog-heading");
+  document.getElementById("catalog-view").hidden = isDetail;
+  detail.hidden = !isDetail;
+  detail.textContent = "";
+  const words = copy[state.locale];
+  document.title = `${words.title} · OverCrow`;
+  if (isDetail) {
+    const back = document.createElement("a");
+    back.setAttribute("href", "#catalog-area");
+    back.setAttribute("class", "back-link");
+    back.textContent = words.back;
+    detail.append(back);
+    focusTarget = back;
+    const item = state.targets.find((target) => `#widget/${target.manifest.id}` === location.hash);
+    if (item) {
+      detail.append(widgetDetails(item));
+      document.title = `${localized(item).name} · OverCrow`;
+    } else detail.append(textElement("h1", state.loading ? words.loading : state.unavailable ? words.unavailable : words.notFound, "catalog-state"));
+  }
+  if (focus) focusTarget.focus();
+}
+
+function renderCatalog() {
+  catalog.textContent = "";
+  document.getElementById("catalog-status").textContent = "";
+  const words = copy[state.locale];
+  const normalize = (value) => value.normalize("NFD").replace(/[\u0300-\u036f]/gu, "").toLocaleLowerCase(state.locale);
+  const query = normalize(state.query.trim());
+  const visible = state.targets.filter((item) => {
+    const matchesStatus = state.availability === "all" || (state.availability === "available" ? item.status === "verified" : item.status !== "verified");
+    return matchesStatus && normalize([item.manifest.id, item.listing.author,
+      ...item.listing.localizations.flatMap((entry) => [entry.name, entry.description])].join(" ")).includes(query);
+  });
+  document.getElementById("result-count").textContent = state.loading || state.unavailable ? "" : words.count(visible.length, state.targets.length);
+  document.getElementById("reset-search").hidden = !state.query && state.availability === "all";
+  catalog.setAttribute("aria-busy", String(state.loading));
+  if (state.loading || state.unavailable || !visible.length) {
+    const message = state.loading ? words.loading : state.unavailable ? words.unavailable
+      : state.targets.length ? words.noResults : words.empty;
+    document.getElementById("catalog-status").textContent = message;
+    const messageElement = textElement("p", message, "catalog-state");
+    messageElement.setAttribute("aria-hidden", "true");
+    catalog.append(messageElement);
+  } else for (const item of visible) catalog.append(card(item));
 }
 
 function render() {
-  catalog.textContent = "";
-  const languageCopy = copy[state.locale];
+  const words = copy[state.locale];
   for (const [id, text] of [
-    ["page-title", languageCopy.title],
-    ["page-description", languageCopy.description],
-    ["language-label", languageCopy.language],
-    ["catalog-heading", languageCopy.catalogHeading],
-    ["skip-link", languageCopy.skip],
+    ["page-title", words.title], ["page-description", words.description], ["language-label", words.language],
+    ["catalog-heading", words.catalogHeading], ["skip-link", words.skip], ["nav-browse", words.browse],
+    ["nav-create", words.create], ["hero-kicker", words.kicker], ["flow-title", words.flowTitle],
+    ["flow-browse", words.flowBrowse], ["flow-install", words.flowInstall], ["flow-activate", words.flowActivate],
+    ["search-label", words.search], ["availability-label", words.availability], ["filter-all", words.all],
+    ["filter-available", words.available], ["filter-restricted", words.restricted], ["reset-search", words.reset],
+    ["footer-note", words.footer],
   ]) document.getElementById(id).textContent = text;
-  document.title = `${languageCopy.title} · OverCrow`;
+  search.setAttribute("placeholder", words.searchHint);
+  language.setAttribute("aria-label", words.language);
   trust.textContent = policy.labels[state.locale];
-  catalog.setAttribute("aria-busy", String(state.loading));
-  if (state.loading || state.unavailable || state.targets.length === 0) {
-    const message = state.loading ? languageCopy.loading
-      : state.unavailable ? languageCopy.unavailable : languageCopy.empty;
-    catalog.append(textElement("p", message, "catalog-state"));
-    return;
-  }
-  for (const item of state.targets) catalog.append(card(item));
+  renderCatalog();
+  renderRoute();
 }
+
+search.addEventListener("input", () => {
+  state.query = search.value.slice(0, 200);
+  renderCatalog();
+});
+availability.addEventListener("change", () => {
+  state.availability = ["available", "restricted"].includes(availability.value) ? availability.value : "all";
+  renderCatalog();
+});
+document.getElementById("reset-search").addEventListener("click", () => {
+  state.query = "";
+  state.availability = "all";
+  search.value = "";
+  availability.value = "all";
+  renderCatalog();
+  search.focus();
+});
+addEventListener("hashchange", () => renderRoute(true));
 
 async function readBounded(response) {
   if (!response.body || typeof response.body.getReader !== "function") throw new Error("stream");

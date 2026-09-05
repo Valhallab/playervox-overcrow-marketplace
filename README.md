@@ -61,7 +61,11 @@ Production catalogs remain at
 90-day lifetime. Do not push, publish, or deploy from this reset.
 Production private keys never enter this repository.
 
-The catalog website offers **Open in OverCrow** in English and French. Its
+The catalog website provides compact preview cards, local search across names,
+descriptions and authors, and an availability filter. Widget details use
+`#widget/<canonical-id>` links; returning to the catalog preserves the current
+search and filter. Full permissions, metadata, source and **Open in OverCrow**
+are available on each detail view in English and French. Its
 `overcrow://widget/<canonical-id>` links open widget details in the native
 Control Center; they never install or activate a widget. Activation stays in
 the in-game overlay library. The site displays the latest version per widget

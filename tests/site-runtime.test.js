@@ -44,6 +44,8 @@ class Element {
     this.listeners.get(type)();
   }
 
+  focus() { this.focused = true; }
+
   setAttribute(name, value) {
     assert.equal(typeof name, "string");
     assert.equal(typeof value, "string");
@@ -175,6 +177,10 @@ async function run(body, options = {}) {
     ["trust-label", trust],
     ...["page-title", "page-description", "language-label", "catalog-heading", "skip-link"].map((id) => [id, new Element()]),
   ]);
+  for (const id of ["catalog-status", "catalog-area", "search", "availability", "reset-search", "result-count", "search-label", "availability-label", "filter-all", "filter-available", "filter-restricted", "detail", "catalog-view", "intro", "nav-browse", "nav-create", "hero-kicker", "flow-title", "flow-browse", "flow-install", "flow-activate", "footer-note"]) elements.set(id, new Element());
+  elements.get("search").value = "";
+  elements.get("availability").value = "all";
+  const events = new Map();
   const document = {
     createElement: (tag) => new Element(tag),
     getElementById: (id) => elements.get(id),
@@ -185,6 +191,7 @@ async function run(body, options = {}) {
   const timers = [];
   const context = {
     document,
+    addEventListener: (name, listener) => events.set(name, listener),
     TextDecoder,
     Uint8Array,
     URL,
@@ -203,6 +210,7 @@ async function run(body, options = {}) {
     },
   };
   const location = {
+    hash: options.hash || "",
     set href(value) { navigation.push(value); },
     assign: (value) => navigation.push(value),
     replace: (value) => navigation.push(value),
@@ -221,7 +229,9 @@ async function run(body, options = {}) {
   vm.runInNewContext(fs.readFileSync("web/marketplace/app.js", "utf8"), context);
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
-  return { catalog, language, trust, document, requests, navigation, timers, elements };
+  return { catalog, language, trust, document, requests, navigation, timers, elements,
+    route(hash) { location.hash = hash; events.get("hashchange")?.(); },
+  };
 }
 
 function cardText(card) {
@@ -246,13 +256,14 @@ test("development mode renders a Web API v1 catalog card", async () => {
   const body = generated();
   assert.equal(payload(body).targets.length, 1);
   const page = await run(body);
+  page.route("#widget/com.playervox.overcrow.warframe.market");
   const index = fs.readFileSync("web/marketplace/index.html", "utf8");
   assert.match(index, /<option value="en" selected>English<\/option>/u);
   assert.match(index, /<option value="fr">Français<\/option>/u);
   assert.deepEqual(page.requests, ["/marketplace/v1/catalog.json"]);
   assert.equal(page.trust.textContent, "Development — unverified");
   assert.equal(page.catalog.children.length, 1);
-  const market = cardText(card(page, /Warframe Market/u));
+  const market = cardText(page.elements.get("detail"));
   for (const expected of [
     /Version 2\.0\.0/u,
     /Author PlayerVox/u,
@@ -268,16 +279,17 @@ test("localizes the complete page frame and pending catalog state", async () => 
   let resolve;
   const responseGate = new Promise((done) => { resolve = done; });
   const page = await run(generated(), { responseGate });
-  assert.equal(page.elements.get("page-title").textContent, "Widget marketplace");
+  assert.equal(page.elements.get("page-title").textContent, "Your game. Your widgets.");
   assert.equal(page.elements.get("language-label").textContent, "Language");
   assert.equal(page.catalog.getAttribute("aria-busy"), "true");
   assert.match(cardText(page.catalog), /Loading widgets/u);
   page.language.value = "fr";
   page.language.dispatch("change");
-  assert.equal(page.elements.get("page-title").textContent, "Catalogue de widgets");
-  assert.equal(page.document.title, "Catalogue de widgets · OverCrow");
+  assert.equal(page.elements.get("page-title").textContent, "Votre jeu. Vos widgets.");
+  assert.equal(page.document.title, "Votre jeu. Vos widgets. · OverCrow");
   assert.equal(page.elements.get("language-label").textContent, "Langue");
-  assert.equal(page.elements.get("catalog-heading").textContent, "Widgets disponibles");
+  assert.equal(page.language.getAttribute("aria-label"), "Langue");
+  assert.equal(page.elements.get("catalog-heading").textContent, "Explorez les widgets");
   assert.equal(page.elements.get("skip-link").textContent, "Aller aux widgets");
   assert.match(page.elements.get("page-description").textContent, /Centre de contrôle OverCrow/u);
   assert.match(cardText(page.catalog), /Chargement des widgets/u);
@@ -299,10 +311,11 @@ test("distinguishes an empty valid catalog from errors in both languages", async
 
 test("uses a readable source label while keeping the exact source URL accessible", async () => {
   const page = await run(generated());
+  page.route("#widget/com.playervox.overcrow.warframe.market");
   for (const [locale, label] of [["en", "View source"], ["fr", "Voir le code source"]]) {
     page.language.value = locale;
     page.language.dispatch("change");
-    const source = descendants(page.catalog).find((element) => element.textContent === label);
+    const source = descendants(page.elements.get("detail")).find((element) => element.textContent === label);
     assert.ok(source);
     assert.equal(source.getAttribute("href"), webTarget().listing.sourceUrl);
     assert.equal(source.getAttribute("title"), webTarget().listing.sourceUrl);
@@ -312,22 +325,24 @@ test("uses a readable source label while keeping the exact source URL accessible
 
 test("describes an empty permission set without inventing grants", async () => {
   const page = await run(envelope([webTarget({ manifest: { permissions: {} } })]));
-  assert.match(cardText(page.catalog), /No permissions requested\./u);
-  assert.doesNotMatch(cardText(page.catalog), /Fetches public data|Receives OverCrow game events|Stores private widget data|Writes to clipboard/u);
+  page.route("#widget/com.playervox.overcrow.warframe.market");
+  assert.match(cardText(page.elements.get("detail")), /No permissions requested\./u);
+  assert.doesNotMatch(cardText(page.elements.get("detail")), /Fetches public data|Receives OverCrow game events|Stores private widget data|Writes to clipboard/u);
   page.language.value = "fr";
   page.language.dispatch("change");
-  assert.match(cardText(page.catalog), /Aucune permission demandée\./u);
+  assert.match(cardText(page.elements.get("detail")), /Aucune permission demandée\./u);
 });
 
 test("production mode renders complete catalog metadata without a development claim", async () => {
   const page = await run(productionCatalog(), {
     policy: "web/marketplace/policies/production.js",
-  });
+  })
+  page.route("#widget/com.playervox.overcrow.warframe.market");;
   assert.equal(
     page.trust.textContent,
     "Production catalog — installs are verified by OverCrow",
   );
-  const market = cardText(card(page, /Warframe Market/u));
+  const market = cardText(page.elements.get("detail"));
   for (const expected of [
     "Version 2.0.0",
     "Author PlayerVox",
@@ -337,8 +352,8 @@ test("production mode renders complete catalog metadata without a development cl
   ]) assert.match(market, new RegExp(expected, "u"));
   assert.doesNotMatch(market, /Development — unverified/u);
 
-  const source = descendants(card(page, /Warframe Market/u))
-    .find((element) => element.tagName === "a");
+  const source = descendants(page.elements.get("detail"))
+    .find((element) => element.textContent === "View source");
   assert.equal(
     source.getAttribute("href"),
     "https://github.com/PlayerVox/playervox-overcrow-marketplace",
@@ -359,7 +374,7 @@ test("creator strings are assigned only through textContent", async () => {
   assert.match(cardText(item), /<img src=x onerror=globalThis\.pwned=true>/u);
 });
 
-test("each validated card links explicitly to OverCrow without navigation or downloads", async () => {
+test("each widget detail links explicitly to OverCrow without navigation or downloads", async () => {
   const targets = [webTarget(), webTarget({ id: "org.example.other-widget" })];
   const page = await run(envelope(targets));
   for (const [locale, label, explanation] of [
@@ -369,7 +384,9 @@ test("each validated card links explicitly to OverCrow without navigation or dow
     page.language.value = locale;
     page.language.dispatch("change");
     assert.equal(page.catalog.children.length, targets.length);
-    for (const [index, item] of page.catalog.children.entries()) {
+    for (const [index, target] of targets.entries()) {
+      page.route(`#widget/${target.manifest.id}`);
+      const item = page.elements.get("detail");
       const link = descendants(item).find((element) => element.textContent === label);
       assert.ok(link);
       assert.equal(link.tagName, "a");
@@ -481,11 +498,12 @@ test("French UI falls back to English creator copy when only English is supplied
     return targets;
   });
   const page = await run(englishOnly);
+  page.route("#widget/com.playervox.overcrow.warframe.market");
   page.language.value = "fr";
   page.language.dispatch("change");
   assert.equal(page.document.documentElement.lang, "fr");
   assert.equal(page.trust.textContent, "Développement — non vérifié");
-  assert.match(cardText(card(page, /Warframe Market/u)), /Langues en/u);
+  assert.match(cardText(page.elements.get("detail")), /Langues en/u);
 });
 
 test("accepts sixteen exact localized listing entries", async () => {
@@ -514,7 +532,8 @@ test("renders admitted permissions beyond sixteen entries", async () => {
     return targets;
   });
   const page = await run(body);
-  const market = card(page, /Warframe Market/u);
+  page.route("#widget/com.playervox.overcrow.warframe.market");
+  const market = page.elements.get("detail");
   assert.ok(market);
   assert.match(cardText(market), /api16\.example\.test/u);
   assert.match(cardText(market), /Receives OverCrow game events/u);
@@ -642,3 +661,73 @@ const invalidCatalogs = [
 for (const [name, body, options] of invalidCatalogs) {
   test(`rejects ${name}`, async () => unavailable(await run(body, options)));
 }
+
+
+test("catalog search matches localized names and authors without extra requests", async () => {
+  const page = await run(envelope([webTarget(), webTarget({id: "org.example.notes", listing: {
+    author: "Another author", localizations: [{locale: "en", name: "Notes", description: "Private notes."}],
+  }})]));
+  const search = page.elements.get("search");
+  assert.ok(search.listeners.has("input"));
+  search.value = "  marché  "; search.dispatch("input");
+  assert.equal(page.catalog.children.length, 1);
+  assert.ok(card(page, /Warframe Market/u));
+  search.value = "another author"; search.dispatch("input");
+  assert.ok(card(page, /Notes/u));
+  search.value = "not in this catalog"; search.dispatch("input");
+  assert.match(cardText(page.catalog), /No matching widgets/u);
+  page.elements.get("reset-search").dispatch("click");
+  assert.equal(page.catalog.children.length, 2);
+  assert.equal(search.value, "");
+  assert.deepEqual(page.requests, ["/marketplace/v1/catalog.json"]);
+});
+
+test("availability filtering keeps restricted widgets discoverable", async () => {
+  const page = await run(envelope([webTarget(), webTarget({id: "org.example.revoked", target: {status: "revoked"}})]));
+  const filter = page.elements.get("availability");
+  assert.ok(filter.listeners.has("change"));
+  filter.value = "restricted"; filter.dispatch("change");
+  assert.equal(page.catalog.children.length, 1);
+  assert.match(cardText(page.catalog), /Revoked/u);
+  filter.value = "available"; filter.dispatch("change");
+  assert.equal(page.catalog.children.length, 1);
+  assert.doesNotMatch(cardText(page.catalog), /Revoked/u);
+});
+
+test("widget routes reveal full permissions and return to the filtered catalog", async () => {
+  const page = await run(generated());
+  assert.ok(descendants(page.catalog).some((e) => e.getAttribute("href") === "#widget/com.playervox.overcrow.warframe.market"));
+  assert.doesNotMatch(cardText(page.catalog), /Stores private widget data/u);
+  const search = page.elements.get("search");
+  search.value = "warframe"; search.dispatch("input");
+  page.route("#widget/com.playervox.overcrow.warframe.market");
+  assert.equal(page.elements.get("catalog-view").hidden, true);
+  assert.match(cardText(page.elements.get("detail")), /Stores private widget data/u);
+  page.route("#catalog-area");
+  assert.equal(page.elements.get("catalog-view").hidden, false);
+  assert.equal(page.elements.get("detail").hidden, true);
+  assert.equal(search.value, "warframe");
+  assert.equal(page.catalog.children.length, 1);
+  assert.deepEqual(page.navigation, []);
+});
+
+test("unknown and encoded widget routes cannot create a native link", async () => {
+  for (const hash of ["#widget/org.example.missing", "#widget/%63om.playervox.overcrow.warframe.market"]) {
+    const page = await run(generated(), {hash});
+    assert.match(cardText(page.elements.get("detail")), /Widget not found/u);
+    assert.equal(descendants(page.elements.get("detail")).some((e) => (e.getAttribute("href") || "").startsWith("overcrow:")), false);
+  }
+});
+
+
+test("loading and failure messages have a persistent live status", async () => {
+  let release;
+  const responseGate = new Promise((resolve) => { release = resolve; });
+  const page = await run(generated(), {responseGate, ok: false});
+  assert.match(page.elements.get("catalog-status").textContent, /Loading widgets/u);
+  release(); await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(page.elements.get("catalog-status").textContent, "Catalog unavailable.");
+  page.language.value = "fr"; page.language.dispatch("change");
+  assert.equal(page.elements.get("catalog-status").textContent, "Catalogue indisponible.");
+  assert.match(fs.readFileSync("web/marketplace/index.html", "utf8"), /id="catalog-status" role="status"/u);
+});
