@@ -17,8 +17,10 @@ v1:
   complete file ledger, and built bytes, then writes a deterministic stored-zip
   `.ocpkg`. Its admission commands bind each package to the validated
   `listing.json`, then persist and later re-verify both exact byte sequences in
-  a private content-addressed store. Its development-only staging command signs
-  a catalog and copies packages directly from one verified admission.
+  a private content-addressed store. Its development staging command signs a
+  local catalog. Separate production prepare/finalize commands reserve an
+  offline sequence, export exact payload bytes and verify a detached production
+  signature without accepting a private key.
 - `fixtures/hello-web` is the structural Web API v1 fixture.
 - `widgets/warframe-market` is the reference extension: persistent
   controller, IndexedDB catalog and last query (~3840 structured items),
@@ -43,8 +45,12 @@ package and listing bytes into an explicitly supplied private store. Ingestion
 re-inspects but does not execute, rebuild, or retest a package. Development
 catalog staging reuses the stored bytes exactly. Runtime OverCrow verifies
 signature, digest, and capabilities; it does not rebuild or retest widgets.
-The generic maintainer sandbox for extension-defined build commands and the
-production catalog signer are not implemented yet.
+Production preparation and detached-signature finalization follow the
+[offline operations runbook](docs/production-operations.md). They retain earlier
+versions and revocations, verify the fixed production public key and never
+publish or deploy. Private signing remains a separate external operation.
+The generic maintainer sandbox for extension-defined build commands is not
+implemented yet.
 
 Declared browser `.wasm` assets are allowed for sandboxed page-side
 computation. WIT/Wasmtime components and native executable modules remain
@@ -54,6 +60,13 @@ Production catalogs remain at
 <https://overcrow.playervox.com/marketplace/v1/catalog.json> with a
 90-day lifetime. Do not push, publish, or deploy from this reset.
 Production private keys never enter this repository.
+
+The catalog website offers **Open in OverCrow** in English and French. Its
+`overcrow://widget/<canonical-id>` links open widget details in the native
+Control Center; they never install or activate a widget. Activation stays in
+the in-game overlay library. The site displays the latest version per widget
+using the same version ordering as the app, including a latest-version
+revocation instead of falling back to an older verified entry.
 
 ## Contributing
 

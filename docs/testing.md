@@ -28,6 +28,13 @@ tests verify the Ed25519 signature against the compiled development public key,
 reject another seed, and cover the envelope, listing, manifest, URL, size, and
 digest contract.
 
+The catalog-site tests cover explicit native navigation links, multiple
+versions per widget, exact-version duplicates, prerelease/build ordering, and
+latest-version security statuses. Real browser-to-app opening still requires
+an installed native build that registers the `overcrow` URI scheme; verify
+startup, an existing hidden window, and first-run setup without installation
+or activation from the link.
+
 Also run the Web API v1 catalog-site contract:
 
 ```sh
@@ -50,6 +57,9 @@ driver's temporary artifact directory has been removed. Package or same-size
 listing tampering, unreceipted files, same-version replacement, and downgrade
 are covered by the Rust admission tests.
 
-The generic maintainer sandbox and production signing are still pending.
-Development staging and OverCrow runtime reuse admitted bytes and never rerun
-their tests.
+Production tests cover offline preparation, detached signature verification,
+sequence reservations, interrupted finalization, and retained version statuses.
+The public CLI smoke rejects untrusted signatures against the compiled production
+key. Private signing remains external; the generic maintainer sandbox is still
+pending. Catalog publication and OverCrow runtime reuse admitted bytes and never
+rerun their tests.

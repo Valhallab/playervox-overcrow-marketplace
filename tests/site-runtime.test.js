@@ -180,11 +180,16 @@ async function run(body, options = {}) {
     documentElement: { lang: "en" },
   };
   const requests = [];
+  const navigation = [];
+  const timers = [];
   const context = {
     document,
     TextDecoder,
     Uint8Array,
     URL,
+    open: (...args) => navigation.push(args),
+    setTimeout: (...args) => timers.push(args),
+    setInterval: (...args) => timers.push(args),
     atob: (value) => Buffer.from(value, "base64").toString("binary"),
     fetch: async (url) => {
       requests.push(url);
@@ -195,6 +200,16 @@ async function run(body, options = {}) {
       };
     },
   };
+  const location = {
+    set href(value) { navigation.push(value); },
+    assign: (value) => navigation.push(value),
+    replace: (value) => navigation.push(value),
+  };
+  Object.defineProperty(context, "location", {
+    get: () => location,
+    set: (value) => navigation.push(value),
+  });
+  context.window = context;
   if (options.policyObject) {
     context.overcrowMarketplacePolicy = options.policyObject;
   } else {
@@ -204,7 +219,7 @@ async function run(body, options = {}) {
   vm.runInNewContext(fs.readFileSync("web/marketplace/app.js", "utf8"), context);
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
-  return { catalog, language, trust, document, requests };
+  return { catalog, language, trust, document, requests, navigation, timers };
 }
 
 function cardText(card) {
@@ -285,6 +300,119 @@ test("creator strings are assigned only through textContent", async () => {
   assert.equal(item.children.some((child) => child.tagName === "script"), false);
   assert.equal(descendants(item).some((child) => child.tagName === "img"), false);
   assert.match(cardText(item), /<img src=x onerror=globalThis\.pwned=true>/u);
+});
+
+test("each validated card links explicitly to OverCrow without navigation or downloads", async () => {
+  const targets = [webTarget(), webTarget({ id: "org.example.other-widget" })];
+  const page = await run(envelope(targets));
+  for (const [locale, label, explanation] of [
+    ["en", "Open in OverCrow", /Requires the OverCrow app/u],
+    ["fr", "Ouvrir dans OverCrow", /Nécessite l’application OverCrow/u],
+  ]) {
+    page.language.value = locale;
+    page.language.dispatch("change");
+    assert.equal(page.catalog.children.length, targets.length);
+    for (const [index, item] of page.catalog.children.entries()) {
+      const link = descendants(item).find((element) => element.textContent === label);
+      assert.ok(link);
+      assert.equal(link.tagName, "a");
+      assert.equal(link.getAttribute("href"), `overcrow://widget/${targets[index].manifest.id}`);
+      assert.equal(link.listeners.size, 0);
+      assert.match(cardText(item), explanation);
+    }
+  }
+  assert.deepEqual(page.navigation, []);
+  assert.deepEqual(page.timers, []);
+  assert.deepEqual(page.requests, ["/marketplace/v1/catalog.json"]);
+});
+
+test("selects one latest version per ID regardless of catalog order", async () => {
+  const versions = ["2.0.9", "2.0.10", "1.99.99"];
+  for (const order of [versions, [...versions].reverse(), [versions[2], versions[0], versions[1]]]) {
+    const page = await run(envelope([
+      ...order.map((version) => webTarget({ version })),
+      webTarget({ id: "org.example.other-widget", version: "0.1.0" }),
+    ]));
+    assert.equal(page.catalog.children.length, 2);
+    assert.match(cardText(page.catalog.children[0]), /Version 2\.0\.10\n/u);
+    assert.match(cardText(page.catalog.children[1]), /Version 0\.1\.0\n/u);
+  }
+});
+
+test("uses Rust SemVer ordering for prereleases, large numbers, and build metadata", async () => {
+  const orderedGroups = [
+    ["1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.2", "1.0.0-alpha.10", "1.0.0-beta", "1.0.0-rc.1", "1.0.0"],
+    ["1.0.0-999999999999999999999999", "1.0.0-A", "1.0.0-a"],
+    ["9007199254740992.0.0", "9007199254740993.0.0", "18446744073709551615.0.0"],
+    ["1.0.0", "1.0.0+0", "1.0.0+00", "1.0.0+2", "1.0.0+02", "1.0.0+10", "1.0.0+A", "1.0.0+a", "1.0.0+a.1"],
+    ["1.0.0-rc.1+z", "1.0.0+0"],
+  ];
+  for (const versions of orderedGroups) {
+    for (let index = 1; index < versions.length; index += 1) {
+      for (const order of [[versions[index - 1], versions[index]], [versions[index], versions[index - 1]]]) {
+        const page = await run(envelope(order.map((version) => webTarget({ version }))));
+        assert.equal(page.catalog.children.length, 1);
+        assert.ok(cardText(page.catalog.children[0]).includes(`Version ${versions[index]}\n`), order.join(" < "));
+      }
+    }
+  }
+});
+
+test("latest revoked or suspended versions never expose an older verified card", async () => {
+  for (const [status, label] of [
+    ["revoked", "Revoked catalog entry"],
+    ["security-suspended", "Security-suspended catalog entry"],
+  ]) {
+    const targets = [webTarget({ version: "1.0.0" }), webTarget({ version: "2.0.0", target: { status } })];
+    for (const order of [targets, [...targets].reverse()]) {
+      const page = await run(envelope(order));
+      assert.equal(page.catalog.children.length, 1);
+      assert.match(cardText(page.catalog.children[0]), /Version 2\.0\.0\n/u);
+      assert.ok(cardText(page.catalog.children[0]).includes(label));
+      assert.doesNotMatch(cardText(page.catalog.children[0]), /Verified catalog entry/u);
+    }
+  }
+});
+
+test("an older signed revocation coexists with a newer verified version", async () => {
+  const targets = [
+    webTarget({ version: "1.0.0", target: { status: "revoked" } }),
+    webTarget({ version: "2.0.0" }),
+  ];
+  for (const order of [targets, [...targets].reverse()]) {
+    const page = await run(envelope(order));
+    assert.equal(page.catalog.children.length, 1);
+    assert.match(cardText(page.catalog.children[0]), /Version 2\.0\.0\n/u);
+    assert.match(cardText(page.catalog.children[0]), /Verified catalog entry/u);
+    assert.doesNotMatch(cardText(page.catalog.children[0]), /Revoked catalog entry/u);
+  }
+});
+
+test("invalid IDs cannot become application URLs", async () => {
+  for (const id of [
+    "org.example/widget", "org.example?install=true", "org.example#activate",
+    "org.example%2fwidget", "org.Example.widget", "overcrow://widget/org.example",
+  ]) {
+    const page = await run(envelope([webTarget({ id })]));
+    unavailable(page);
+    assert.equal(descendants(page.catalog).some((element) => element.tagName === "a"), false);
+    assert.deepEqual(page.navigation, []);
+    assert.deepEqual(page.timers, []);
+  }
+});
+
+test("rejects noncanonical or out-of-range Rust SemVer versions", async () => {
+  for (const version of [
+    "01.0.0", "1.0.0-01", "1.0.0-alpha.01", "18446744073709551616.0.0",
+    "0.18446744073709551616.0", "0.0.18446744073709551616", "1.0.0+", "1.0.0-a..b",
+  ]) unavailable(await run(envelope([webTarget({ version })])));
+});
+
+test("rejects duplicate ID/version even when package metadata or status differs", async () => {
+  unavailable(await run(envelope([
+    webTarget({ version: "1.0.0+02" }),
+    webTarget({ version: "1.0.0+02", packageSha256: "c".repeat(64), target: { status: "revoked" } }),
+  ])));
 });
 
 test("French UI falls back to English creator copy when only English is supplied", async () => {
@@ -426,7 +554,7 @@ const invalidCatalogs = [
     };
     return targets;
   }), {}],
-  ["duplicate target IDs", withTargets((targets) => {
+  ["duplicate target ID/version", withTargets((targets) => {
     targets.push(structuredClone(targets[0]));
     return targets;
   }), {}],

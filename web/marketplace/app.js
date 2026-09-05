@@ -62,6 +62,8 @@ const copy = {
     version: "Version",
     author: "Author",
     source: "Source",
+    open: "Open in OverCrow",
+    openHelp: "Requires the OverCrow app. You can also open Control Center and find this widget in Marketplace. Opening its details does not install or activate it.",
     license: "License",
     languages: "Languages",
     http: "Fetches public data from",
@@ -77,6 +79,8 @@ const copy = {
     version: "Version",
     author: "Auteur",
     source: "Source",
+    open: "Ouvrir dans OverCrow",
+    openHelp: "Nécessite l’application OverCrow. Vous pouvez aussi ouvrir le Centre de contrôle et retrouver ce widget dans Marketplace. Ouvrir sa fiche ne l’installe ni ne l’active.",
     license: "Licence",
     languages: "Langues",
     http: "Récupère des données publiques depuis",
@@ -109,9 +113,62 @@ function extensionId(value) {
     ));
 }
 
+function compareText(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function compareDigits(left, right) {
+  return left.length - right.length || compareText(left, right);
+}
+
+function parseVersion(value) {
+  if (!string(value, 64)) return null;
+  const parts = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u.exec(value);
+  if (!parts) return null;
+  const core = parts.slice(1, 4);
+  const pre = parts[4] ? parts[4].split(".") : [];
+  const build = parts[5] ? parts[5].split(".") : [];
+  // Rust semver uses u64 core numbers and rejects leading-zero numeric prereleases.
+  if (core.some((part) => compareDigits(part, "18446744073709551615") > 0)
+      || pre.some((part) => /^0[0-9]+$/u.test(part))) return null;
+  return { core, pre, build };
+}
+
 function version(value) {
-  return string(value, 64)
-    && /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u.test(value);
+  return parseVersion(value) !== null;
+}
+
+function compareIdentifiers(left, right, build) {
+  for (let index = 0; index < Math.min(left.length, right.length); index += 1) {
+    const a = left[index];
+    const b = right[index];
+    const aNumeric = /^[0-9]+$/u.test(a);
+    const bNumeric = /^[0-9]+$/u.test(b);
+    let result;
+    if (aNumeric && bNumeric) {
+      // Version::cmp includes build metadata: equal numeric values sort by digit count.
+      result = build
+        ? compareDigits(a.replace(/^0+/u, ""), b.replace(/^0+/u, "")) || a.length - b.length
+        : compareDigits(a, b);
+    } else {
+      result = aNumeric !== bNumeric ? (aNumeric ? -1 : 1) : compareText(a, b);
+    }
+    if (result) return result;
+  }
+  return left.length - right.length;
+}
+
+function compareVersions(left, right) {
+  const a = parseVersion(left);
+  const b = parseVersion(right);
+  for (let index = 0; index < 3; index += 1) {
+    const result = compareDigits(a.core[index], b.core[index]);
+    if (result) return result;
+  }
+  if (a.pre.length === 0 && b.pre.length !== 0) return 1;
+  if (b.pre.length === 0 && a.pre.length !== 0) return -1;
+  return compareIdentifiers(a.pre, b.pre, false)
+    || compareIdentifiers(a.build, b.build, true);
 }
 
 function httpsUrl(value) {
@@ -279,11 +336,19 @@ function validate(text) {
     throw new Error("payload");
   }
   const byId = new Map();
+  const identities = new Set();
   for (const item of payload.targets) {
-    if (byId.has(item.manifest.id)) throw new Error("target");
-    byId.set(item.manifest.id, item);
+    const { id, version } = item.manifest;
+    const identity = `${id}/${version}`;
+    if (identities.has(identity)) throw new Error("target");
+    identities.add(identity);
+    const previous = byId.get(id);
+    // Select before considering status so a revocation never reveals an older version.
+    if (!previous || compareVersions(version, previous.manifest.version) > 0) {
+      byId.set(id, item);
+    }
   }
-  return payload.targets;
+  return [...byId.values()];
 }
 
 function localized(item) {
@@ -349,6 +414,12 @@ function card(item) {
   source.setAttribute("href", item.listing.sourceUrl);
   source.setAttribute("rel", "noreferrer noopener");
   element.append(source);
+  const open = document.createElement("a");
+  open.textContent = languageCopy.open;
+  open.setAttribute("href", `overcrow://widget/${item.manifest.id}`);
+  const action = document.createElement("p");
+  action.append(open);
+  element.append(action, textElement("p", languageCopy.openHelp));
   for (const value of details(item)) element.append(textElement("p", value));
   element.append(textElement("p", statusLabel(item.status, languageCopy)));
   return element;
