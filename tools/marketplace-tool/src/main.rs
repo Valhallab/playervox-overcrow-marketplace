@@ -1,5 +1,6 @@
 mod admission;
 mod catalog;
+mod catalog_production;
 mod package;
 mod private_fs;
 mod snapshot;
@@ -141,6 +142,19 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some(command @ ("prepare-production-catalog" | "finalize-production-catalog")) => {
+            let arguments = args.collect::<Vec<_>>();
+            match catalog_production::command(command, &arguments) {
+                Ok((count, output)) => {
+                    println!("{count} {}", output.display());
+                    ExitCode::SUCCESS
+                }
+                Err(message) => {
+                    eprintln!("error: {message}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Some("snapshot-plan") => {
             let arguments = args.collect::<Vec<_>>();
             if arguments.len() != 4
@@ -173,6 +187,12 @@ fn main() -> ExitCode {
                 "       marketplace-tool stage-development-catalog --store <directory> --review-tree <tree> --output <directory> --sequence <positive-integer> --generated-at <UTC> --expires-at <UTC> --signing-key <path>"
             );
             eprintln!("       marketplace-tool snapshot-plan --repository <path> --revision <sha>");
+            eprintln!(
+                "       marketplace-tool prepare-production-catalog --store <directory> --review-tree <tree> --state <directory> --request <json> --output <directory> [--previous-output <directory>]"
+            );
+            eprintln!(
+                "       marketplace-tool finalize-production-catalog --prepared <directory> --state <directory> --signature <raw-ed25519-signature> --output <directory>"
+            );
             ExitCode::FAILURE
         }
     }

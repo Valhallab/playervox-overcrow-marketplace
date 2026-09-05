@@ -21,7 +21,7 @@ Use separate clean worktrees and roles: contributors submit candidate PRs;
 hosted CI materializes the exact proposed tree and produces ephemeral package
 digests without executing its code; a maintainer reviews and ingests the exact
 trusted revision into a private store; acceptance merges only to `candidate`; an
-offline publisher would create a new signed catalog; and a separate deployment
+offline publisher prepares exact catalog bytes and verifies a detached signature; and a separate deployment
 operator configures Coolify to serve tracked output. The hosted receipt is
 evidence for review, not a durable accepted artifact and not publication
 authority. Coolify, GitHub, CI, and project temporary files never receive
@@ -147,18 +147,174 @@ re-verifies the completed receipt, listing, manifest, package size, and digest;
 it copies package bytes without rebuilding and commits `catalog.json` last.
 Starting the loopback server is a foreground local test action, not a deploy.
 
-## 5. Keys and authority material
+## 5. Prepare and finalize production output offline
 
-The reviewed public key remains `keys/overcrow-production-2026-01.pub`.
-Production private keys, sequence counters, and recovery backups stay outside
-this repository. The WASM-era publisher and generic source-bundle publisher
-scripts are deleted. Do not reconstruct them. The local development stager is
-hard-coded to the development key ID and loopback origin; do not convert it
-into a production signer by changing those constants. A later authorized task
-must introduce a separate production signing boundary that consumes only a
-verified accepted store before any new production catalog is published.
+Production uses two independent commands. Neither command accepts a private key,
+contacts a server, starts a signer, edits `published/`, or deploys output. The
+production public key and key ID are compiled from
+`keys/overcrow-production-2026-01.pub`; the origin is fixed to
+`https://overcrow.playervox.com/marketplace/v1/`. Development keys and loopback
+URLs cannot authorize finalization.
 
-## 6. Live snapshot
+Keep four distinct private directories outside Git working trees: the accepted
+store, publication state, prepared tree, and finalized output. The previous
+finalized output is another separate directory. Each root must already exist,
+be canonical, owned by the operator, and mode `0700`. Every ancestor must be
+a real directory owned by root or the operator. Group- or world-writable
+ancestors require the sticky bit; every child along that path must still be
+owned by root or the operator. This permits protected temporary roots such as
+`/tmp` and `/var/tmp`, but rejects replaceable paths under ordinary shared
+directories. Symlink components are rejected. Output starts empty;
+repeating the same operation may reuse only its exact matching files. Extra,
+modified, or linked output files are rejected. Do not put another output or the
+publication state inside one of these roots.
+
+### Initial Web API v1 migration
+
+The historical native-era snapshot is not an accepted Web API v1 previous
+output. Before the first preparation, independently establish the highest
+production sequence ever signed from the verified production catalog and the
+offline publisher's records. Set `previousSequence` to that high-water mark,
+including any later sequence reserved by an interrupted publication. Set
+`sequence` to exactly that number plus one. Do not guess, default to zero, or
+use an expired downloaded catalog as proof of the latest sequence. If the
+high-water mark cannot be established, stop publication and recover the offline
+records. Initial bootstrap is an explicit operator assertion; the tool cannot
+infer prior production history from an empty state directory.
+
+The first preparation omits `--previous-output`. It creates a Web API v1 output
+from the selected accepted receipt. It does not import legacy manifests,
+previews, or archives. The separate deployment operator must preserve historical
+package URLs from the old snapshot during this migration; do not replace the
+live package directory with only the new bootstrap tree or delete old objects.
+
+### Preparation
+
+Create a small request outside the checkout, for example:
+
+```json
+{
+  "schemaVersion": 1,
+  "sequence": 43,
+  "previousSequence": 42,
+  "generatedAt": "2026-09-05T12:00:00Z",
+  "statuses": []
+}
+```
+
+Those sequence numbers and time are illustrative. Use the independently
+confirmed high-water mark and the current canonical UTC time
+(`YYYY-MM-DDTHH:MM:SSZ`). Expiration is calculated as exactly 90 days after
+`generatedAt`; future generation and already expired requests are rejected.
+
+For the initial migration, run:
+
+```sh
+cargo run -p marketplace-tool --locked -- prepare-production-catalog \
+  --store "$accepted_store" --review-tree "$review_tree" \
+  --state "$publication_state" --request "$request_json" \
+  --output "$prepared_output"
+```
+
+For every subsequent release, append
+`--previous-output "$previous_finalized_output"`. It must contain a completed
+production-signed Web API v1 catalog from this tool, with the fixed origin,
+90-day lifetime and `preview: null`, plus its exact package inventory. An expired
+previous catalog may be used as authenticated history, but a new preparation
+must have a current validity window. Its envelope digest must match the last
+signature recorded in publication state. The tool does not accept native-era
+or arbitrary third-party catalog layouts through this option.
+
+Preparation verifies the admitted receipt, listings and archives, then writes
+`payload.json` and `packages/<id>/<version>/<sha256>.ocpkg`; it commits
+`preparation.json` last. Review the exact payload and its SHA-256, including
+sequence, times, identities, versions, permissions, licenses and statuses.
+Do not reformat or edit prepared bytes.
+
+New admitted versions receive `verified` status. Prior `(id, version)` entries
+and packages are retained, including old versions no longer offered by the
+current receipt. Same-version replacement, listing substitution and downgrade
+are rejected. Use explicit status changes for withdrawal or security action:
+
+```json
+"statuses": [
+  {"id": "com.example.widget", "version": "1.2.3", "status": "revoked"}
+]
+```
+
+Allowed statuses are `verified`, `security-suspended` and `revoked`. Suspension
+persists until an explicit change lifts it. Revocation is permanent for that
+version; a later admitted version can be verified independently. Omission from
+a request never removes an old status, version or archive. There is no automatic
+withdrawal-by-absence or garbage collector.
+
+### Detached signature and finalization
+
+Transfer the exact `payload.json` bytes and their reviewed digest to the separate
+authorized offline signing process. Request an Ed25519 signature over those raw
+bytes, without prehashing or JSON normalization. Bring back only the raw 64-byte
+signature file. The private key remains in that external signing process; do
+not copy it into a checkout, prepared tree, tool argument, CI job or log.
+
+```sh
+cargo run -p marketplace-tool --locked -- finalize-production-catalog \
+  --prepared "$prepared_output" --state "$publication_state" \
+  --signature "$detached_signature" --output "$finalized_output"
+```
+
+Finalization checks the reservation, prepared marker, canonical payload, current
+expiry, exact package bytes and detached signature against the compiled
+production public key. It copies the archives, persists the verified envelope
+digest in publication state, and commits `catalog.json` last. Output contains
+only `catalog.json` and its complete content-addressed package tree. Successful
+finalization prepares a deployable artifact; it does not deploy or grant approval
+to deploy it. Review and authorize that external action separately.
+
+### State, concurrency, and recovery
+
+Publication state contains one private atomically replaced `state.json`: the
+highest reserved sequence, exact payload digest, validity window, previous
+catalog digest and, after signature verification, completed envelope digest.
+It contains no private key or signature authority. Retain and back it up outside
+repositories together with the last finalized output. Deleting or restoring an
+older state file can discard anti-rollback knowledge; never do that as routine
+recovery.
+
+Both commands hold a nonblocking exclusive directory lock on state and output.
+A concurrent operation fails immediately. Retry once the current operation has
+finished; there is no stale lock file to delete. Exact replay is idempotent,
+but another payload cannot reuse a sequence and an older preparation cannot be
+finalized after the high-water mark advances.
+
+After an interruption, repeat the same request and output to complete the exact
+matching files. The admission bytes and previous finalized tree must remain
+available when repeating preparation. If an output contains a damaged file,
+use a new empty private output with the same state and request; do not edit the
+state or sign modified prepared bytes. Finalization can resume after its
+signature digest was recorded but before `catalog.json` became visible. The
+next preparation requires that recovered signed output as its predecessor.
+An unsigned reservation must be completed before another sequence is prepared;
+once its 90-day validity has expired, a new request may reserve the next sequence
+using the last completed predecessor. Expired signatures remain unusable.
+
+The tool bounds a request to 128 KiB, payload to 700 KiB, envelope to 1 MiB,
+catalog to 500 version entries, and each archive to 128 MiB. Inventory traversal
+is limited to 2,004 entries and four levels. Archives are validated and copied
+one at a time, never accumulated in memory. Retention can consume up to
+62.5 GiB on disk per complete tree at the archive/count limits; allow space for
+both prepared and finalized copies. Reaching a retention limit stops publication
+and requires a separately reviewed retention policy, not silent deletion of
+revocations or old package URLs.
+
+## 6. Keys and authority material
+
+Production private keys, monotonic state and recovery backups stay outside the
+repository. The old WASM-era and generic source-bundle publishers remain
+retired. The development stager remains restricted to its public fixture key
+and loopback origin. Production preparation/finalization has a separate entry
+point and never imports or reads private signing material.
+
+## 7. Live snapshot
 
 Until a new signed Web API v1 catalog is authorized, Coolify continues to
 serve the existing `published/` tree. Do not delete, rewrite, or force-push
