@@ -11,9 +11,10 @@ OverCrow Marketplace admits Web API v1 extensions only: a web directory,
 from `marketplace-tool package`. WIT, Wasmtime, native widgets, and
 provider graphs are retired.
 
-`published/` is the last production snapshot. It still contains the
-historical native-era catalog bytes that Coolify currently serves. This
-cleanup does not rewrite those bytes and does not rotate keys.
+`published/` is the tracked production site served by Coolify. Its
+`marketplace/v1/` subtree still contains the historical native-era signed
+catalog and immutable objects. Website-only updates preserve that subtree
+byte-for-byte and do not rotate keys.
 
 ## 2. Preconditions and role separation
 
@@ -314,11 +315,38 @@ retired. The development stager remains restricted to its public fixture key
 and loopback origin. Production preparation/finalization has a separate entry
 point and never imports or reads private signing material.
 
-## 7. Live snapshot
+## 7. Website-only publication
 
-Until a new signed Web API v1 catalog is authorized, Coolify continues to
-serve the existing `published/` tree. Do not delete, rewrite, or force-push
-that snapshot as cleanup.
+UI/UX changes are independent of catalog signing. After editing
+`web/marketplace/`, stage and test the website shell:
+
+```sh
+node scripts/stage-marketplace-site.mjs
+node --test tests/site-runtime.test.js
+git diff --check
+git diff --exit-code -- published/marketplace/v1/
+git status --short
+```
+
+Review and commit the source, generated shell and branding assets together.
+The stager copies the fixed production policy and assigns content-hashed names
+to scripts and CSS, so a new deployment does not reuse an earlier CDN asset.
+It never reads a private key or modifies `marketplace/v1/`. Tests compare the
+published shell with its sources and render the existing public catalog.
+Coolify must continue to serve `published/`; do not point it at `web/`, which
+contains source templates and no signed catalog.
+
+After the authorized push/deployment, fetch `/marketplace/` and its referenced
+CSS/JavaScript and compare them with the committed output. A successful CI or
+push alone is not evidence that the deployment serves the new UI. Do not purge
+Cloudflare as a substitute for checking the deployed bytes.
+
+Until the signed Web API v1 migration, the website displays legacy widget
+listings as unavailable in the current app, with no native install link.
+Provider-only entries stay hidden and their permissions remain visible on
+dependent widget details. This display reader does not authorize native-era
+package admission or installation. The signed catalog, historical package URLs
+and preview objects remain unchanged during a website-only update.
 
 This document does not authorize a push, key rotation, catalog signature, or
 Coolify deploy.

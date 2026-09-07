@@ -1,5 +1,10 @@
 # Publishing
 
+Website UI/UX updates do not require catalog admission or signing. Use
+`node scripts/stage-marketplace-site.mjs` and the [website-only publication
+procedure](production-operations.md#7-website-only-publication). The process
+below applies to signed catalog and package changes.
+
 Publication consumes a completed admission from the private accepted store. It
 never compiles, retests or mutates widget bytes.
 

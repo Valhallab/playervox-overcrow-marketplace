@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const test = require("node:test");
 const vm = require("node:vm");
+const { createHash } = require("node:crypto");
 
 const DEVELOPMENT_BASE = "http://127.0.0.1:8787/marketplace/v1/";
 const PRODUCTION_BASE = "https://overcrow.playervox.com/marketplace/v1/";
@@ -226,7 +227,7 @@ async function run(body, options = {}) {
     const policyPath = options.policy || "web/marketplace/policies/development.js";
     vm.runInNewContext(fs.readFileSync(policyPath, "utf8"), context);
   }
-  vm.runInNewContext(fs.readFileSync("web/marketplace/app.js", "utf8"), context);
+  vm.runInNewContext(fs.readFileSync(options.runtime || "web/marketplace/app.js", "utf8"), context);
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
   return { catalog, language, trust, document, requests, navigation, timers, elements,
@@ -730,4 +731,86 @@ test("loading and failure messages have a persistent live status", async () => {
   page.language.value = "fr"; page.language.dispatch("change");
   assert.equal(page.elements.get("catalog-status").textContent, "Catalogue indisponible.");
   assert.match(fs.readFileSync("web/marketplace/index.html", "utf8"), /id="catalog-status" role="status"/u);
+});
+
+
+const legacyCatalog = fs.readFileSync("tests/fixtures/legacy-production-catalog.json", "utf8");
+const productionOptions = { policy: "web/marketplace/policies/production.js" };
+
+test("production redesign displays the existing catalog without offering legacy installs", async () => {
+  const page = await run(legacyCatalog, productionOptions);
+  assert.equal(page.catalog.children.length, 5);
+  assert.ok(card(page, /Warframe Market/u));
+  assert.doesNotMatch(cardText(page.catalog), /World State Provider/u);
+  page.route("#widget/com.playervox.overcrow.warframe.market");
+  assert.match(cardText(page.elements.get("detail")), /Legacy version/u);
+  assert.match(cardText(page.elements.get("detail")), /api\.warframe\.market/u);
+  assert.match(cardText(page.elements.get("detail")), /Writes to clipboard/u);
+  assert.equal(descendants(page.elements.get("detail")).filter((e) => e.getAttribute("href")?.startsWith("overcrow:")).length, 0);
+  page.language.value = "fr"; page.language.dispatch("change");
+  assert.match(cardText(page.elements.get("detail")), /Ancienne version/u);
+  const filter = page.elements.get("availability");
+  filter.value = "available"; filter.dispatch("change");
+  assert.match(cardText(page.catalog), /Aucun widget correspondant/u);
+  assert.deepEqual(page.requests, ["/marketplace/v1/catalog.json"]);
+});
+
+test("legacy widget permissions include its validated provider without listing a provider card", async () => {
+  const page = await run(legacyCatalog, productionOptions);
+  page.route("#widget/com.playervox.overcrow.warframe.fissures");
+  assert.match(cardText(page.elements.get("detail")), /api\.warframe\.com/u);
+  page.route("#widget/com.playervox.overcrow.warframe.worldstate");
+  assert.match(cardText(page.elements.get("detail")), /Widget not found/u);
+});
+
+for (const [name, mutate] of [
+  ["hybrid Web manifest", (targets) => { targets[0].manifest.entrypoints = { view: "index.html" }; }],
+  ["malformed network host", (targets) => { targets[0].manifest.capabilities.http = ["javascript:alert(1)"]; }],
+  ["missing provider", (targets) => { targets.pop(); }],
+  ["mismatched provider digest", (targets) => { targets[0].manifest.dependencies[0].sha256 = DIGEST; }],
+  ["suspended provider", (targets) => { targets.at(-1).status = "security-suspended"; }],
+  ["dependency cycle", (targets) => {
+    const provider = targets.at(-1);
+    provider.manifest.dependencies = [{ id: provider.manifest.id, version: provider.manifest.version, sha256: provider.packageSha256 }];
+  }],
+  ["external preview", (targets) => {
+    targets[0].preview = { url: "https://example.test/preview.png", mediaType: "image/png", size: 1024, sha256: DIGEST };
+  }],
+]) {
+  test(`legacy display rejects ${name}`, async () => {
+    const body = withTargets((targets) => { mutate(targets); return targets; }, legacyCatalog);
+    unavailable(await run(body, productionOptions));
+  });
+}
+
+test("a newer Web widget replaces the legacy card and restores its native detail link", async () => {
+  const body = withTargets((targets) => [...targets, webTarget({ base: PRODUCTION_BASE })], legacyCatalog);
+  const page = await run(body, productionOptions);
+  assert.equal(page.catalog.children.length, 5);
+  page.route("#widget/com.playervox.overcrow.warframe.market");
+  const detail = page.elements.get("detail");
+  assert.match(cardText(detail), /Version 2\.0\.0/u);
+  assert.doesNotMatch(cardText(detail), /Legacy version/u);
+  assert.ok(descendants(detail).some((e) => e.getAttribute("href") === "overcrow://widget/com.playervox.overcrow.warframe.market"));
+});
+
+test("published frontend matches reviewed sources and renders the production snapshot", async () => {
+  let html = fs.readFileSync("web/marketplace/index.html", "utf8");
+  const outputs = {};
+  for (const [name, source] of [["app.js", "app.js"], ["styles.css", "styles.css"], ["catalog-policy.js", "policies/production.js"]]) {
+    const bytes = fs.readFileSync(`web/marketplace/${source}`);
+    const hash = createHash("sha256").update(bytes).digest("hex").slice(0, 16);
+    const output = name.replace(/(\.[^.]+)$/u, `-${hash}$1`);
+    outputs[name] = `published/marketplace/${output}`;
+    assert.ok(fs.readFileSync(outputs[name]).equals(bytes), `${output} matches source`);
+    html = html.replace(`./${name}`, `./${output}`);
+  }
+  assert.equal(fs.readFileSync("published/marketplace/index.html", "utf8"), html);
+  for (const name of fs.readdirSync("web/marketplace/assets")) {
+    assert.ok(fs.readFileSync(`published/marketplace/assets/${name}`).equals(fs.readFileSync(`web/marketplace/assets/${name}`)), name);
+  }
+  const body = fs.readFileSync("published/marketplace/v1/catalog.json", "utf8");
+  const page = await run(body, { policy: outputs["catalog-policy.js"], runtime: outputs["app.js"] });
+  assert.ok(card(page, /Warframe Market/u));
+  assert.doesNotMatch(cardText(page.catalog), /Catalog unavailable/u);
 });

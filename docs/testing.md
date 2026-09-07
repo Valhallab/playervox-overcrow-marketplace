@@ -35,11 +35,17 @@ an installed native build that registers the `overcrow` URI scheme; verify
 startup, an existing hidden window, and first-run setup without installation
 or activation from the link.
 
-Also run the Web API v1 catalog-site contract:
+Also run the catalog-site contract:
 
 ```sh
 node --test tests/site-runtime.test.js
 ```
+
+These site tests include the historical production catalog display, refusal of
+malformed legacy metadata and dependencies, removal of legacy native install
+links, and parity between `web/marketplace/` and the staged production shell.
+Run `node scripts/stage-marketplace-site.mjs` after UI edits and before the
+site tests. No catalog signature is required for this website-only step.
 
 The admission smoke uses real temporary Git revisions. It proves that an
 undeclared file present only in the proposed revision is rejected, that a valid

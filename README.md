@@ -28,8 +28,9 @@ v1:
   hide/show without resetting search state. Cached catalog data is validated
   before reuse and remains searchable when refresh fails; successive selections
   cannot be replaced by older order responses.
-- `published/` remains the historical production snapshot and is not
-  rewritten by this reset.
+- `published/` is the tracked site output served by Coolify. Its UI can be
+  staged independently; signed catalog and package bytes stay under
+  `published/marketplace/v1/`.
 
 Package locally:
 
@@ -58,7 +59,8 @@ unsupported.
 
 Production catalogs remain at
 <https://overcrow.playervox.com/marketplace/v1/catalog.json> with a
-90-day lifetime. Do not push, publish, or deploy from this reset.
+90-day lifetime. Catalog publication requires the separate offline signing
+procedure; UI changes do not require a new catalog signature.
 Production private keys never enter this repository.
 
 The catalog website provides compact preview cards, local search across names,
@@ -71,6 +73,20 @@ Control Center; they never install or activate a widget. Activation stays in
 the in-game overlay library. The site displays the latest version per widget
 using the same version ordering as the app, including a latest-version
 revocation instead of falling back to an older verified entry.
+
+Stage a website-only update with `node scripts/stage-marketplace-site.mjs`,
+then run `node --test tests/site-runtime.test.js` and review the `published/`
+diff before pushing. The command copies the marketplace UI and branding assets,
+uses content-hashed script/style filenames, and never changes the signed
+catalog or package tree. CI checks that the published shell matches the sources
+and can render the current production catalog.
+
+The site can display historical native-era listings during the Web API v1
+migration. These entries are labeled **Legacy version**, excluded from the
+Available filter and offer no native install link. Provider-only entries remain
+hidden; their permissions are included in dependent widget details. This is
+website display compatibility only; admission and the app still require Web API
+v1. Remove the legacy display reader once the public catalog migration is done.
 
 The marketplace uses the fixed dark-and-lime PlayerVox palette and component
 styling defined in `playervox-front/src/index.css` and
