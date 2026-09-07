@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { parseCatalog, searchItems } from '../../widgets/warframe-market/catalog.mjs';
@@ -378,6 +379,7 @@ test('controller publishes initial state and handles messages received during st
   const releaseVersion = deferred();
   const states = [];
   let receive;
+  const moduleRoot = await mkdtemp(join(tmpdir(), 'overcrow-controller-test-'));
   const previous = globalThis.__overcrowNative;
   globalThis.__overcrowNative = {
     role: 'controller',
@@ -394,9 +396,12 @@ test('controller publishes initial state and handles messages received during st
     },
   };
   try {
+    // Match the browser's explicit module mode without relying on Node syntax detection.
+    await cp(join(root, '../../widgets/warframe-market'), moduleRoot, { recursive: true });
+    await writeFile(join(moduleRoot, 'package.json'), JSON.stringify({ type: 'module' }));
     await withIndexedDb(harness, async () => {
-      const loading = import('../../widgets/warframe-market/controller.js');
-      await fetching.promise;
+      const loading = import(pathToFileURL(join(moduleRoot, 'controller.js')).href);
+      await Promise.race([fetching.promise, loading]);
       receive({ type: 'relay', source: 'view', payload: { type: 'hello' } });
       receive({ type: 'relay', source: 'view', payload: { type: 'query', value: 'arcane' } });
       releaseVersion.resolve();
@@ -409,5 +414,6 @@ test('controller publishes initial state and handles messages received during st
   } finally {
     if (previous === undefined) delete globalThis.__overcrowNative;
     else globalThis.__overcrowNative = previous;
+    await rm(moduleRoot, { recursive: true, force: true });
   }
 });
