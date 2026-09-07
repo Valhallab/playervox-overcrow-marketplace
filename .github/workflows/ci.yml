@@ -108,6 +108,12 @@ jobs:
             printf '%s\n' 'error: pull-request publication policy rejected' >&2
             exit 1
           fi
+      - name: Install trusted system Node
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes nodejs
+          sh scripts/resolve-system-node.sh
       - name: Install pinned admission toolchain
         run: |
           rustup toolchain install 1.98.0 --profile minimal

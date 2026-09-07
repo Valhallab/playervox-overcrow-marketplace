@@ -49,7 +49,10 @@ exact trusted push cannot be silently skipped. Pull-request admission never
 executes proposed JavaScript or build scripts; it validates and packages those
 bytes with the tool compiled from the target-base commit. Push admission runs
 the now-trusted revision's
-Rust, Warframe Market, and site-runtime tests once. The smoke is repeated only
+Rust, Warframe Market, and site-runtime tests once. The Ubuntu CI runner installs
+the distribution's Node package before these checks: the runner's preinstalled
+Node lives under a writable directory and is intentionally rejected by the
+system-Node resolver. The smoke is repeated only
 on trusted pushes because pull requests cannot modify the CI trust boundary.
 When a private accepted store is explicitly supplied, the smoke also proves
 that the exact package and listing remain independently verifiable after the
