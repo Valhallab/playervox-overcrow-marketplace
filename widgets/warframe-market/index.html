@@ -9,19 +9,37 @@
   </head>
   <body>
     <main>
-      <header>
-        <p class="eyebrow">Warframe Market</p>
-        <label>
-          Search
-          <input id="query" type="search" maxlength="64" placeholder="Soma Prime…" autocomplete="off">
-        </label>
+      <header class="identity">
+        <div>
+          <p class="eyebrow">Market</p>
+          <p class="subtitle">Trade assistant</p>
+        </div>
+        <span class="platform">PC market</span>
       </header>
-      <p id="status">Loading catalog…</p>
-      <ul id="results"></ul>
-      <section id="detail" hidden>
-        <h1 id="detail-name"></h1>
+      <section class="search" aria-label="Item search">
+        <label for="query">Search items</label>
+        <div class="search-controls">
+          <input id="query" type="search" maxlength="64" placeholder="Arcane Energize, Soma Prime…" autocomplete="off" spellcheck="false" aria-describedby="search-hint">
+          <button id="clear-query" type="button" disabled>Clear</button>
+        </div>
+        <p id="search-hint">Click search to type · results update as you type</p>
+      </section>
+      <p id="status" role="status" aria-live="polite">Loading catalog…</p>
+      <ul id="results" aria-label="Matching items" hidden></ul>
+      <section id="detail" aria-labelledby="detail-name" hidden>
+        <div class="item-heading">
+          <p class="eyebrow">Selected item</p>
+          <h1 id="detail-name"></h1>
+        </div>
+        <dl class="metrics" aria-label="Displayed offer summary">
+          <div><dt>Min sell</dt><dd id="min-sell">—</dd></div>
+          <div><dt>Max buy</dt><dd id="max-buy">—</dd></div>
+          <div><dt>Orders shown</dt><dd id="order-count">0</dd></div>
+        </dl>
         <div id="orders"></div>
       </section>
+      <p id="empty-state">Find an item to compare offers and copy a trade whisper.</p>
+      <p id="copy-status" role="status" aria-live="polite" aria-atomic="true">Copy whisper, then paste it into Warframe chat.</p>
     </main>
   </body>
 </html>

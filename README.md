@@ -28,7 +28,10 @@ v1:
   hide/show without resetting search state. Cached catalog data is validated
   before reuse and remains searchable when refresh fails; successive selections
   cannot be replaced by older order responses. Item offers use the grouped
-  `/v2/orders/item/{slug}/top` endpoint.
+  `/v2/orders/item/{slug}/top` endpoint. The compact view indicates search
+  focus, summarizes the displayed offers, and separates sellers from buyers.
+  Each offer has an explicit whisper-copy action with pending, confirmed, and
+  retry feedback; prices summarize the bounded rows shown, not the full market.
 - `published/` is the tracked site output served by Coolify. Its UI can be
   staged independently; signed catalog and package bytes stay under
   `published/marketplace/v1/`.

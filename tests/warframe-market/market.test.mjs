@@ -417,3 +417,161 @@ test('controller publishes initial state and handles messages received during st
     await rm(moduleRoot, { recursive: true, force: true });
   }
 });
+
+// Exercise the view against the real SDK, with only the browser DOM and native
+// request boundary controlled here. Layout is checked separately in a browser.
+async function withMarketView(run) {
+  const nodes = new Map();
+  class Element {
+    constructor(tagName = 'div') {
+      this.tagName = tagName;
+      this.children = [];
+      this.dataset = {};
+      this.attributes = {};
+      this.listeners = new Map();
+      this.value = '';
+      this.hidden = false;
+      this.disabled = false;
+    }
+    set textContent(value) { this.text = String(value); this.children = []; }
+    get textContent() { return (this.text ?? '') + this.children.map((child) => child.textContent).join(''); }
+    set innerHTML(_) { throw new Error('Provider content must be rendered as text'); }
+    append(...children) { for (const child of children) { child.parentElement = this; this.children.push(child); } }
+    replaceChildren(...children) { this.text = ''; this.children = []; this.append(...children); }
+    setAttribute(name, value) { this.attributes[name] = String(value); }
+    removeAttribute(name) { delete this.attributes[name]; }
+    addEventListener(name, listener) { this.listeners.set(name, listener); }
+    closest(selector) {
+      const key = /^\[data-([a-z]+)\]$/.exec(selector)?.[1];
+      return key && this.dataset[key] !== undefined ? this : this.parentElement?.closest(selector);
+    }
+    contains(target) { return target === this || this.children.some((child) => child.contains(target)); }
+    async fire(name, target = this) { return this.listeners.get(name)?.({ target }); }
+    focus() {
+      document.activeElement?.fire('blur');
+      document.activeElement = this;
+      void this.fire('focus');
+    }
+  }
+  const source = join(root, '../../widgets/warframe-market');
+  const html = await readFile(join(source, 'index.html'), 'utf8');
+  for (const [, id] of html.matchAll(/\bid="([a-z-]+)"/g)) nodes.set(`#${id}`, new Element());
+  const document = {
+    body: new Element('body'),
+    activeElement: null,
+    querySelector(selector) { return nodes.get(selector); },
+    createElement(tagName) { return new Element(tagName); },
+  };
+  const moduleRoot = await mkdtemp(join(tmpdir(), 'overcrow-market-view-test-'));
+  const previousDocument = globalThis.document;
+  const previousNative = globalThis.__overcrowNative;
+  const requests = [];
+  const copies = [];
+  let receive;
+  globalThis.document = document;
+  globalThis.__overcrowNative = {
+    role: 'view',
+    subscribe(listener) { receive = listener; },
+    async request(metadata) {
+      requests.push(metadata);
+      if (metadata.type === 'clipboardWrite') {
+        const pending = deferred();
+        copies.push({ text: metadata.text, ...pending });
+        return pending.promise;
+      }
+      return { metadata: { ok: true }, body: new ArrayBuffer(0) };
+    },
+  };
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+  const all = (node) => [node, ...node.children.flatMap(all)];
+  try {
+    await cp(source, moduleRoot, { recursive: true });
+    await writeFile(join(moduleRoot, 'package.json'), JSON.stringify({ type: 'module' }));
+    await import(pathToFileURL(join(moduleRoot, 'view.js')).href);
+    await run({
+      node: (id) => nodes.get(`#${id}`),
+      buttons: () => all(nodes.get('#orders')).filter((node) => node.dataset.order),
+      message: (payload) => receive({ type: 'relay', source: 'controller', payload }),
+      document, requests, copies, tick,
+    });
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    if (previousNative === undefined) delete globalThis.__overcrowNative;
+    else globalThis.__overcrowNative = previousNative;
+    await rm(moduleRoot, { recursive: true, force: true });
+  }
+}
+
+async function viewSnapshot() {
+  return {
+    items: 3840, query: 'arcane', results: [], error: null,
+    detail: { name: 'Arcane Energize', slug: 'arcane_energize', orders: parseOrders(await fixture('orders.json')) },
+  };
+}
+
+test('view only confirms an explicit whisper copy after native acknowledgement', async () => {
+  const snapshot = await viewSnapshot();
+  await withMarketView(async ({ node, message, buttons, copies, tick }) => {
+    message(snapshot);
+    const button = buttons()[0];
+    assert.match(button.textContent, /Copy whisper/);
+    await node('orders').fire('click', button.parentElement);
+    assert.equal(copies.length, 0, 'clicking the offer itself must not copy');
+    const copying = node('orders').fire('click', button);
+    await tick();
+    assert.equal(copies[0].text, '/w SellerOne Hi, WTB Arcane Energize for 100p');
+    assert.match(button.textContent, /Copying/);
+    assert.ok(buttons().every((entry) => entry.disabled), 'pending native work must not accept another copy');
+    assert.doesNotMatch(node('copy-status').textContent, /copied/i);
+    copies[0].resolve({ metadata: { ok: true }, body: new ArrayBuffer(0) });
+    await copying;
+    assert.match(button.textContent, /Copied/);
+    assert.match(node('copy-status').textContent, /copied/i);
+    assert.ok(buttons().every((entry) => !entry.disabled));
+  });
+});
+
+test('view shows copy failure, supports retry, and ignores completion after a new search', async () => {
+  const snapshot = await viewSnapshot();
+  await withMarketView(async ({ node, message, buttons, copies, tick, requests }) => {
+    message(snapshot);
+    const copying = node('orders').fire('click', buttons()[0]);
+    await tick();
+    copies[0].resolve({ metadata: { ok: false, error: { code: 'clipboard_failed', message: 'private native detail' } }, body: new ArrayBuffer(0) });
+    await copying;
+    assert.match(node('copy-status').textContent, /failed/i);
+    assert.doesNotMatch(node('copy-status').textContent, /private native detail/);
+    assert.equal(buttons()[0].disabled, false);
+    const retry = node('orders').fire('click', buttons()[0]);
+    await tick();
+    node('query').value = 'flow';
+    await node('query').fire('input');
+    assert.ok(requests.some((request) => request.payload?.type === 'query' && request.payload.value === 'flow'));
+    copies[1].resolve({ metadata: { ok: true }, body: new ArrayBuffer(0) });
+    await retry;
+    assert.doesNotMatch(node('copy-status').textContent, /copied/i, 'old item success must not be attributed to the new query');
+  });
+});
+
+test('view derives displayed offer metrics and gives search focus back after clearing', async () => {
+  const snapshot = await viewSnapshot();
+  await withMarketView(async ({ node, message, document, requests }) => {
+    message(snapshot);
+    assert.equal(node('min-sell').textContent, '90p');
+    assert.equal(node('max-buy').textContent, '85p');
+    assert.equal(node('order-count').textContent, '4');
+    node('query').focus();
+    assert.match(node('search-hint').textContent, /Ready to type/);
+    await node('clear-query').fire('click');
+    assert.equal(document.activeElement, node('query'));
+    assert.equal(node('query').value, '');
+    assert.ok(requests.some((request) => request.payload?.type === 'query' && request.payload.value === ''));
+    message({ ...snapshot, detail: { ...snapshot.detail, orders: [] } });
+    assert.equal(node('min-sell').textContent, '—');
+    assert.equal(node('max-buy').textContent, '—');
+    assert.equal(node('order-count').textContent, '0');
+    assert.match(node('orders').textContent, /No sell offers/);
+    assert.match(node('orders').textContent, /No buy offers/);
+  });
+});
