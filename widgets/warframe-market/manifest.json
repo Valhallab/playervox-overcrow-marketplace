@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "com.playervox.overcrow.warframe.market",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "apiVersion": "1",
   "entrypoints": {
     "view": "index.html",
@@ -48,8 +48,8 @@
       "bytes": 5101
     },
     "styles.css": {
-      "sha256": "4e78cb236f3dc9faa82490a2449819f1c935330fd5a7b2412706344933ec643a",
-      "bytes": 5685
+      "sha256": "220225ea587da7d6e907bb7abc916214dbed7a3928be0d29c3e5b7ccdeee24bb",
+      "bytes": 6414
     },
     "view.js": {
       "sha256": "74b060f20e76c3effe1a201c57b7afce4cabee606dc5cc8189fc6006e190c91a",
