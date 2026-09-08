@@ -153,7 +153,7 @@ test('session loads orders through overcrow.fetch and never calls global fetch',
         if (url.endsWith('/v2/items')) {
           return itemsJson;
         }
-        if (url.includes('/v2/items/arcane_energize/orders')) {
+        if (url === 'https://api.warframe.market/v2/orders/item/arcane_energize/top') {
           return ordersJson;
         }
         throw new Error(`unexpected ${url}`);

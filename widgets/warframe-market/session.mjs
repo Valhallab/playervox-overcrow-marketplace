@@ -77,7 +77,7 @@ export function createMarketSession({ store, fetchJson }) {
           return snapshot();
         }
         try {
-          const payload = await fetchJson(`${ITEMS_URL}/${selected.slug}/orders`);
+          const payload = await fetchJson(`https://api.warframe.market/v2/orders/item/${selected.slug}/top`);
           if (action === current) {
             detail = {
               name: selected.name,

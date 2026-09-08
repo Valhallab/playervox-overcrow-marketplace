@@ -27,7 +27,8 @@ v1:
   `overcrow.fetch` to `api.warframe.market`, and a view that can
   hide/show without resetting search state. Cached catalog data is validated
   before reuse and remains searchable when refresh fails; successive selections
-  cannot be replaced by older order responses.
+  cannot be replaced by older order responses. Item offers use the grouped
+  `/v2/orders/item/{slug}/top` endpoint.
 - `published/` is the tracked site output served by Coolify. Its UI can be
   staged independently; signed catalog and package bytes stay under
   `published/marketplace/v1/`.
