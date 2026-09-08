@@ -19,6 +19,16 @@ repository="$scratch/repository"
 /usr/bin/git -C "$repository" config user.name 'Marketplace CI Test'
 /usr/bin/git -C "$repository" config user.email \
     'marketplace-ci-test@invalid.example'
+# Keep admission fixtures independent of the released reference widget version.
+fixture_version=1.2.3
+node - "$repository/widgets/warframe-market/manifest.json" "$fixture_version" <<'JS'
+const fs = require('node:fs');
+const [manifestPath, version] = process.argv.slice(2);
+const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+manifest.version = version;
+fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+JS
+/usr/bin/git -C "$repository" add -- widgets/warframe-market/manifest.json
 # During a red/green run these files may not be committed yet. Make the
 # fixture's trusted revision contain the exact driver under test.
 /usr/bin/install -D -m 0755 -- "$repo_root/scripts/ci-verify.sh" \
@@ -121,11 +131,11 @@ expected_header="$scratch/expected-header"
 printf 'admission\t2\t%s\t%s\t%s\n' \
     "$trust_sha" "$valid_sha" "$valid_tree" >"$expected_header"
 if ! /usr/bin/grep -F -x -f "$expected_header" "$stdout" >/dev/null \
-        || ! /usr/bin/awk -F '\t' '
+        || ! /usr/bin/awk -v expected_version="$fixture_version" -F '\t' '
             $1 == "artifact" \
                 && $2 == "widgets/warframe-market" \
                 && $3 == "com.playervox.overcrow.warframe.market" \
-                && $4 == "2.0.0" \
+                && $4 == expected_version \
                 && length($5) == 64 && $5 !~ /[^0-9a-f]/ \
                 && $6 ~ /^[0-9]+$/ && $6 > 0 \
                 && length($7) == 64 && $7 !~ /[^0-9a-f]/ \
@@ -188,7 +198,7 @@ fi
 verified=$(cargo run -p marketplace-tool --locked --quiet -- \
     verify-admission --store "$accepted_store" --review-tree "$accepted_tree")
 stored_listing=$(/usr/bin/find \
-    "$accepted_store/listings/com.playervox.overcrow.warframe.market/2.0.0" \
+    "$accepted_store/listings/com.playervox.overcrow.warframe.market/$fixture_version" \
     -mindepth 1 -maxdepth 1 -type f -name '*.json' -print)
 if test "$verified" != "$accepted_tree 1" \
         || test "$(printf '%s\n' "$stored_listing" | /usr/bin/wc -l)" -ne 1 \
