@@ -1,8 +1,9 @@
 # OverCrow Widget Marketplace
 
 This repository admits, packages, and publishes OverCrow Web API v1
-extensions. Application and overlay code remain in the OverCrow
-repository.
+extensions. The marketplace is open source under MIT. The OverCrow application,
+Control Center, core, overlay, and built-in widgets are private, proprietary
+software in a separate repository.
 
 Extensions are local web apps: HTML, CSS, JavaScript or TypeScript, and
 any web framework. WASM is optional compute, never a required UI engine.
@@ -109,5 +110,18 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md), the
 [review policy](docs/review-policy.md), and
 [SECURITY.md](SECURITY.md) before proposing content.
 
-PlayerVox marketplace tooling is licensed under `AGPL-3.0-only`. Each
-package must declare its own compatible SPDX license.
+## Licensing
+
+Marketplace code, tooling, and documentation are licensed under [MIT](LICENSE).
+PlayerVox widgets distributed separately, including `widgets/warframe-market`
+and `fixtures/hello-web`, are also open source under their own MIT licenses.
+Their bundled JavaScript SDK is MIT-licensed.
+
+The license policy for third-party creators' widgets remains undecided. Neither
+MIT nor the marketplace license is imposed on them by this policy. The existing
+`spdxLicense` field records a package's declared license; format validation is
+not a decision about which licenses will be accepted for publication.
+
+See [LICENSING.md](LICENSING.md) for the scope, [NOTICE](NOTICE) for attribution,
+and [TRADEMARKS.md](TRADEMARKS.md) for branding. Dependencies and external assets
+retain their own licenses.

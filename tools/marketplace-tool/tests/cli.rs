@@ -62,3 +62,34 @@ fn stage_development_catalog_rejects_missing_arguments_without_panicking() {
         "error: invalid development catalog staging arguments\n"
     );
 }
+
+#[test]
+fn playervox_packages_include_their_mit_license() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for widget in ["fixtures/hello-web", "widgets/warframe-market"] {
+        let source = root.join(widget);
+        let listing: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(source.join("listing.json")).expect("listing should exist"),
+        )
+        .expect("listing should be valid JSON");
+        assert_eq!(listing["spdxLicense"], "MIT", "{widget}");
+        let output = tempfile::tempdir().expect("private output directory should exist");
+        let archive = output.path().join("widget.ocpkg");
+        let result = marketplace_tool(&[
+            "package",
+            source.to_str().expect("source path should be UTF-8"),
+            archive.to_str().expect("archive path should be UTF-8"),
+        ]);
+        assert!(result.status.success(), "{widget}: {:?}", result.stderr);
+        let result = marketplace_tool(&[
+            "inspect",
+            archive.to_str().expect("archive path should be UTF-8"),
+        ]);
+        assert!(result.status.success(), "{widget}: {:?}", result.stderr);
+        let bytes = std::fs::read(archive).expect("archive should exist");
+        let notice = std::fs::read(source.join("LICENSE")).expect("MIT notice should exist");
+        assert!(notice.starts_with(b"MIT License\n"));
+        // Packages are stored ZIPs: the complete grant must travel with the widget.
+        assert!(bytes.windows(notice.len()).any(|window| window == notice));
+    }
+}

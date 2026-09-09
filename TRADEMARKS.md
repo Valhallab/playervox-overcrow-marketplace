@@ -3,9 +3,9 @@
 PlayerVox is a registered trademark owned by Valhallab SASU. OverCrow is a
 product distributed under the PlayerVox brand.
 
-The GNU Affero General Public License grants copyright permissions for the
-software and documentation. It does not grant trademark rights or permission
-to imply endorsement by Valhallab SASU.
+The MIT License grants copyright permissions for the marketplace software
+and documentation within the scope in [LICENSING.md](LICENSING.md). It does not
+grant trademark rights or permission to imply endorsement by Valhallab SASU.
 
 Modified distributions may accurately describe compatibility with OverCrow
 and must preserve applicable legal notices, but may not present themselves as

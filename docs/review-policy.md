@@ -15,8 +15,12 @@ operator may explicitly ingest those exact packages into a private store.
   known UI formats and serves unknown formats as non-sniffed opaque bytes;
   native suffixes and executable signatures remain rejected.
 - Confirm the manifest file ledger matches the packaged bytes.
-- Confirm listing locales, license, and source URL are exact and
-  non-executable.
+- Confirm listing locales, declared license, and source URL are exact and
+  non-executable. Check that required license notices are packaged. Metadata
+  validity does not approve a license for publication. PlayerVox widgets use
+  MIT; the policy for third-party creators' widgets remains undecided. Do not
+  infer a universal MIT requirement from the marketplace's own license; see
+  [licensing scope](../LICENSING.md).
 - Until the generic maintainer sandbox exists, require built web files in the
   reviewed tree; do not execute an extension-defined `build.command`.
 - At ingestion, re-inspect every package and listing and require identity,

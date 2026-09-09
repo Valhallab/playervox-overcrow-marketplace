@@ -1,0 +1,15 @@
+OverCrow Widget Marketplace
+Copyright (c) 2026 Valhallab SASU
+
+The marketplace is open source under the MIT License. See LICENSE and
+LICENSING.md for its scope. The separate OverCrow application is proprietary.
+PlayerVox widgets distributed separately and their JavaScript SDK have their
+own MIT notices. No license policy for third-party creators' widgets is set.
+
+Bundled Noto Sans fonts retain the SIL Open Font License notices in
+web/marketplace/assets/NotoSans-OFL.txt and web/landing/fonts/NotoSans-OFL.txt.
+Bundled Manrope fonts retain web/landing/fonts/Manrope-OFL.txt.
+Dependencies and other third-party material retain their own licenses.
+
+PlayerVox, Warframe, Discord, and Twitch marks belong to their respective
+owners. Their use does not imply third-party endorsement. See TRADEMARKS.md.

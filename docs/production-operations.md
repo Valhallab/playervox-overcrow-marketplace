@@ -13,9 +13,10 @@ provider graphs are retired.
 
 `published/` is the tracked production site served by Coolify. Its
 `marketplace/v1/` subtree contains the signed Web API v1 catalog with Warframe
-Market. Historical native-era packages and previews remain at their original
-URLs, but are not entries in the current catalog. Website-only updates preserve
-that subtree byte-for-byte and do not rotate keys.
+Market. Historical native-era packages and previews are not entries in the
+current catalog. They may be removed only during an explicitly authorized
+retirement after the replacement catalog has been verified. Website-only
+updates preserve that subtree byte-for-byte and do not rotate keys.
 
 ## 2. Preconditions and role separation
 
@@ -186,9 +187,10 @@ infer prior production history from an empty state directory.
 
 The first preparation omits `--previous-output`. It creates a Web API v1 output
 from the selected accepted receipt. It does not import legacy manifests,
-previews, or archives. The separate deployment operator must preserve historical
-package URLs from the old snapshot during this migration; do not replace the
-live package directory with only the new bootstrap tree or delete old objects.
+previews, or archives. The separate deployment operator preserves historical
+package URLs during initial migration. Later removal requires explicit
+authorization and verification that the replacement signed catalog no longer
+references those objects.
 
 ### Preparation
 
@@ -250,6 +252,26 @@ version; a later admitted version can be verified independently. Omission from
 a request never removes an old status, version or archive. There is no automatic
 withdrawal-by-absence or garbage collector.
 
+For an explicitly authorized retirement, add `removeVersions` to the request:
+
+```json
+"removeVersions": [
+  {"id": "com.example.widget", "version": "1.2.3"}
+]
+```
+
+This optional list is bounded to 500 unique entries. A removal must identify an
+existing verified version absent from the selected admission. That admission
+must supply a strictly newer version of the same widget which remains verified
+in the resulting catalog. Versions listed in `statuses` cannot also be removed;
+revoked and suspended history cannot be erased. Unknown, duplicate, current,
+unreplaced, and conflicting removals fail before reserving a sequence.
+
+Preparation omits the retired target and archive from the new output, while
+keeping the predecessor and operator state intact. Finalize and verify the new
+signed catalog before deleting the retired public files. Keep private recovery
+copies of the predecessor; never rewind the sequence or reuse its signature.
+
 ### Detached signature and finalization
 
 Transfer the exact `payload.json` bytes and their reviewed digest to the separate
@@ -304,9 +326,9 @@ catalog to 500 version entries, and each archive to 128 MiB. Inventory traversal
 is limited to 2,004 entries and four levels. Archives are validated and copied
 one at a time, never accumulated in memory. Retention can consume up to
 62.5 GiB on disk per complete tree at the archive/count limits; allow space for
-both prepared and finalized copies. Reaching a retention limit stops publication
-and requires a separately reviewed retention policy, not silent deletion of
-revocations or old package URLs.
+both prepared and finalized copies. Reaching a retention limit stops publication.
+Use only the explicit retirement policy above for eligible superseded versions;
+security history and sequence state must remain intact.
 
 ## 6. Keys and authority material
 

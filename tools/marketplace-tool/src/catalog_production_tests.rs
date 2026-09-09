@@ -324,6 +324,168 @@ fn production_retains_revoked_versions_and_exact_archives_across_updates() {
 }
 
 #[test]
+fn explicit_removal_publishes_only_the_newer_admitted_version() {
+    let fixture = Fixture::new();
+    fixture.prepare();
+    let signature = fixture.sign();
+    finalize_inner(
+        &fixture.finalize_options(&signature),
+        fixture.key.public_key().as_ref(),
+        now(),
+    )
+    .unwrap();
+    let tree = "4444444444444444444444444444444444444444";
+    let new_bytes = admit_version(
+        fixture.scratch.path(),
+        &fixture.store,
+        tree,
+        "2.0.0",
+        b"<!doctype html><p>new</p>",
+    );
+    let prepared = directory(fixture.scratch.path(), "next-prepared");
+    let output = directory(fixture.scratch.path(), "next-output");
+    let mut request: Value = read_json(&fixture.request, MAX_REQUEST).unwrap();
+    request["sequence"] = json!(44);
+    request["previousSequence"] = json!(43);
+    request["removeVersions"] = json!([{"id":"com.playervox.overcrow.hello","version":"1.0.0"}]);
+    write_json(&fixture.request, &request);
+    let options = PrepareOptions {
+        review_tree: tree,
+        output: &prepared,
+        previous_output: Some(&fixture.output),
+        ..fixture.options()
+    };
+    assert_eq!(
+        prepare_inner(&options, fixture.key.public_key().as_ref(), now()).unwrap(),
+        1
+    );
+    let bytes = fs::read(prepared.join("payload.json")).unwrap();
+    let payload: Payload = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(payload.targets[0].manifest["version"], "2.0.0");
+    assert!(
+        !prepared
+            .join("packages/com.playervox.overcrow.hello/1.0.0")
+            .exists()
+    );
+    fs::write(&signature, fixture.key.sign(&bytes).as_ref()).unwrap();
+    let finalize_options = FinalizeOptions {
+        prepared: &prepared,
+        state: &fixture.state,
+        signature: &signature,
+        output: &output,
+    };
+    assert_eq!(
+        finalize_inner(&finalize_options, fixture.key.public_key().as_ref(), now()).unwrap(),
+        1
+    );
+    assert_eq!(
+        fs::read(output.join(relative_package(&payload.targets[0]).unwrap())).unwrap(),
+        new_bytes
+    );
+    assert!(
+        !output
+            .join("packages/com.playervox.overcrow.hello/1.0.0")
+            .exists()
+    );
+    // The predecessor stays intact for recovery, but can no longer be finalized.
+    assert!(fixture.output.join("catalog.json").exists());
+    assert_eq!(
+        read_reservation(&fixture.state).unwrap().unwrap().sequence,
+        44
+    );
+    assert!(
+        finalize_inner(
+            &fixture.finalize_options(&signature),
+            fixture.key.public_key().as_ref(),
+            now()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn removal_rejects_security_history_and_missing_or_unverified_replacements() {
+    for kind in [
+        "revoked",
+        "security-suspended",
+        "unknown",
+        "duplicate",
+        "current",
+        "no-newer",
+        "blocked-newer",
+        "status-conflict",
+        "limit",
+    ] {
+        let fixture = Fixture::new();
+        let mut request: Value = read_json(&fixture.request, MAX_REQUEST).unwrap();
+        if matches!(kind, "revoked" | "security-suspended") {
+            request["statuses"] =
+                json!([{"id":"com.playervox.overcrow.hello","version":"1.0.0","status":kind}]);
+            write_json(&fixture.request, &request);
+        }
+        fixture.prepare();
+        let signature = fixture.sign();
+        finalize_inner(
+            &fixture.finalize_options(&signature),
+            fixture.key.public_key().as_ref(),
+            now(),
+        )
+        .unwrap();
+        let original_state = fs::read(fixture.state.join("state.json")).unwrap();
+        let tree = if kind == "no-newer" {
+            TREE
+        } else {
+            "4444444444444444444444444444444444444444"
+        };
+        if tree != TREE {
+            admit_version(
+                fixture.scratch.path(),
+                &fixture.store,
+                tree,
+                "2.0.0",
+                b"<!doctype html><p>new</p>",
+            );
+        }
+        let prepared = directory(fixture.scratch.path(), "next-prepared");
+        request["sequence"] = json!(44);
+        request["previousSequence"] = json!(43);
+        request["statuses"] = json!([]);
+        let removal = json!({"id":"com.playervox.overcrow.hello","version":"1.0.0"});
+        request["removeVersions"] = json!([removal.clone()]);
+        match kind {
+            "unknown" => request["removeVersions"][0]["version"] = json!("0.9.0"),
+            "duplicate" => request["removeVersions"] = json!([removal.clone(), removal]),
+            "current" => request["removeVersions"][0]["version"] = json!("2.0.0"),
+            "blocked-newer" => {
+                request["statuses"] = json!([{"id":"com.playervox.overcrow.hello","version":"2.0.0","status":"security-suspended"}])
+            }
+            "status-conflict" => {
+                request["statuses"] = json!([{"id":"com.playervox.overcrow.hello","version":"1.0.0","status":"verified"}])
+            }
+            "limit" => request["removeVersions"] = Value::Array(vec![removal; 501]),
+            _ => {}
+        }
+        write_json(&fixture.request, &request);
+        let options = PrepareOptions {
+            review_tree: tree,
+            output: &prepared,
+            previous_output: Some(&fixture.output),
+            ..fixture.options()
+        };
+        assert!(
+            prepare_inner(&options, fixture.key.public_key().as_ref(), now()).is_err(),
+            "{kind}"
+        );
+        assert_eq!(
+            fs::read(fixture.state.join("state.json")).unwrap(),
+            original_state,
+            "{kind}"
+        );
+        assert!(!prepared.join("preparation.json").exists(), "{kind}");
+    }
+}
+
+#[test]
 fn previous_catalog_must_be_signed_by_production_authority_and_match_state() {
     let fixture = Fixture::new();
     fixture.prepare();

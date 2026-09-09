@@ -2,6 +2,15 @@
 
 An OverCrow extension is a local web app.
 
+The marketplace and separately distributed PlayerVox widgets use MIT. The
+JavaScript SDK is also MIT-licensed; preserve its notice in bundled copies.
+OverCrow itself, including built-in widgets, remains proprietary. The license
+policy for third-party creators' widgets is undecided: no MIT requirement is
+established here. Declare your widget's actual license in `listing.json`; the
+existing `spdxLicense` format check does not approve a license for publication.
+Include any license and attribution files required for distribution as runtime
+assets in the manifest ledger. See [licensing scope](../LICENSING.md).
+
 1. Write HTML/CSS/JavaScript or TypeScript with any framework and run its
    static build yourself.
 2. Put Web API v1 `manifest.json` metadata in that build: identity,

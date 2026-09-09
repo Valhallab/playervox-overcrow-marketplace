@@ -62,6 +62,15 @@ struct Request {
     previous_sequence: u64,
     generated_at: String,
     statuses: Vec<StatusChange>,
+    #[serde(default)]
+    remove_versions: Vec<VersionRemoval>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VersionRemoval {
+    id: String,
+    version: String,
 }
 
 #[derive(Deserialize)]
@@ -207,6 +216,7 @@ fn prepare_inner(
     if request.schema_version != 1
         || request.previous_sequence.checked_add(1) != Some(request.sequence)
         || request.statuses.len() > MAX_TARGETS
+        || request.remove_versions.len() > MAX_TARGETS
     {
         return Err(ProductionError);
     }
@@ -259,8 +269,10 @@ fn prepare_inner(
     }
     let admitted = admission::load_verified(options.store, options.review_tree)
         .map_err(|_| ProductionError)?;
+    let mut admitted_identities = BTreeSet::new();
     for artifact in admitted.artifacts {
         let identity = (artifact.id.clone(), artifact.version.clone());
+        admitted_identities.insert(identity.clone());
         let candidate = Target {
             manifest: artifact.manifest,
             listing: artifact.listing,
@@ -299,6 +311,33 @@ fn prepare_inner(
             return Err(ProductionError);
         }
         target.status = change.status;
+    }
+    let mut removed = BTreeSet::new();
+    for removal in request.remove_versions {
+        let identity = (removal.id, removal.version);
+        if !removed.insert(identity.clone())
+            || admitted_identities.contains(&identity)
+            || changed.contains(&identity)
+        {
+            return Err(ProductionError);
+        }
+        let target = targets.get(&identity).ok_or(ProductionError)?;
+        let version = Version::parse(&identity.1).map_err(|_| ProductionError)?;
+        // Only an explicitly superseded, verified version may leave the catalog.
+        // Preserve security history and a newer admitted version as a downgrade floor.
+        if target.status != Status::Verified
+            || !admitted_identities.iter().any(|replacement| {
+                replacement.0 == identity.0
+                    && Version::parse(&replacement.1).is_ok_and(|new| new > version)
+                    && targets
+                        .get(replacement)
+                        .is_some_and(|new| new.status == Status::Verified)
+            })
+        {
+            return Err(ProductionError);
+        }
+        targets.remove(&identity);
+        sources.remove(&identity);
     }
     let payload = Payload {
         schema_version: 1,

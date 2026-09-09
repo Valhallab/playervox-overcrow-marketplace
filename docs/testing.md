@@ -12,6 +12,9 @@ cargo run -p marketplace-tool --locked -- package widgets/warframe-market /tmp/w
 cargo run -p marketplace-tool --locked -- inspect /tmp/warframe-market.ocpkg
 ```
 
+The CLI package tests also verify that PlayerVox listings declare MIT and the
+complete MIT notice is carried inside each validated `.ocpkg`.
+
 These prove strict manifest/listing validation, inventory, native executable
 rejection, optional browser-WASM admission, deterministic ZIP bytes, durable
 receipt-last ingestion with exclusive admission, bounded reads that reject
@@ -41,7 +44,7 @@ Also run the catalog-site contract:
 node --test tests/site-runtime.test.js
 ```
 
-These site tests include the historical production catalog display, refusal of
+These site tests include synthetic legacy-format catalog display, refusal of
 malformed legacy metadata and dependencies, removal of legacy native install
 links, and parity between `web/marketplace/` and the staged production shell.
 Run `node scripts/stage-marketplace-site.mjs` after UI edits and before the
@@ -65,6 +68,11 @@ that the exact package and listing remain independently verifiable after the
 driver's temporary artifact directory has been removed. Package or same-size
 listing tampering, unreceipted files, same-version replacement, and downgrade
 are covered by the Rust admission tests.
+
+Production retirement tests cover explicit removal of a superseded verified
+version, the resulting signed inventory, and rejection of unknown, duplicate,
+current, unreplaced, suspended, revoked, or conflicting removals without state
+mutation.
 
 Production tests cover offline preparation, detached signature verification,
 sequence reservations, interrupted finalization, and retained version statuses.

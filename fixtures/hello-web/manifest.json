@@ -8,6 +8,10 @@
   },
   "permissions": {},
   "files": {
+    "LICENSE": {
+      "sha256": "c159eef41245fe20d4cd29fc33a0e88a85f47b53ac321f266abfb7b707aee8c3",
+      "bytes": 1071
+    },
     "index.html": {
       "sha256": "be4bc66ff2cdd10654b9bd10aa7dca924da34ac8e8bbc40680a42b53d760599d",
       "bytes": 180

@@ -1,0 +1,500 @@
+[
+  {
+    "manifest": {
+      "schemaVersion": 1,
+      "id": "com.playervox.overcrow.warframe.fissures",
+      "version": "1.0.0",
+      "kind": "widget",
+      "apiVersion": "1",
+      "defaultLocale": "en",
+      "availableLocales": [
+        "en",
+        "fr"
+      ],
+      "games": [
+        {
+          "platform": "steam",
+          "id": "230410"
+        }
+      ],
+      "dependencies": [
+        {
+          "id": "com.playervox.overcrow.warframe.worldstate",
+          "version": "1.0.0",
+          "sha256": "f8863ddc8ca2a06f007ea74942d8bd592520a931f04dd28584a0d0ffabf1e283"
+        }
+      ],
+      "capabilities": {
+        "http": [],
+        "gameData": [
+          "overcrow.session.v1"
+        ],
+        "storage": true,
+        "clipboardWrite": false,
+        "provider": false
+      },
+      "display": {
+        "showInPassive": true,
+        "xMilli": 420,
+        "yMilli": 100,
+        "width": 480,
+        "height": 600,
+        "scaleMilli": 1000,
+        "transparent": true
+      },
+      "files": {
+        "component": {
+          "path": "component.wasm",
+          "sha256": "9f0e0101c593b40b4f50e1870936ad58ea882a8a308a87f616e420b296f8ce18"
+        },
+        "locales": {
+          "en": {
+            "path": "locales/en.json",
+            "sha256": "23fa5ad83d00a81a2794396a7e5e63669fcba8e2f0456437311c1d5d52b87da2"
+          },
+          "fr": {
+            "path": "locales/fr.json",
+            "sha256": "8f838940d87b5bcb199e0a6fc4b3ab6f2d6c6e3fc78cabb994cd40c1a0d684e8"
+          }
+        },
+        "assets": {}
+      }
+    },
+    "listing": {
+      "author": "PlayerVox",
+      "spdxLicense": "MIT",
+      "sourceUrl": "https://github.com/PlayerVox/playervox-overcrow-marketplace",
+      "localizations": [
+        {
+          "locale": "en",
+          "name": "Warframe Void Fissures",
+          "description": "Shows active public Void Fissures with local era and mission-source filters."
+        },
+        {
+          "locale": "fr",
+          "name": "Fissures du N\u00e9ant Warframe",
+          "description": "Affiche les Fissures du N\u00e9ant publiques actives avec des filtres locaux par \u00e8re et source de mission."
+        }
+      ]
+    },
+    "packageUrl": "https://overcrow.playervox.com/marketplace/v1/packages/com.playervox.overcrow.warframe.fissures/1.0.0/37ff3036949944e65ef4d4b1e1253069c1227952aec5d65e8bd49903b56ab000.ocpkg",
+    "packageSize": 335869,
+    "packageSha256": "37ff3036949944e65ef4d4b1e1253069c1227952aec5d65e8bd49903b56ab000",
+    "minHostApi": 1,
+    "maxHostApi": 1,
+    "status": "verified"
+  },
+  {
+    "manifest": {
+      "schemaVersion": 1,
+      "id": "com.playervox.overcrow.warframe.invasions",
+      "version": "1.0.0",
+      "kind": "widget",
+      "apiVersion": "1",
+      "defaultLocale": "en",
+      "availableLocales": [
+        "en",
+        "fr"
+      ],
+      "games": [
+        {
+          "platform": "steam",
+          "id": "230410"
+        }
+      ],
+      "dependencies": [
+        {
+          "id": "com.playervox.overcrow.warframe.worldstate",
+          "version": "1.0.0",
+          "sha256": "f8863ddc8ca2a06f007ea74942d8bd592520a931f04dd28584a0d0ffabf1e283"
+        }
+      ],
+      "capabilities": {
+        "http": [],
+        "gameData": [
+          "overcrow.session.v1"
+        ],
+        "storage": true,
+        "clipboardWrite": false,
+        "provider": false
+      },
+      "display": {
+        "showInPassive": true,
+        "xMilli": 500,
+        "yMilli": 100,
+        "width": 500,
+        "height": 650,
+        "scaleMilli": 1000,
+        "transparent": true
+      },
+      "files": {
+        "component": {
+          "path": "component.wasm",
+          "sha256": "8621e0b849e68b94dc71b4ba9743d1ddccf3981212c786ad4011bce8000ec92e"
+        },
+        "locales": {
+          "en": {
+            "path": "locales/en.json",
+            "sha256": "c94c8d06648170a46ba01b393f0870b6825643c724249202c6524021027d1453"
+          },
+          "fr": {
+            "path": "locales/fr.json",
+            "sha256": "e9a21d184c3139f2ce9e98429856a9f1e7f2768ccd52ec50cc556961e0dee80a"
+          }
+        },
+        "assets": {}
+      }
+    },
+    "listing": {
+      "author": "PlayerVox",
+      "spdxLicense": "MIT",
+      "sourceUrl": "https://github.com/PlayerVox/playervox-overcrow-marketplace",
+      "localizations": [
+        {
+          "locale": "en",
+          "name": "Warframe Invasions",
+          "description": "Shows public invasions, progress, rewards, and local instance-scoped completion."
+        },
+        {
+          "locale": "fr",
+          "name": "Invasions Warframe",
+          "description": "Affiche les invasions publiques, leur progression, leurs r\u00e9compenses et la compl\u00e9tion locale par instance."
+        }
+      ]
+    },
+    "packageUrl": "https://overcrow.playervox.com/marketplace/v1/packages/com.playervox.overcrow.warframe.invasions/1.0.0/cfa1bec6190b85228bb76ebf7fc63dc24c4c1f14dacb21a1dcc371ae2cdd2127.ocpkg",
+    "packageSize": 349579,
+    "packageSha256": "cfa1bec6190b85228bb76ebf7fc63dc24c4c1f14dacb21a1dcc371ae2cdd2127",
+    "minHostApi": 1,
+    "maxHostApi": 1,
+    "status": "verified"
+  },
+  {
+    "manifest": {
+      "schemaVersion": 1,
+      "id": "com.playervox.overcrow.warframe.market",
+      "version": "1.0.0",
+      "kind": "bundle",
+      "apiVersion": "1",
+      "defaultLocale": "en",
+      "availableLocales": [
+        "en",
+        "fr"
+      ],
+      "games": [
+        {
+          "platform": "steam",
+          "id": "230410"
+        }
+      ],
+      "dependencies": [],
+      "capabilities": {
+        "http": [
+          "api.warframe.market"
+        ],
+        "gameData": [
+          "overcrow.session.v1"
+        ],
+        "storage": true,
+        "clipboardWrite": true,
+        "provider": false
+      },
+      "display": {
+        "showInPassive": true,
+        "xMilli": 500,
+        "yMilli": 100,
+        "width": 500,
+        "height": 650,
+        "scaleMilli": 1000,
+        "transparent": true
+      },
+      "files": {
+        "component": {
+          "path": "component.wasm",
+          "sha256": "de8312f3c2f5f2db96a79451abf392042ceae9571b0983f432e0584b1c9b2740"
+        },
+        "locales": {
+          "en": {
+            "path": "locales/en.json",
+            "sha256": "f333c5451ea17e99f76d61000536734d398f13b736180c5ccc7e66ced8f1f1f8"
+          },
+          "fr": {
+            "path": "locales/fr.json",
+            "sha256": "9e1385a595aff108cb9254fd0a005c87408f6cb2059fd5053703e48c0aac8873"
+          }
+        },
+        "assets": {}
+      }
+    },
+    "listing": {
+      "author": "PlayerVox",
+      "spdxLicense": "MIT",
+      "sourceUrl": "https://github.com/PlayerVox/playervox-overcrow-marketplace",
+      "localizations": [
+        {
+          "locale": "en",
+          "name": "Warframe Market",
+          "description": "Searches public PC item listings, filters bounded buy and sell orders, and copies an explicit trade message on request."
+        },
+        {
+          "locale": "fr",
+          "name": "March\u00e9 Warframe",
+          "description": "Recherche les annonces publiques PC, filtre un nombre limit\u00e9 d\u2019offres d\u2019achat et de vente, et copie un message d\u2019\u00e9change uniquement sur demande."
+        }
+      ]
+    },
+    "packageUrl": "https://overcrow.playervox.com/marketplace/v1/packages/com.playervox.overcrow.warframe.market/1.0.0/0c4af6762e028a746807677bcdaeac9c257ab522315e8d6a3d7854cbdf985968.ocpkg",
+    "packageSize": 362246,
+    "packageSha256": "0c4af6762e028a746807677bcdaeac9c257ab522315e8d6a3d7854cbdf985968",
+    "minHostApi": 1,
+    "maxHostApi": 1,
+    "status": "verified"
+  },
+  {
+    "manifest": {
+      "schemaVersion": 1,
+      "id": "com.playervox.overcrow.warframe.sortie-archon",
+      "version": "1.0.0",
+      "kind": "widget",
+      "apiVersion": "1",
+      "defaultLocale": "en",
+      "availableLocales": [
+        "en",
+        "fr"
+      ],
+      "games": [
+        {
+          "platform": "steam",
+          "id": "230410"
+        }
+      ],
+      "dependencies": [
+        {
+          "id": "com.playervox.overcrow.warframe.worldstate",
+          "version": "1.0.0",
+          "sha256": "f8863ddc8ca2a06f007ea74942d8bd592520a931f04dd28584a0d0ffabf1e283"
+        }
+      ],
+      "capabilities": {
+        "http": [],
+        "gameData": [
+          "overcrow.session.v1"
+        ],
+        "storage": true,
+        "clipboardWrite": false,
+        "provider": false
+      },
+      "display": {
+        "showInPassive": true,
+        "xMilli": 20,
+        "yMilli": 480,
+        "width": 440,
+        "height": 560,
+        "scaleMilli": 1000,
+        "transparent": true
+      },
+      "files": {
+        "component": {
+          "path": "component.wasm",
+          "sha256": "84b5f0ea86912888b74ed5f713c69665b8eda7cc1724f7ceea73e966d96ae77d"
+        },
+        "locales": {
+          "en": {
+            "path": "locales/en.json",
+            "sha256": "af593adabd42048c5ce0e6d4628220235a6e4977c068db1a59c8b4c996bf5d30"
+          },
+          "fr": {
+            "path": "locales/fr.json",
+            "sha256": "7cbbf8cb26f3502d19f14ab3d0f0db86185e6aa6e92cd5624fa22c913c50df56"
+          }
+        },
+        "assets": {}
+      }
+    },
+    "listing": {
+      "author": "PlayerVox",
+      "spdxLicense": "MIT",
+      "sourceUrl": "https://github.com/PlayerVox/playervox-overcrow-marketplace",
+      "localizations": [
+        {
+          "locale": "en",
+          "name": "Warframe Sortie & Archon Hunt",
+          "description": "Tracks public Sortie and Archon Hunt missions with local completion checklists."
+        },
+        {
+          "locale": "fr",
+          "name": "Sortie et Chasse \u00e0 l\u2019Archonte Warframe",
+          "description": "Suit les missions publiques de Sortie et de Chasse \u00e0 l\u2019Archonte avec des checklists de compl\u00e9tion locales."
+        }
+      ]
+    },
+    "packageUrl": "https://overcrow.playervox.com/marketplace/v1/packages/com.playervox.overcrow.warframe.sortie-archon/1.0.0/88d8ed249df1a9b46042aedbefbdca6e786aed739363e1917390ebf843224be6.ocpkg",
+    "packageSize": 362843,
+    "packageSha256": "88d8ed249df1a9b46042aedbefbdca6e786aed739363e1917390ebf843224be6",
+    "minHostApi": 1,
+    "maxHostApi": 1,
+    "status": "verified",
+    "preview": {
+      "url": "https://overcrow.playervox.com/marketplace/v1/previews/com.playervox.overcrow.warframe.sortie-archon/1.0.0/763ba2c82e3705572fdc848c540a1b7ef6d452119c59c6bde21c0a0557c2c4b6.png",
+      "mediaType": "image/png",
+      "size": 134249,
+      "sha256": "763ba2c82e3705572fdc848c540a1b7ef6d452119c59c6bde21c0a0557c2c4b6"
+    }
+  },
+  {
+    "manifest": {
+      "schemaVersion": 1,
+      "id": "com.playervox.overcrow.warframe.status",
+      "version": "1.0.0",
+      "kind": "widget",
+      "apiVersion": "1",
+      "defaultLocale": "en",
+      "availableLocales": [
+        "en",
+        "fr"
+      ],
+      "games": [
+        {
+          "platform": "steam",
+          "id": "230410"
+        }
+      ],
+      "dependencies": [
+        {
+          "id": "com.playervox.overcrow.warframe.worldstate",
+          "version": "1.0.0",
+          "sha256": "f8863ddc8ca2a06f007ea74942d8bd592520a931f04dd28584a0d0ffabf1e283"
+        }
+      ],
+      "capabilities": {
+        "http": [],
+        "gameData": [
+          "overcrow.session.v1"
+        ],
+        "storage": false,
+        "clipboardWrite": false,
+        "provider": false
+      },
+      "display": {
+        "showInPassive": true,
+        "xMilli": 20,
+        "yMilli": 100,
+        "width": 380,
+        "height": 360,
+        "scaleMilli": 1000,
+        "transparent": true
+      },
+      "files": {
+        "component": {
+          "path": "component.wasm",
+          "sha256": "7d00b1428d6ca383acf9c332ae11467cd6a3e1669f25eb6b91741d998064ff81"
+        },
+        "locales": {
+          "en": {
+            "path": "locales/en.json",
+            "sha256": "cc50bba2259f00051dbd1e40fbc09c6a5667f465a15806b5143b434bc316a4b1"
+          },
+          "fr": {
+            "path": "locales/fr.json",
+            "sha256": "ffc781e4560876f43e0bd080f465a54fbb8d23f16f0f89c39152b20fcd4849c8"
+          }
+        },
+        "assets": {}
+      }
+    },
+    "listing": {
+      "author": "PlayerVox",
+      "spdxLicense": "MIT",
+      "sourceUrl": "https://github.com/PlayerVox/playervox-overcrow-marketplace",
+      "localizations": [
+        {
+          "locale": "en",
+          "name": "Warframe Status",
+          "description": "Shows public Warframe cycles, daily reset, and Baro Ki\u2019Teer status."
+        },
+        {
+          "locale": "fr",
+          "name": "Statut Warframe",
+          "description": "Affiche les cycles publics de Warframe, la r\u00e9initialisation quotidienne et le statut de Baro Ki\u2019Teer."
+        }
+      ]
+    },
+    "packageUrl": "https://overcrow.playervox.com/marketplace/v1/packages/com.playervox.overcrow.warframe.status/1.0.0/7c1f069366717cc395707a278334dcb2ceecab82fb894fd362079d99bdcb997b.ocpkg",
+    "packageSize": 296666,
+    "packageSha256": "7c1f069366717cc395707a278334dcb2ceecab82fb894fd362079d99bdcb997b",
+    "minHostApi": 1,
+    "maxHostApi": 1,
+    "status": "verified"
+  },
+  {
+    "manifest": {
+      "schemaVersion": 1,
+      "id": "com.playervox.overcrow.warframe.worldstate",
+      "version": "1.0.0",
+      "kind": "provider",
+      "apiVersion": "1",
+      "defaultLocale": "en",
+      "availableLocales": [
+        "en",
+        "fr"
+      ],
+      "games": [
+        {
+          "platform": "steam",
+          "id": "230410"
+        }
+      ],
+      "dependencies": [],
+      "capabilities": {
+        "http": [
+          "api.warframe.com"
+        ],
+        "gameData": [],
+        "storage": false,
+        "clipboardWrite": false,
+        "provider": true
+      },
+      "display": null,
+      "files": {
+        "component": {
+          "path": "component.wasm",
+          "sha256": "f78d4c86f68c1dd5e5628d31e6b4ac6ff42646881882cef26936ff7fde3b8a35"
+        },
+        "locales": {
+          "en": {
+            "path": "locales/en.json",
+            "sha256": "0923eb1aeb1ec29832d0c306fc848e0ae9cfb9e065862dc42dfa359e6458fcb6"
+          },
+          "fr": {
+            "path": "locales/fr.json",
+            "sha256": "0cb733b1630cefd06532ac4da08a395a5e402612afaebefe0cbfb15510a02be4"
+          }
+        },
+        "assets": {}
+      }
+    },
+    "listing": {
+      "author": "PlayerVox",
+      "spdxLicense": "MIT",
+      "sourceUrl": "https://github.com/PlayerVox/playervox-overcrow-marketplace",
+      "localizations": [
+        {
+          "locale": "en",
+          "name": "Warframe Worldstate Provider",
+          "description": "Shares bounded public Warframe world-state data with installed widgets."
+        },
+        {
+          "locale": "fr",
+          "name": "Fournisseur d\u2019\u00e9tat mondial Warframe",
+          "description": "Partage des donn\u00e9es publiques et born\u00e9es de l\u2019\u00e9tat mondial de Warframe avec les widgets install\u00e9s."
+        }
+      ]
+    },
+    "packageUrl": "https://overcrow.playervox.com/marketplace/v1/packages/com.playervox.overcrow.warframe.worldstate/1.0.0/f8863ddc8ca2a06f007ea74942d8bd592520a931f04dd28584a0d0ffabf1e283.ocpkg",
+    "packageSize": 483559,
+    "packageSha256": "f8863ddc8ca2a06f007ea74942d8bd592520a931f04dd28584a0d0ffabf1e283",
+    "minHostApi": 1,
+    "maxHostApi": 1,
+    "status": "verified"
+  }
+]

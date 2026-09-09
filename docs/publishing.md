@@ -17,9 +17,12 @@ production public key, rechecks every byte and commits `catalog.json` last.
 Neither command receives a private key, contacts a server, edits `published/`,
 or deploys a site.
 
-Production retains previous `(extension ID, version)` targets and package URLs.
-Use explicit `security-suspended` or permanent `revoked` status changes;
-omission never erases a security decision. Catalog expiry is exactly 90 days.
+Production retains previous `(extension ID, version)` targets and package URLs
+by default. An explicit `removeVersions` request may retire an older verified
+version only when the selected admission supplies a newer verified version of
+the same widget. Revoked and suspended entries cannot be removed, and omission
+never erases a security decision. Use explicit `security-suspended` or permanent
+`revoked` status changes for security actions. Catalog expiry is exactly 90 days.
 Exact replay and interrupted operations reuse the reserved payload; conflicting
 or stale sequences fail closed.
 

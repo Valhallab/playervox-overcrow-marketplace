@@ -85,7 +85,7 @@ function webTarget(overrides = {}) {
   };
   const listing = {
     author: "PlayerVox",
-    spdxLicense: "AGPL-3.0-only",
+    spdxLicense: "Apache-2.0",
     sourceUrl: "https://github.com/PlayerVox/playervox-overcrow-marketplace",
     defaultLocale: "en",
     localizations: [
@@ -347,7 +347,7 @@ test("production mode renders complete catalog metadata without a development cl
   for (const expected of [
     "Version 2.0.0",
     "Author PlayerVox",
-    "License AGPL-3.0-only",
+    "License Apache-2.0",
     "Languages en, fr",
     "Verified catalog entry",
   ]) assert.match(market, new RegExp(expected, "u"));
@@ -734,10 +734,14 @@ test("loading and failure messages have a persistent live status", async () => {
 });
 
 
-const legacyCatalog = fs.readFileSync("tests/fixtures/legacy-production-catalog.json", "utf8");
+// Synthetic legacy-format display data; this envelope has no signing authority.
+const legacyCatalog = envelope(
+  JSON.parse(fs.readFileSync("tests/fixtures/legacy-catalog-targets.json", "utf8")),
+  "overcrow-production-2026-01",
+);
 const productionOptions = { policy: "web/marketplace/policies/production.js" };
 
-test("production redesign displays the existing catalog without offering legacy installs", async () => {
+test("production policy displays legacy fixtures without offering legacy installs", async () => {
   const page = await run(legacyCatalog, productionOptions);
   assert.equal(page.catalog.children.length, 5);
   assert.ok(card(page, /Warframe Market/u));
