@@ -12,9 +12,10 @@ from `marketplace-tool package`. WIT, Wasmtime, native widgets, and
 provider graphs are retired.
 
 `published/` is the tracked production site served by Coolify. Its
-`marketplace/v1/` subtree still contains the historical native-era signed
-catalog and immutable objects. Website-only updates preserve that subtree
-byte-for-byte and do not rotate keys.
+`marketplace/v1/` subtree contains the signed Web API v1 catalog with Warframe
+Market. Historical native-era packages and previews remain at their original
+URLs, but are not entries in the current catalog. Website-only updates preserve
+that subtree byte-for-byte and do not rotate keys.
 
 ## 2. Preconditions and role separation
 
@@ -341,12 +342,13 @@ CSS/JavaScript and compare them with the committed output. A successful CI or
 push alone is not evidence that the deployment serves the new UI. Do not purge
 Cloudflare as a substitute for checking the deployed bytes.
 
-Until the signed Web API v1 migration, the website displays legacy widget
-listings as unavailable in the current app, with no native install link.
-Provider-only entries stay hidden and their permissions remain visible on
-dependent widget details. This display reader does not authorize native-era
-package admission or installation. The signed catalog, historical package URLs
-and preview objects remain unchanged during a website-only update.
+The website's historical-catalog reader displays legacy widget listings as
+unavailable in the current app, with no native install link. Provider-only
+entries stay hidden and their permissions remain visible on dependent widget
+details. The current Web API v1 catalog does not use this compatibility path;
+the reader does not authorize native-era package admission or installation.
+The signed catalog, historical package URLs and preview objects remain
+unchanged during a website-only update.
 
 This document does not authorize a push, key rotation, catalog signature, or
 Coolify deploy.

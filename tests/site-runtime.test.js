@@ -813,4 +813,10 @@ test("published frontend matches reviewed sources and renders the production sna
   const page = await run(body, { policy: outputs["catalog-policy.js"], runtime: outputs["app.js"] });
   assert.ok(card(page, /Warframe Market/u));
   assert.doesNotMatch(cardText(page.catalog), /Catalog unavailable/u);
+  const market = payload(body).targets.find((target) => target.manifest.id === "com.playervox.overcrow.warframe.market");
+  assert.equal(market.manifest.apiVersion, "1");
+  page.route("#widget/com.playervox.overcrow.warframe.market");
+  const detailLinks = descendants(page.elements.get("detail")).map((element) => element.getAttribute("href"));
+  assert.ok(detailLinks.includes("overcrow://widget/com.playervox.overcrow.warframe.market"));
+  assert.ok(detailLinks.includes(market.listing.sourceUrl));
 });

@@ -66,6 +66,9 @@ Production catalogs remain at
 90-day lifetime. Catalog publication requires the separate offline signing
 procedure; UI changes do not require a new catalog signature.
 Production private keys never enter this repository.
+The published Web API v1 catalog currently offers Warframe Market. Historical
+native-era package and preview URLs are retained, but those widgets are not
+installable through the current catalog.
 
 The catalog website provides compact preview cards, local search across names,
 descriptions and authors, and an availability filter. Widget details use
@@ -85,12 +88,12 @@ uses content-hashed script/style filenames, and never changes the signed
 catalog or package tree. CI checks that the published shell matches the sources
 and can render the current production catalog.
 
-The site can display historical native-era listings during the Web API v1
-migration. These entries are labeled **Legacy version**, excluded from the
+The site retains a display reader for historical native-era catalogs. These
+entries are labeled **Legacy version**, excluded from the
 Available filter and offer no native install link. Provider-only entries remain
 hidden; their permissions are included in dependent widget details. This is
 website display compatibility only; admission and the app still require Web API
-v1. Remove the legacy display reader once the public catalog migration is done.
+v1; the published Web catalog does not use this compatibility path.
 
 The marketplace uses the fixed dark-and-lime PlayerVox palette and component
 styling defined in `playervox-front/src/index.css` and
