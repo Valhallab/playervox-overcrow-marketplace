@@ -272,6 +272,10 @@ keeping the predecessor and operator state intact. Finalize and verify the new
 signed catalog before deleting the retired public files. Keep private recovery
 copies of the predecessor; never rewind the sequence or reuse its signature.
 
+After deployment, verify the replacement bytes and the retired public URLs.
+If the CDN still serves a deleted object, purge only that retired URL and
+confirm it returns HTTP 404 or 410. A Git deletion alone does not clear caches.
+
 ### Detached signature and finalization
 
 Transfer the exact `payload.json` bytes and their reviewed digest to the separate
