@@ -13,10 +13,10 @@ provider graphs are retired.
 
 `published/` is the tracked production site served by Coolify. Its
 `marketplace/v1/` subtree contains the signed Web API v1 catalog with Warframe
-Market. Historical native-era packages and previews are not entries in the
-current catalog. They may be removed only during an explicitly authorized
-retirement after the replacement catalog has been verified. Website-only
-updates preserve that subtree byte-for-byte and do not rotate keys.
+Market 2.0.5 under MIT. Superseded packages and native-era previews are no longer
+published. Further retirement requires explicit authorization after the
+replacement catalog has been verified. Website-only updates preserve that
+subtree byte-for-byte and do not rotate keys.
 
 ## 2. Preconditions and role separation
 

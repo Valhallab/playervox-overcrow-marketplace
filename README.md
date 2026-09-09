@@ -67,9 +67,8 @@ Production catalogs remain at
 90-day lifetime. Catalog publication requires the separate offline signing
 procedure; UI changes do not require a new catalog signature.
 Production private keys never enter this repository.
-The published Web API v1 catalog currently offers Warframe Market. Historical
-native-era package and preview URLs are retained, but those widgets are not
-installable through the current catalog.
+The published Web API v1 catalog currently offers Warframe Market 2.0.5 under
+MIT. Superseded packages and native-era previews are no longer published.
 
 The catalog website provides compact preview cards, local search across names,
 descriptions and authors, and an availability filter. Widget details use
